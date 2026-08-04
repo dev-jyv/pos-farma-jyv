@@ -1,0 +1,17 @@
+<div class="label">
+  <div class="label-pharmacy">{{ pharmacy.name }}</div>
+  <div class="label-name">{{ product().name }}</div>
+  @if (product().activeIngredient) {
+    <div class="label-ingredient">
+      {{ product().activeIngredient }}
+      @if (product().concentration) {
+        · {{ product().concentration }}
+      }
+    </div>
+  }
+  <div class="label-price">{{ product().salePrice | currency: 'MXN' : 'symbol-narrow' : '1.2-2' }}</div>
+  <div class="label-sku">SKU: {{ product().sku }}</div>
+  @if (product().barcode) {
+    <div class="label-barcode">{{ product().barcode }}</div>
+  }
+</div>

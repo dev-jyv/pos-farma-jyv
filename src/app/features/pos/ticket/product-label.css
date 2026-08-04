@@ -1,0 +1,54 @@
+:host {
+  display: none;
+}
+
+.label {
+  width: 58mm;
+  padding: 4mm 3mm;
+  font-family: 'Courier New', monospace;
+  color: #000;
+  text-align: center;
+}
+
+.label-pharmacy {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.label-name {
+  margin-top: 2mm;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1.2;
+}
+
+.label-ingredient {
+  margin-top: 1mm;
+  font-size: 9px;
+}
+
+.label-price {
+  margin-top: 2mm;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.label-sku {
+  margin-top: 2mm;
+  font-size: 9px;
+}
+
+.label-barcode {
+  margin-top: 1mm;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 3px;
+}
+
+@media print {
+  :host {
+    display: block !important;
+  }
+}

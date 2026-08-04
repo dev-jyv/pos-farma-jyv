@@ -1,0 +1,203 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-[var(--pos-border)] px-4 py-3 print:hidden">
+    <h1 class="text-lg font-bold text-slate-900">{{ 'reports.title' | translate }}</h1>
+
+    <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+      @for (option of scopeOptions; track option.value) {
+        <button
+          type="button"
+          class="rounded-md px-3 py-1.5 text-sm font-medium transition"
+          [class]="
+            scope() === option.value
+              ? 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-500 hover:text-slate-800'
+          "
+          [disabled]="option.value === 'session' && !cashSession()"
+          (click)="onScopeChange(option.value)"
+        >
+          {{ option.labelKey | translate }}
+        </button>
+      }
+    </div>
+
+    <div class="ml-auto flex items-center gap-2">
+      <p-button icon="pi pi-refresh" [text]="true" (onClick)="reload()" [loading]="loading()" />
+      <p-button
+        icon="pi pi-print"
+        [label]="'reports.print' | translate"
+        [outlined]="true"
+        (onClick)="print()"
+      />
+    </div>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto">
+    <div class="pos-print-root mx-auto flex max-w-5xl flex-col gap-6 px-4 py-4">
+      <div class="text-xs text-slate-500">
+        {{ 'reports.scopeLabel' | translate }}:
+        <span class="font-semibold text-slate-700">
+          {{ (scope() === 'session' ? 'reports.scope.session' : 'reports.scope.day') | translate }}
+        </span>
+        · {{ 'reports.generatedAt' | translate }} {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div class="rounded-xl border border-[var(--pos-border)] px-4 py-3">
+          <div class="text-xs font-medium text-slate-500">{{ 'reports.netTotal' | translate }}</div>
+          <div class="text-2xl font-bold tabular-nums text-slate-900">
+            ${{ netTotal() | number: '1.2-2' }}
+          </div>
+        </div>
+        <div class="rounded-xl border border-[var(--pos-border)] px-4 py-3">
+          <div class="text-xs font-medium text-slate-500">{{ 'reports.salesCount' | translate }}</div>
+          <div class="text-2xl font-bold tabular-nums text-slate-900">{{ validSales().length }}</div>
+          @if (voidedCount() > 0) {
+            <div class="text-xs text-red-600">{{ voidedCount() }} {{ 'reports.voided' | translate }}</div>
+          }
+        </div>
+        <div class="rounded-xl border border-[var(--pos-border)] px-4 py-3">
+          <div class="text-xs font-medium text-slate-500">{{ 'reports.ticketAverage' | translate }}</div>
+          <div class="text-2xl font-bold tabular-nums text-slate-900">
+            ${{ ticketAverage() | number: '1.2-2' }}
+          </div>
+        </div>
+        <div class="rounded-xl border border-[var(--pos-border)] px-4 py-3">
+          <div class="text-xs font-medium text-slate-500">{{ 'reports.discounts' | translate }}</div>
+          <div class="text-2xl font-bold tabular-nums text-slate-900">
+            ${{ discountTotal() | number: '1.2-2' }}
+          </div>
+        </div>
+      </div>
+
+      <section>
+        <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
+          {{ 'reports.byMethod' | translate }}
+        </h2>
+        <p class="mb-2 text-xs text-slate-500">
+          Efectivo cobrado (entra al cajón):
+          <span class="font-semibold tabular-nums text-slate-700">
+            ${{ cashCollected() | number: '1.2-2' }}
+          </span>
+          · en pago mixto solo cuenta la parte pagada en efectivo.
+        </p>
+        <p-table [value]="byMethod()" styleClass="pos-product-table">
+          <ng-template #header>
+            <tr>
+              <th>{{ 'reports.method' | translate }}</th>
+              <th class="text-right">{{ 'reports.count' | translate }}</th>
+              <th class="text-right">{{ 'reports.total' | translate }}</th>
+            </tr>
+          </ng-template>
+          <ng-template #body let-row>
+            <tr>
+              <td class="text-sm">{{ row.label }}</td>
+              <td class="text-right text-sm tabular-nums">{{ row.count }}</td>
+              <td class="text-right text-sm font-semibold tabular-nums">
+                ${{ row.total | number: '1.2-2' }}
+              </td>
+            </tr>
+          </ng-template>
+          <ng-template #emptymessage>
+            <tr>
+              <td colspan="3" class="!py-8 text-center text-sm text-slate-500">
+                {{ 'reports.empty' | translate }}
+              </td>
+            </tr>
+          </ng-template>
+        </p-table>
+      </section>
+
+      <section>
+        <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
+          {{ 'reports.byHour' | translate }}
+        </h2>
+        @if (byHour().length === 0) {
+          <div class="rounded-lg border border-dashed border-slate-200 py-6 text-center text-sm text-slate-500">
+            {{ 'reports.empty' | translate }}
+          </div>
+        } @else {
+          <div class="flex flex-col gap-1.5">
+            @for (row of byHour(); track row.hour) {
+              <div class="flex items-center gap-2 text-sm">
+                <span class="w-14 shrink-0 font-mono text-xs text-slate-500">
+                  {{ row.hour }}:00
+                </span>
+                <div class="h-5 flex-1 overflow-hidden rounded bg-slate-100">
+                  <div class="h-full rounded bg-emerald-500" [style.width.%]="row.pct"></div>
+                </div>
+                <span class="w-24 shrink-0 text-right font-semibold tabular-nums">
+                  ${{ row.total | number: '1.2-2' }}
+                </span>
+                <span class="w-12 shrink-0 text-right text-xs text-slate-500">
+                  {{ row.count }}
+                </span>
+              </div>
+            }
+          </div>
+        }
+      </section>
+
+      <div class="grid gap-6 lg:grid-cols-2">
+        <section>
+          <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
+            {{ 'reports.topByQuantity' | translate }}
+          </h2>
+          <p-table [value]="topByQuantity()" styleClass="pos-product-table">
+            <ng-template #header>
+              <tr>
+                <th>{{ 'reports.product' | translate }}</th>
+                <th class="text-right">{{ 'reports.quantity' | translate }}</th>
+                <th class="text-right">{{ 'reports.total' | translate }}</th>
+              </tr>
+            </ng-template>
+            <ng-template #body let-row>
+              <tr>
+                <td class="text-sm">{{ row.name }}</td>
+                <td class="text-right text-sm font-semibold tabular-nums">{{ row.quantity }}</td>
+                <td class="text-right text-sm tabular-nums">${{ row.total | number: '1.2-2' }}</td>
+              </tr>
+            </ng-template>
+            <ng-template #emptymessage>
+              <tr>
+                <td colspan="3" class="!py-8 text-center text-sm text-slate-500">
+                  {{ 'reports.empty' | translate }}
+                </td>
+              </tr>
+            </ng-template>
+          </p-table>
+        </section>
+
+        <section>
+          <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
+            {{ 'reports.topByAmount' | translate }}
+          </h2>
+          <p-table [value]="topByAmount()" styleClass="pos-product-table">
+            <ng-template #header>
+              <tr>
+                <th>{{ 'reports.product' | translate }}</th>
+                <th class="text-right">{{ 'reports.total' | translate }}</th>
+                <th class="text-right">{{ 'reports.quantity' | translate }}</th>
+              </tr>
+            </ng-template>
+            <ng-template #body let-row>
+              <tr>
+                <td class="text-sm">{{ row.name }}</td>
+                <td class="text-right text-sm font-semibold tabular-nums">
+                  ${{ row.total | number: '1.2-2' }}
+                </td>
+                <td class="text-right text-sm tabular-nums">{{ row.quantity }}</td>
+              </tr>
+            </ng-template>
+            <ng-template #emptymessage>
+              <tr>
+                <td colspan="3" class="!py-8 text-center text-sm text-slate-500">
+                  {{ 'reports.empty' | translate }}
+                </td>
+              </tr>
+            </ng-template>
+          </p-table>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>

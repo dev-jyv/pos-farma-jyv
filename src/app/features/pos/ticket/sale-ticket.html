@@ -1,0 +1,137 @@
+<div class="ticket">
+  <header class="ticket-header">
+    <h1>{{ pharmacy.name }}</h1>
+    @if (pharmacy.address) {
+      <p>{{ pharmacy.address }}</p>
+    }
+    @if (pharmacy.phone) {
+      <p>Tel. {{ pharmacy.phone }}</p>
+    }
+    @if (pharmacy.rfc) {
+      <p>RFC {{ pharmacy.rfc }}</p>
+    }
+  </header>
+
+  <div class="ticket-meta">
+    <p><strong>Folio</strong> {{ sale().folio }}</p>
+    <p>{{ sale().createdAt | date: 'dd/MM/yyyy HH:mm' }}</p>
+    @if (cashierLabel()) {
+      <p>Cajero: {{ cashierLabel() }}</p>
+    }
+    @if (sale().customerName) {
+      <p>Cliente: {{ sale().customerName }}</p>
+    }
+    @if (sale().billing; as billing) {
+      <p>RFC: {{ billing.rfc }}</p>
+      <p class="voided">POR FACTURAR</p>
+    }
+    @if (sale().prescription; as rx) {
+      <p>Receta: {{ rx.doctorName }} · Céd. {{ rx.doctorLicense }}</p>
+      @if (rx.folio) {
+        <p>Folio receta: {{ rx.folio }}</p>
+      }
+      @if (sale().prescriptionRetained) {
+        <p>Receta retenida en farmacia</p>
+      }
+    }
+    @if (controlledLabel()) {
+      <p>Controlado: {{ controlledLabel() }}</p>
+    }
+    @if (sale().voidedAt) {
+      <p class="voided">ANULADA</p>
+    }
+  </div>
+
+  <table class="ticket-items">
+    <thead>
+      <tr>
+        <th>Cant</th>
+        <th>Producto</th>
+        <th class="num">Importe</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (item of sale().items; track item.productId + item.productName) {
+        <tr>
+          <td>{{ item.quantity }}</td>
+          <td>
+            {{ item.productName }}
+            @if (item.discountAmount > 0) {
+              <span class="disc">Desc. {{ item.discountAmount | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+            }
+          </td>
+          <td class="num">{{ item.subtotal - item.discountAmount | currency: 'MXN':'symbol-narrow':'1.2-2' }}</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+
+  <div class="ticket-totals">
+    <div class="row">
+      <span>Subtotal</span>
+      <span>{{ sale().subtotal | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+    </div>
+    @if (sale().discountTotal > 0) {
+      <div class="row">
+        <span>Descuentos</span>
+        <span>-{{ sale().discountTotal | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+    }
+    @if (sale().taxSummary; as taxes) {
+      <div class="row">
+        <span>Base gravable</span>
+        <span>{{ taxes.base | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+      @if (taxes.iepsTotal > 0) {
+        <div class="row">
+          <span>IEPS</span>
+          <span>{{ taxes.iepsTotal | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+        </div>
+      }
+      <div class="row">
+        <span>IVA</span>
+        <span>{{ taxes.ivaTotal | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+    }
+    <div class="row total">
+      <span>Total</span>
+      <span>{{ sale().total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+    </div>
+    <div class="row">
+      <span>Pago</span>
+      <span>{{ methodLabel() }}</span>
+    </div>
+    @if (showTenderSplit()) {
+      <div class="row">
+        <span>&nbsp;&nbsp;Tarjeta</span>
+        <span>{{ sale().cardAmount | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+      <div class="row">
+        <span>&nbsp;&nbsp;Efectivo</span>
+        <span>{{ sale().cashAmount | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+    }
+    @if (sale().amountReceived !== null) {
+      <div class="row">
+        <span>Recibido</span>
+        <span>{{ sale().amountReceived | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+    }
+    @if (sale().change !== null && (sale().change ?? 0) > 0) {
+      <div class="row">
+        <span>Cambio</span>
+        <span>{{ sale().change | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+    }
+  </div>
+
+  <footer class="ticket-footer">
+    @if (sale().taxSummary) {
+      <p>Precios con impuestos incluidos.</p>
+    }
+    @if (sale().prescriptionRetained) {
+      <p>Receta retenida conforme al art. 226 LGS.</p>
+    }
+    <p>¡Gracias por su compra!</p>
+  </footer>
+</div>

@@ -1,0 +1,166 @@
+{
+  "app": {
+    "name": "FarmaJyV Venta"
+  },
+  "auth": {
+    "login": {
+      "title": "Iniciar sesión",
+      "email": "Correo electrónico",
+      "password": "Contraseña",
+      "submit": "Entrar",
+      "error": "Correo o contraseña incorrectos"
+    },
+    "logout": "Cerrar sesión"
+  },
+  "nav": {
+    "sale": "Venta",
+    "history": "Historial",
+    "reports": "Reportes",
+    "controlledLedger": "Libro de control"
+  },
+  "shell": {
+    "role": {
+      "admin": "Admin",
+      "cashier": "Cajero"
+    },
+    "banner": {
+      "offline": "Sin conexión a internet — las ventas se guardarán y sincronizarán al reconectar",
+      "apiDown": "El servidor no responde — operando en modo degradado"
+    }
+  },
+  "reports": {
+    "title": "Reportes",
+    "scope": {
+      "session": "Turno actual",
+      "day": "Día"
+    },
+    "scopeLabel": "Alcance",
+    "generatedAt": "Generado",
+    "netTotal": "Venta neta",
+    "salesCount": "Ventas",
+    "voided": "anuladas",
+    "ticketAverage": "Ticket promedio",
+    "discounts": "Descuentos",
+    "byMethod": "Por método de pago",
+    "method": "Método",
+    "count": "Ventas",
+    "total": "Total",
+    "byHour": "Ventas por hora",
+    "topByQuantity": "Top 10 por cantidad",
+    "topByAmount": "Top 10 por importe",
+    "product": "Producto",
+    "quantity": "Cantidad",
+    "empty": "Sin ventas en el periodo",
+    "print": "Imprimir"
+  },
+  "label": {
+    "print": "Imprimir etiqueta"
+  },
+  "sale": {
+    "title": "Punto de venta",
+    "search": "Código, nombre o principio activo…",
+    "cart": "Ticket",
+    "total": "Total",
+    "checkout": "Cobrar",
+    "empty": "El ticket está vacío",
+    "openShiftToSell": "Abre turno para vender"
+  },
+  "history": {
+    "title": "Historial de ventas",
+    "search": "Buscar por folio o producto…",
+    "folio": "Folio",
+    "time": "Hora",
+    "method": "Método",
+    "total": "Total",
+    "status": "Estado",
+    "completed": "Completada",
+    "voided": "Anulada",
+    "empty": "No hay ventas en este turno",
+    "print": "Imprimir",
+    "void": "Anular",
+    "pendingInvoice": "Por facturar"
+  },
+  "ticket": {
+    "print": "Imprimir ticket"
+  },
+  "payment": {
+    "cash": "Efectivo",
+    "card": "Tarjeta",
+    "transfer": "Transferencia",
+    "mixed": "Mixto"
+  },
+  "cashCut": {
+    "title": "Corte de caja",
+    "print": "Imprimir corte",
+    "openTitle": "Abrir turno de caja",
+    "openHint": "Captura el efectivo inicial antes de vender",
+    "closeTitle": "Cerrar turno de caja",
+    "closeHint": "Revisa el desglose y cuenta el efectivo",
+    "resultHint": "Turno cerrado — puedes imprimir el corte",
+    "openingAmount": "Monto inicial en caja",
+    "loading": "Cargando resumen…",
+    "sales": "Ventas",
+    "voided": "Anuladas",
+    "grandTotal": "Total ventas",
+    "deposits": "Depósitos",
+    "withdrawals": "Retiros",
+    "expenses": "Gastos",
+    "openingFund": "Fondo inicial",
+    "expectedCash": "Efectivo esperado",
+    "countedCash": "Efectivo contado",
+    "counted": "Contado",
+    "difference": "Diferencia",
+    "open": "Abrir turno",
+    "close": "Cerrar turno",
+    "done": "Listo",
+    "openError": "No se pudo abrir el turno de caja.",
+    "closeError": "No se pudo cerrar el turno de caja.",
+    "summaryError": "No se pudo cargar el resumen del turno."
+  },
+  "checkout": {
+    "activatePdv": "Activar PDV"
+  },
+  "prescription": {
+    "title": "Receta médica",
+    "doctor": "Médico",
+    "license": "Cédula",
+    "folio": "Folio"
+  },
+  "customer": {
+    "title": "Cliente",
+    "search": "Buscar por nombre o RFC…",
+    "create": "Alta rápida",
+    "invoice": "Requiere factura"
+  },
+  "expiry": {
+    "warning": "Caducidad próxima",
+    "expired": "Stock vencido"
+  },
+  "substitutes": {
+    "title": "Sustitutos disponibles"
+  },
+  "cashMovement": {
+    "title": "Movimiento de caja",
+    "deposit": "Depósito",
+    "withdrawal": "Retiro",
+    "expense": "Gasto"
+  },
+  "hotkeys": {
+    "search": "Buscar",
+    "qty": "Cant.",
+    "hold": "Pausar",
+    "checkout": "Cobrar",
+    "remove": "Quitar",
+    "clear": "Limpiar"
+  },
+  "promo": {
+    "badge": "Promo"
+  },
+  "common": {
+    "loading": "Cargando…",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "delete": "Eliminar",
+    "search": "Buscar"
+  }
+}

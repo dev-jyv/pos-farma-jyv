@@ -1,0 +1,166 @@
+{
+  "app": {
+    "name": "FarmaJyV Sales"
+  },
+  "auth": {
+    "login": {
+      "title": "Sign in",
+      "email": "Email",
+      "password": "Password",
+      "submit": "Sign in",
+      "error": "Incorrect email or password"
+    },
+    "logout": "Sign out"
+  },
+  "nav": {
+    "sale": "Sale",
+    "history": "History",
+    "reports": "Reports",
+    "controlledLedger": "Controlled ledger"
+  },
+  "shell": {
+    "role": {
+      "admin": "Admin",
+      "cashier": "Cashier"
+    },
+    "banner": {
+      "offline": "No internet connection — sales will be saved and synced on reconnect",
+      "apiDown": "The server is not responding — running in degraded mode"
+    }
+  },
+  "reports": {
+    "title": "Reports",
+    "scope": {
+      "session": "Current shift",
+      "day": "Day"
+    },
+    "scopeLabel": "Scope",
+    "generatedAt": "Generated",
+    "netTotal": "Net sales",
+    "salesCount": "Sales",
+    "voided": "voided",
+    "ticketAverage": "Average ticket",
+    "discounts": "Discounts",
+    "byMethod": "By payment method",
+    "method": "Method",
+    "count": "Sales",
+    "total": "Total",
+    "byHour": "Sales by hour",
+    "topByQuantity": "Top 10 by quantity",
+    "topByAmount": "Top 10 by amount",
+    "product": "Product",
+    "quantity": "Quantity",
+    "empty": "No sales in the period",
+    "print": "Print"
+  },
+  "label": {
+    "print": "Print label"
+  },
+  "sale": {
+    "title": "Point of sale",
+    "search": "Code, name or active ingredient…",
+    "cart": "Ticket",
+    "total": "Total",
+    "checkout": "Charge",
+    "empty": "The ticket is empty",
+    "openShiftToSell": "Open shift to sell"
+  },
+  "history": {
+    "title": "Sales history",
+    "search": "Search by folio or product…",
+    "folio": "Folio",
+    "time": "Time",
+    "method": "Method",
+    "total": "Total",
+    "status": "Status",
+    "completed": "Completed",
+    "voided": "Voided",
+    "empty": "No sales in this shift",
+    "print": "Print",
+    "void": "Void",
+    "pendingInvoice": "Pending invoice"
+  },
+  "ticket": {
+    "print": "Print ticket"
+  },
+  "payment": {
+    "cash": "Cash",
+    "card": "Card",
+    "transfer": "Transfer",
+    "mixed": "Mixed"
+  },
+  "cashCut": {
+    "title": "Cash cut",
+    "print": "Print cut",
+    "openTitle": "Open cash shift",
+    "openHint": "Enter the opening cash before selling",
+    "closeTitle": "Close cash shift",
+    "closeHint": "Review the breakdown and count the cash",
+    "resultHint": "Shift closed — you can print the cut",
+    "openingAmount": "Opening cash amount",
+    "loading": "Loading summary…",
+    "sales": "Sales",
+    "voided": "Voided",
+    "grandTotal": "Sales total",
+    "deposits": "Deposits",
+    "withdrawals": "Withdrawals",
+    "expenses": "Expenses",
+    "openingFund": "Opening fund",
+    "expectedCash": "Expected cash",
+    "countedCash": "Counted cash",
+    "counted": "Counted",
+    "difference": "Difference",
+    "open": "Open shift",
+    "close": "Close shift",
+    "done": "Done",
+    "openError": "Could not open the cash shift.",
+    "closeError": "Could not close the cash shift.",
+    "summaryError": "Could not load the shift summary."
+  },
+  "checkout": {
+    "activatePdv": "Activate PDV"
+  },
+  "prescription": {
+    "title": "Prescription",
+    "doctor": "Doctor",
+    "license": "License",
+    "folio": "Folio"
+  },
+  "customer": {
+    "title": "Customer",
+    "search": "Search by name or tax ID…",
+    "create": "Quick create",
+    "invoice": "Requires invoice"
+  },
+  "expiry": {
+    "warning": "Near expiry",
+    "expired": "Expired stock"
+  },
+  "substitutes": {
+    "title": "Available substitutes"
+  },
+  "cashMovement": {
+    "title": "Cash movement",
+    "deposit": "Deposit",
+    "withdrawal": "Withdrawal",
+    "expense": "Expense"
+  },
+  "hotkeys": {
+    "search": "Search",
+    "qty": "Qty",
+    "hold": "Hold",
+    "checkout": "Charge",
+    "remove": "Remove",
+    "clear": "Clear"
+  },
+  "promo": {
+    "badge": "Promo"
+  },
+  "common": {
+    "loading": "Loading…",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "search": "Search"
+  }
+}

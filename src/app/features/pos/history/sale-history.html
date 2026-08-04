@@ -1,0 +1,110 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-[var(--pos-border)] px-4 py-3">
+    <h1 class="text-lg font-bold text-slate-900">{{ 'history.title' | translate }}</h1>
+    <div class="relative ml-auto min-w-[14rem] flex-1 max-w-md">
+      <i class="pi pi-search pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-slate-400"></i>
+      <input
+        pInputText
+        type="search"
+        class="w-full !pl-9"
+        [ngModel]="search()"
+        (ngModelChange)="onSearch($event)"
+        [placeholder]="'history.search' | translate"
+      />
+    </div>
+    <p-button icon="pi pi-refresh" [text]="true" (onClick)="reload()" [loading]="loading()" />
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+    <p-table [value]="sales()" dataKey="id" styleClass="pos-product-table" [rowHover]="true" [loading]="loading()">
+      <ng-template #header>
+        <tr>
+          <th>{{ 'history.folio' | translate }}</th>
+          <th>{{ 'history.time' | translate }}</th>
+          <th>{{ 'history.method' | translate }}</th>
+          <th class="text-right">{{ 'history.total' | translate }}</th>
+          <th>{{ 'history.status' | translate }}</th>
+          <th class="w-40"></th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-sale>
+        <tr>
+          <td class="font-mono text-sm font-semibold">{{ sale.folio }}</td>
+          <td class="tabular-nums text-sm text-slate-600">{{ sale.createdAt | date: 'HH:mm' }}</td>
+          <td class="text-sm">{{ methodLabelKey(sale.paymentMethod) | translate }}</td>
+          <td class="text-right text-sm font-bold tabular-nums">${{ sale.total | number: '1.2-2' }}</td>
+          <td>
+            <div class="flex flex-col gap-1">
+              @if (sale.voidedAt) {
+                <p-tag severity="danger" [value]="'history.voided' | translate" />
+              } @else {
+                <p-tag severity="success" [value]="'history.completed' | translate" />
+              }
+              @if (sale.invoiceStatus === 'pending') {
+                <p-tag severity="warn" [value]="'history.pendingInvoice' | translate" />
+              }
+              @if (sale.customerName) {
+                <span class="text-xs text-slate-500">{{ sale.customerName }}</span>
+              }
+            </div>
+          </td>
+          <td>
+            <div class="flex justify-end gap-1">
+              <p-button icon="pi pi-eye" [rounded]="true" [text]="true" (onClick)="openDetail(sale)" />
+              <p-button icon="pi pi-print" [rounded]="true" [text]="true" (onClick)="print(sale)" />
+              @if (isAdmin() && !sale.voidedAt) {
+                <p-button
+                  icon="pi pi-ban"
+                  severity="danger"
+                  [rounded]="true"
+                  [text]="true"
+                  (onClick)="voidSale(sale)"
+                />
+              }
+            </div>
+          </td>
+        </tr>
+      </ng-template>
+      <ng-template #emptymessage>
+        <tr>
+          <td colspan="6" class="!py-16 text-center text-sm text-slate-500">
+            {{ 'history.empty' | translate }}
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+  </div>
+</div>
+
+<p-dialog
+  [visible]="detailVisible()"
+  (visibleChange)="detailVisible.set($event)"
+  [modal]="true"
+  [style]="{ width: '24rem' }"
+  [header]="detailSale()?.folio ?? ''"
+>
+  @if (detailSale(); as sale) {
+    <div class="ticket-preview max-h-[70vh] overflow-auto">
+      <app-sale-ticket [sale]="sale" [cashierLabel]="sale.cashierId" [preview]="true" />
+    </div>
+  }
+  <ng-template #footer>
+    <div class="flex w-full gap-2">
+      <p-button
+        [label]="'history.print' | translate"
+        icon="pi pi-print"
+        styleClass="flex-1"
+        [disabled]="!detailSale()"
+        (onClick)="detailSale() && print(detailSale()!)"
+      />
+      @if (isAdmin() && detailSale() && !detailSale()!.voidedAt) {
+        <p-button
+          [label]="'history.void' | translate"
+          severity="danger"
+          styleClass="flex-1"
+          (onClick)="voidSale(detailSale()!)"
+        />
+      }
+    </div>
+  </ng-template>
+</p-dialog>

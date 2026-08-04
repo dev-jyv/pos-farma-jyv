@@ -1,0 +1,188 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div
+    class="flex shrink-0 flex-wrap items-end gap-3 border-b border-[var(--pos-border)] px-4 py-3 print:hidden"
+  >
+    <h1 class="text-lg font-bold text-slate-900">Libro de control</h1>
+
+    <div>
+      <label class="mb-1 block text-xs font-medium text-slate-500">Desde</label>
+      <input
+        type="date"
+        class="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+        [ngModel]="from()"
+        (ngModelChange)="from.set($event ?? '')"
+      />
+    </div>
+    <div>
+      <label class="mb-1 block text-xs font-medium text-slate-500">Hasta</label>
+      <input
+        type="date"
+        class="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+        [ngModel]="to()"
+        (ngModelChange)="to.set($event ?? '')"
+      />
+    </div>
+    <div class="min-w-56">
+      <label for="ledgerGroup" class="mb-1 block text-xs font-medium text-slate-500">Grupo</label>
+      <p-select
+        inputId="ledgerGroup"
+        [options]="groupOptions"
+        [ngModel]="group()"
+        (ngModelChange)="group.set($event); reload()"
+        optionLabel="label"
+        optionValue="value"
+        styleClass="w-full"
+      />
+    </div>
+
+    <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1" role="group" aria-label="Rango">
+      @for (range of quickRanges; track range.days) {
+        <button
+          type="button"
+          class="rounded-md px-2.5 py-1.5 text-sm font-medium transition"
+          [class]="
+            activeRangeDays() === range.days
+              ? 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-500 hover:text-slate-800'
+          "
+          [attr.aria-pressed]="activeRangeDays() === range.days"
+          (click)="selectQuickRange(range.days)"
+        >
+          {{ range.label }}
+        </button>
+      }
+    </div>
+
+    <div class="ml-auto flex items-center gap-2">
+      <p-button icon="pi pi-refresh" [text]="true" [loading]="loading()" (onClick)="reload()" />
+      <p-button icon="pi pi-print" label="Imprimir" [outlined]="true" (onClick)="print()" />
+    </div>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto">
+    <div class="pos-print-root mx-auto flex max-w-6xl flex-col gap-4 px-4 py-4">
+      <header class="text-xs text-slate-500">
+        <p class="text-sm font-semibold text-slate-800">
+          {{ pharmacy.name }}
+          @if (pharmacy.rfc) {
+            <span class="font-normal">· RFC {{ pharmacy.rfc }}</span>
+          }
+        </p>
+        <p>
+          Libro de control de medicamentos controlados (art. 226 LGS) ·
+          {{ from() }} a {{ to() }} · impreso
+          {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
+        </p>
+      </header>
+
+      @if (!canRead()) {
+        <p class="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Tu rol no tiene permiso de lectura de inventario, que es lo que resguarda el libro de
+          control. Pide acceso a un administrador.
+        </p>
+      } @else {
+        <div class="flex flex-wrap items-start gap-6 text-sm">
+          <div>
+            <div class="text-xs font-medium text-slate-500">Movimientos</div>
+            <div class="text-xl font-bold tabular-nums text-slate-900">{{ entries().length }}</div>
+          </div>
+          <div>
+            <div class="text-xs font-medium text-slate-500">Piezas netas (salidas − reingresos)</div>
+            <div class="text-xl font-bold tabular-nums text-slate-900">{{ netQuantity() }}</div>
+          </div>
+          @if (byGroup().length > 0) {
+            <div>
+              <div class="mb-1 text-xs font-medium text-slate-500">Por grupo</div>
+              <div class="flex flex-wrap gap-2">
+                @for (row of byGroup(); track row.group) {
+                  <span class="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                    {{ row.label }}:
+                    <span class="font-bold tabular-nums">{{ row.quantity }}</span>
+                    pzas · {{ row.movements }} mov.
+                  </span>
+                }
+              </div>
+            </div>
+          }
+        </div>
+
+        <p-table [value]="entries()" [loading]="loading()" styleClass="pos-product-table">
+          <ng-template #header>
+            <tr>
+              <th>Fecha</th>
+              <th>Folio</th>
+              <th>Movimiento</th>
+              <th>Producto</th>
+              <th>Grupo</th>
+              <th class="text-right">Cant.</th>
+              <th>Lotes</th>
+              <th>Receta</th>
+              <th>Paciente</th>
+            </tr>
+          </ng-template>
+          <ng-template #body let-entry>
+            <tr>
+              <td class="whitespace-nowrap">{{ entry.createdAt | date: 'dd/MM/yy HH:mm' }}</td>
+              <td class="whitespace-nowrap font-medium">
+                {{ entry.saleFolio }}
+                @if (entry.referenceFolio) {
+                  <span class="block text-xs text-slate-500">ref. {{ entry.referenceFolio }}</span>
+                }
+              </td>
+              <td>{{ typeLabel(entry.type) }}</td>
+              <td>{{ entry.productName }}</td>
+              <td class="whitespace-nowrap">{{ groupLabel(entry.controlledGroup) }}</td>
+              <td
+                class="text-right font-semibold tabular-nums"
+                [class.text-red-700]="entry.quantity < 0"
+              >
+                {{ entry.quantity }}
+              </td>
+              <td class="text-xs">{{ entry.lotNumbers.join(', ') || '—' }}</td>
+              <td class="text-xs">
+                @if (entry.prescription) {
+                  {{ entry.prescription.doctorName }}
+                  <span class="block text-slate-500">
+                    Céd. {{ entry.prescription.doctorLicense }}
+                    @if (entry.prescription.folio) {
+                      · Folio {{ entry.prescription.folio }}
+                    }
+                  </span>
+                  @if (entry.prescriptionRetained) {
+                    <span class="block font-medium text-slate-700">Retenida</span>
+                  }
+                } @else {
+                  —
+                }
+              </td>
+              <td class="text-xs">{{ entry.customerName || 'Público general' }}</td>
+            </tr>
+          </ng-template>
+          <ng-template #emptymessage>
+            <tr>
+              <td colspan="9" class="py-6 text-center text-sm text-slate-500">
+                Sin movimientos de medicamentos controlados en el periodo.
+              </td>
+            </tr>
+          </ng-template>
+        </p-table>
+
+        <!-- Pie de la hoja impresa: la visita sanitaria pide un responsable firmante. -->
+        <footer class="mt-8 hidden text-xs text-slate-600 print:block">
+          <div class="flex justify-between gap-12">
+            <div class="flex-1 border-t border-slate-400 pt-1 text-center">
+              Responsable sanitario (nombre y firma)
+            </div>
+            <div class="flex-1 border-t border-slate-400 pt-1 text-center">
+              Verificador (nombre y firma)
+            </div>
+          </div>
+          <p class="mt-3 text-center text-[10px] text-slate-500">
+            Impreso desde FarmaJyV Venta · {{ entries().length }} movimientos ·
+            {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
+          </p>
+        </footer>
+      }
+    </div>
+  </div>
+</div>

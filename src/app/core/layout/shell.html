@@ -1,0 +1,71 @@
+<div class="flex h-screen flex-col bg-[var(--pos-bg)]">
+  <header class="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--pos-border)] bg-white px-4 shadow-sm">
+    <div class="flex items-center gap-2 border-r border-slate-200 pr-4">
+      <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600 text-sm font-bold text-white">
+        FJ
+      </span>
+      <div class="leading-tight">
+        <div class="text-sm font-bold text-slate-900">{{ 'app.name' | translate }}</div>
+        <div class="text-[11px] text-slate-500">Caja</div>
+      </div>
+    </div>
+
+    <nav class="flex items-center gap-1">
+      @for (item of navItems(); track item.path) {
+        <a
+          [routerLink]="item.path"
+          routerLinkActive="active"
+          [routerLinkActiveOptions]="{ exact: false }"
+          class="pos-nav-btn"
+        >
+          @if (item.hotkey) {
+            <span class="pos-kbd">{{ item.hotkey }}</span>
+          }
+          <i [class]="item.icon"></i>
+          <span>{{ item.labelKey | translate }}</span>
+        </a>
+      }
+    </nav>
+
+    <div class="ml-auto flex items-center gap-3">
+      @if (roleLabel(); as currentRoleLabel) {
+        <span
+          class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
+          [class]="isAdmin() ? 'bg-violet-100 text-violet-700' : 'bg-emerald-100 text-emerald-700'"
+        >
+          {{ currentRoleLabel }}
+        </span>
+      }
+      @if (user(); as currentUser) {
+        <span class="hidden max-w-48 truncate text-sm text-slate-600 sm:inline">
+          {{ currentUser.email }}
+        </span>
+      }
+
+      <button
+        type="button"
+        (click)="logout()"
+        class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+      >
+        <i class="pi pi-sign-out"></i>
+        <span class="hidden sm:inline">{{ 'auth.logout' | translate }}</span>
+      </button>
+    </div>
+  </header>
+
+  @if (degraded()) {
+    <div
+      class="flex shrink-0 items-center justify-center gap-2 px-4 py-1.5 text-sm font-semibold text-white"
+      [class]="browserOnline() ? 'bg-amber-500' : 'bg-red-600'"
+    >
+      <i class="pi pi-exclamation-triangle text-xs"></i>
+      <span>
+        {{ (browserOnline() ? 'shell.banner.apiDown' : 'shell.banner.offline') | translate }}
+      </span>
+    </div>
+  }
+
+  <main class="min-h-0 flex-1 overflow-hidden">
+    <router-outlet />
+  </main>
+</div>

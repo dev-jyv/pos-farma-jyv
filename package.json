@@ -1,0 +1,111 @@
+{
+  "name": "farma-jyv-pos",
+  "version": "0.0.0",
+  "description": "FarmaJyV Venta — punto de venta de escritorio (Angular + Electron)",
+  "main": "electron/main.js",
+  "author": "FarmaJyV",
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve",
+    "build": "ng build",
+    "watch": "ng build --watch --configuration development",
+    "test": "ng test",
+    "electron:build": "ng build --configuration electron",
+    "electron:start": "npm run electron:build && cross-env ELECTRON_RUN_AS_NODE= electron electron/main.js",
+    "electron:dev": "cross-env ELECTRON_RUN_AS_NODE= NODE_ENV=development electron electron/main.js --dev",
+    "electron:dist": "npm run electron:build && electron-builder",
+    "electron:dist:mac": "npm run electron:build && electron-builder --mac",
+    "electron:dist:win": "npm run electron:build && electron-builder --win"
+  },
+  "private": true,
+  "packageManager": "npm@11.13.0",
+  "build": {
+    "appId": "mx.farmajyv.pos",
+    "productName": "FarmaJyV Venta",
+    "copyright": "Copyright © 2026 FarmaJyV",
+    "directories": {
+      "output": "release",
+      "buildResources": "electron/assets"
+    },
+    "files": [
+      "!**/*",
+      "electron/**/*",
+      "dist/farma-jyv-pos/browser/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "publish": {
+      "provider": "generic",
+      "url": "https://updates.farmajyv.mx/pos"
+    },
+    "mac": {
+      "category": "public.app-category.business",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "darkModeSupport": true,
+      "identity": null
+    },
+    "dmg": {
+      "title": "FarmaJyV Venta ${version}",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "icon": "electron/assets/icon.png",
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-setup.${ext}"
+    }
+  },
+  "dependencies": {
+    "@angular/common": "^22.0.0",
+    "@angular/compiler": "^22.0.0",
+    "@angular/core": "^22.0.0",
+    "@angular/forms": "^22.0.0",
+    "@angular/platform-browser": "^22.0.0",
+    "@angular/router": "^22.0.0",
+    "@ngx-translate/core": "^18.0.0",
+    "@ngx-translate/http-loader": "^18.0.0",
+    "@primeuix/themes": "^3.0.0",
+    "electron-updater": "^6.8.9",
+    "firebase": "^12.16.0",
+    "primeicons": "^8.0.0",
+    "primeng": "^22.0.0",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0"
+  },
+  "devDependencies": {
+    "@angular/build": "^22.0.9",
+    "@angular/cli": "^22.0.9",
+    "@angular/compiler-cli": "^22.0.0",
+    "@tailwindcss/postcss": "^4.3.3",
+    "cross-env": "^10.1.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^28.0.0",
+    "postcss": "^8.5.25",
+    "prettier": "^3.9.6",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.2",
+    "vitest": "^4.0.8"
+  }
+}

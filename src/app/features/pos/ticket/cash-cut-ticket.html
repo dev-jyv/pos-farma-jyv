@@ -1,0 +1,70 @@
+<div class="ticket">
+  <header class="ticket-header">
+    <h1>{{ pharmacy.name }}</h1>
+    <p class="title">Corte de caja</p>
+  </header>
+
+  <div class="ticket-meta">
+    <p>Apertura: {{ openedAt() | date: 'dd/MM/yyyy HH:mm' }}</p>
+    @if (closedAt(); as closed) {
+      <p>Cierre: {{ closed | date: 'dd/MM/yyyy HH:mm' }}</p>
+    }
+  </div>
+
+  <div class="ticket-totals">
+    <div class="row">
+      <span>Ventas</span>
+      <span>{{ summary().salesCount }}</span>
+    </div>
+    <div class="row">
+      <span>Anuladas</span>
+      <span>{{ summary().voidedCount }}</span>
+    </div>
+    @for (method of methods; track method.key) {
+      @if (summary().byMethod[method.key].count > 0) {
+        <div class="row">
+          <span>{{ method.label }} ({{ summary().byMethod[method.key].count }})</span>
+          <span>{{ summary().byMethod[method.key].total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+        </div>
+      }
+    }
+    <div class="row total">
+      <span>Total ventas</span>
+      <span>{{ summary().grandTotal | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+    </div>
+    @if (summary().movements.deposits.count > 0) {
+      <div class="row">
+        <span>Depósitos</span>
+        <span>{{ summary().movements.deposits.total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+    }
+    @if (summary().movements.withdrawals.count > 0) {
+      <div class="row">
+        <span>Retiros</span>
+        <span>{{ summary().movements.withdrawals.total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+    }
+    @if (summary().movements.expenses.count > 0) {
+      <div class="row">
+        <span>Gastos</span>
+        <span>{{ summary().movements.expenses.total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+    }
+    <div class="row">
+      <span>Fondo inicial</span>
+      <span>{{ openingAmount() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+    </div>
+    <div class="row">
+      <span>Efectivo esperado</span>
+      <span>{{ expectedCashAmount() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+    </div>
+    <div class="row">
+      <span>Efectivo contado</span>
+      <span>{{ countedCashAmount() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+    </div>
+    <div class="row total">
+      <span>Diferencia</span>
+      <span>{{ cashDifference() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+    </div>
+  </div>
+</div>

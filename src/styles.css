@@ -1,0 +1,153 @@
+@import 'tailwindcss';
+@import 'primeicons/primeicons.css';
+
+:root {
+  --pos-bg: #eef2f6;
+  --pos-surface: #ffffff;
+  --pos-ink: #0f172a;
+  --pos-muted: #64748b;
+  --pos-border: #d8dee8;
+  --pos-primary: #059669;
+  --pos-primary-dark: #047857;
+  --pos-accent: #0ea5e9;
+  --pos-danger: #dc2626;
+  --pos-warn: #d97706;
+  --pos-ticket: #0f766e;
+}
+
+body {
+  margin: 0;
+  color: var(--pos-ink);
+  background: var(--pos-bg);
+  font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+select,
+input:not([type='checkbox']):not([type='radio']),
+textarea {
+  color: #0f172a;
+  background-color: #fff;
+}
+
+select option {
+  color: #0f172a;
+  background-color: #fff;
+}
+
+.p-inputtext,
+.p-select-label,
+.p-datepicker-input,
+.p-autocomplete-input,
+.p-inputnumber-input {
+  color: #0f172a !important;
+  background-color: #ffffff !important;
+}
+
+.p-select,
+.p-inputnumber {
+  background-color: #ffffff;
+}
+
+.p-floatlabel label {
+  color: #64748b;
+}
+
+.pos-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.25rem;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1.2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.pos-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #475569;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.pos-nav-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.pos-nav-btn.active {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.pos-search-input.p-inputtext {
+  width: 100%;
+  padding: 0.85rem 1rem 0.85rem 2.75rem !important;
+  font-size: 1.05rem !important;
+  border-radius: 0.75rem !important;
+  border-color: var(--pos-border) !important;
+}
+
+.pos-search-input.p-inputtext:focus {
+  border-color: var(--pos-primary) !important;
+  box-shadow: 0 0 0 3px rgb(5 150 105 / 0.15) !important;
+}
+
+.pos-product-table .p-datatable-tbody > tr {
+  cursor: pointer;
+}
+
+.pos-product-table .p-datatable-tbody > tr:hover {
+  background: #ecfdf5 !important;
+}
+
+.pos-product-table .p-datatable-tbody > tr > td {
+  padding-top: 0.7rem !important;
+  padding-bottom: 0.7rem !important;
+}
+
+.pos-cobrar-btn.p-button {
+  font-size: 1.05rem !important;
+  font-weight: 700 !important;
+  padding: 0.9rem 1.25rem !important;
+}
+
+.ticket-preview app-sale-ticket {
+  display: block;
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .pos-print-root,
+  .pos-print-root * {
+    visibility: visible !important;
+  }
+
+  .pos-print-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+
+  .p-dialog,
+  .p-dialog-mask,
+  .p-toast {
+    display: none !important;
+  }
+}
+

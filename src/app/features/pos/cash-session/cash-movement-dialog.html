@@ -1,0 +1,53 @@
+<p-dialog
+  [visible]="visible()"
+  [modal]="true"
+  [style]="{ width: '26rem' }"
+  (onHide)="cancel()"
+>
+  <ng-template #header>
+    <span class="text-lg font-semibold text-slate-900">Movimiento de caja</span>
+  </ng-template>
+
+  <div class="space-y-3">
+    <div>
+      <label class="mb-1.5 block text-sm font-medium text-slate-700">Tipo</label>
+      <p-select
+        [options]="typeOptions"
+        [ngModel]="type()"
+        (ngModelChange)="type.set($event)"
+        optionLabel="label"
+        optionValue="value"
+        styleClass="w-full"
+      />
+    </div>
+    <div>
+      <label class="mb-1.5 block text-sm font-medium text-slate-700">Monto</label>
+      <p-inputnumber
+        [ngModel]="amount()"
+        (ngModelChange)="amount.set($event ?? 0)"
+        mode="currency"
+        currency="MXN"
+        locale="es-MX"
+        [min]="0"
+        styleClass="w-full"
+      />
+    </div>
+    <div>
+      <label class="mb-1.5 block text-sm font-medium text-slate-700">Motivo</label>
+      <input
+        pInputText
+        class="w-full"
+        [ngModel]="reason()"
+        (ngModelChange)="reason.set($event)"
+        maxlength="200"
+      />
+    </div>
+  </div>
+
+  <ng-template #footer>
+    <div class="flex w-full gap-2">
+      <p-button label="Cancelar" severity="secondary" styleClass="flex-1" (onClick)="cancel()" />
+      <p-button label="Registrar" styleClass="flex-1" [loading]="submitting()" (onClick)="confirm()" />
+    </div>
+  </ng-template>
+</p-dialog>
