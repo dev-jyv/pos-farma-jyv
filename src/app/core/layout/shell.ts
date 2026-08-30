@@ -4,6 +4,7 @@ import { TranslatePipe } from '@ngx-translate/core';
 
 import { AuthService } from '../auth/auth.service';
 import { ApiHealthService } from '../health/api-health.service';
+import { environment } from '../../../environments/environment';
 import { NAV_ITEMS } from './nav.config';
 
 @Component({
@@ -38,6 +39,7 @@ export class Shell {
   readonly isAdmin = this.authService.isAdmin;
   readonly browserOnline = this.health.browserOnline;
   readonly degraded = this.health.degraded;
+  readonly appVersion = environment.version;
 
   goToSale(event: Event): void {
     event.preventDefault();

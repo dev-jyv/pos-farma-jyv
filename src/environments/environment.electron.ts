@@ -1,7 +1,7 @@
 export const environment = {
   production: true,
   isElectron: true,
-  version: 'v1.0.0',
+  version: 'vE1.0.0',
   apiUrl: 'https://api-vykfsskx3q-uc.a.run.app/v1',
   primeNgLicense:
     'eyJpZCI6ImIyYTFiMmZkLWVjYzItNDMxNi1iZGU2LTJhOWE1YTg0YTg5MyIsInByb2R1Y3QiOiJwcmltZXVpIiwidGllciI6ImNvbW11bml0eSIsInR5cGUiOiJkZXYiLCJpYXQiOjE3ODU1NDU5MTcsImV4cCI6MTgxNzA4MTkxN30.qU9mWYPh-N38tjPZluyU8GWqThw0DFVabnjlJf50TeU0aBBs8_dqlIBN7Mk5GSS-TfSPk-hxC0v-16yEhzehAQ',
@@ -19,8 +19,16 @@ export const environment = {
     rfc: '',
   },
   mercadoPago: {
-    storeId: '79584227',
-    posId: '136088410',
+    /**
+     * Terminal Point desactivada por ahora: no hay TPV emparejada, así que el cobro
+     * con tarjeta y la parte con tarjeta del mixto se **registran** igual que el
+     * efectivo, sin mandar nada a la terminal. Poner en `true` cuando la TPV esté
+     * emparejada; el flujo de orders sigue intacto en el código.
+     */
+    terminalEnabled: false,
+    storeId: '79847455',
+    posId: '136414381',
+    terminalId: 'NEWLAND_N950__N950NCCA05098242',
   },
   firebase: {
     apiKey: 'AIzaSyCDkNTzuKSvhXzC716e9fGjGSrk-BctJS0',

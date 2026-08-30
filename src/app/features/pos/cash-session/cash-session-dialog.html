@@ -5,6 +5,7 @@
   [closeOnEscape]="mode() !== 'open'"
   [dismissableMask]="mode() !== 'open'"
   [style]="{ width: mode() === 'open' ? '26rem' : '32rem' }"
+  [closeAriaLabel]="'Cerrar'"
   (onHide)="cancel()"
 >
   <ng-template #header>
@@ -38,8 +39,9 @@
   </ng-template>
 
   @if (mode() === 'open') {
-    <label class="mb-1.5 block text-sm font-medium text-slate-700">{{ 'cashCut.openingAmount' | translate }}</label>
+    <label for="openingAmount" class="mb-1.5 block text-sm font-medium text-slate-700">{{ 'cashCut.openingAmount' | translate }}</label>
     <p-inputnumber
+      inputId="openingAmount"
       [ngModel]="openingAmount()"
       (ngModelChange)="openingAmount.set($event ?? 0)"
       mode="currency"
@@ -112,10 +114,11 @@
       </div>
 
       @if (mode() === 'close') {
-        <label class="mb-1.5 block text-sm font-medium text-slate-700">{{ 'cashCut.countedCash' | translate }}</label>
+        <label for="countedCash" class="mb-1.5 block text-sm font-medium text-slate-700">{{ 'cashCut.countedCash' | translate }}</label>
         <p-inputnumber
+          inputId="countedCash"
           [ngModel]="countedCashAmount()"
-          (ngModelChange)="countedCashAmount.set($event ?? 0)"
+          (ngModelChange)="setCountedCash($event)"
           mode="currency"
           currency="MXN"
           locale="es-MX"
@@ -162,7 +165,13 @@
     <div class="flex w-full gap-2">
       @if (mode() === 'close') {
         <p-button [label]="'common.cancel' | translate" severity="secondary" styleClass="flex-1" (onClick)="cancel()" />
-        <p-button [label]="'cashCut.close' | translate" styleClass="flex-[1.4]" [loading]="submitting()" (onClick)="confirmClose()" />
+        <p-button
+          [label]="'cashCut.close' | translate"
+          styleClass="flex-[1.4]"
+          [loading]="submitting()"
+          [disabled]="!countedTouched()"
+          (onClick)="requestClose()"
+        />
       } @else if (mode() === 'open') {
         <p-button [label]="'cashCut.open' | translate" styleClass="w-full" [loading]="submitting()" (onClick)="confirmOpen()" />
       } @else {

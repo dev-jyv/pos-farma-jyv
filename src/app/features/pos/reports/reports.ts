@@ -4,6 +4,8 @@ import { TranslatePipe } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { TableModule } from 'primeng/table';
 
+import { environment } from '../../../../environments/environment';
+import { AuthService } from '../../../core/auth/auth.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { PaymentMethod, Sale } from '../../../shared/models';
 import { addMoney } from '../../../shared/utils/money';
@@ -50,13 +52,33 @@ export class PosReports {
   private readonly saleService = inject(SaleService);
   private readonly cashSessionService = inject(CashSessionService);
   private readonly notifications = inject(NotificationService);
+  private readonly auth = inject(AuthService);
 
   readonly scope = signal<ReportScope>('session');
   readonly sales = signal<Sale[]>([]);
   readonly loading = signal(false);
   readonly generatedAt = signal(new Date());
 
+  /**
+   * El GET de turno actual falló: no sabemos si hubo ventas o no. Es distinto de
+   * "no hay turno abierto" y de "el turno no vendió nada", y la plantilla tiene que
+   * decirlo: un reporte en ceros por un error de red es imprimible y engañoso.
+   */
+  readonly sessionError = signal(false);
+
+  /**
+   * Solo tras una carga exitosa se pintan `generatedAt` y los KPIs. Mientras tanto
+   * la pantalla sería indistinguible de "no hubo ventas".
+   */
+  readonly loaded = signal(false);
+
   readonly cashSession = this.cashSessionService.current;
+
+  readonly pharmacyName = environment.pharmacy.name;
+  readonly cashierEmail = computed(() => this.auth.user()?.email ?? '');
+
+  /** Solo para repetir las tarjetas del skeleton mientras carga. */
+  readonly skeletonCards = [0, 1, 2, 3];
 
   readonly scopeOptions = [
     { labelKey: 'reports.scope.session', value: 'session' as ReportScope },
@@ -118,11 +140,24 @@ export class PosReports {
       bucket.total += sale.total;
       buckets.set(hour, bucket);
     }
+    /**
+     * En alcance turno el orden es cronológico *del turno*, no del reloj: con un
+     * turno abierto a las 22:00 las ventas de la 1:00 son posteriores, no anteriores.
+     * En alcance día el turno no aplica y se ordena por hora natural.
+     */
+    const openHour =
+      this.scope() === 'session' ? this.cashSession()?.openedAt.getHours() : undefined;
+    const rank = (hour: number) => (openHour === undefined ? hour : (hour - openHour + 24) % 24);
+
     const rows = [...buckets.entries()]
       .map(([hour, bucket]) => ({ hour, ...bucket, pct: 0 }))
-      .sort((a, b) => a.hour - b.hour);
+      .sort((a, b) => rank(a.hour) - rank(b.hour));
     const max = Math.max(...rows.map((row) => row.total), 1);
-    return rows.map((row) => ({ ...row, pct: Math.round((row.total / max) * 100) }));
+    return rows.map((row) => ({
+      ...row,
+      // Piso del 2 %: una hora con ventas nunca debe dibujar una barra de 0 px.
+      pct: row.total > 0 ? Math.max(2, Math.round((row.total / max) * 100)) : 0,
+    }));
   });
 
   readonly topByQuantity = computed<TopProductRow[]>(() =>
@@ -133,11 +168,18 @@ export class PosReports {
   );
 
   constructor() {
-    this.cashSessionService.fetchCurrent().subscribe((session) => {
-      if (!session) {
-        this.scope.set('day');
-      }
-      this.reload();
+    this.loading.set(true);
+    this.cashSessionService.fetchCurrent().subscribe({
+      next: (session) => {
+        this.sessionError.set(false);
+        if (!session) {
+          this.scope.set('day');
+        }
+        this.reload();
+      },
+      // Sin este bloque la pantalla quedaba en ceros, con hora fresca y sin un solo
+      // aviso: el cajero leía "el turno no vendió nada" y podía imprimirlo.
+      error: () => this.failSession(),
     });
   }
 
@@ -149,10 +191,41 @@ export class PosReports {
   reload(): void {
     const session = this.cashSession();
     if (this.scope() === 'session' && !session) {
-      this.sales.set([]);
+      /**
+       * Refrescar nunca debe quedarse sin efecto observable: reintenta el GET del
+       * turno y, si de verdad no hay turno abierto, cae al día en vez de dejar la
+       * pantalla muerta con el único alcance activo deshabilitado.
+       */
+      this.loading.set(true);
+      this.cashSessionService.fetchCurrent().subscribe({
+        next: (fresh) => {
+          this.sessionError.set(false);
+          if (!fresh) {
+            this.scope.set('day');
+          }
+          this.loadSales();
+        },
+        error: () => this.failSession(),
+      });
       return;
     }
+    this.sessionError.set(false);
+    this.loadSales();
+  }
+
+  private failSession(): void {
+    this.loading.set(false);
+    this.loaded.set(false);
+    this.sessionError.set(true);
+    this.sales.set([]);
+    this.notifications.error(
+      'No se pudo determinar el turno actual. Reintenta o cambia el alcance a "Día".',
+    );
+  }
+
+  private loadSales(): void {
     this.loading.set(true);
+    const session = this.cashSession();
     const today = new Date();
     const from = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
     const params =
@@ -164,10 +237,14 @@ export class PosReports {
       next: (sales) => {
         this.sales.set(sales);
         this.generatedAt.set(new Date());
+        this.loaded.set(true);
         this.loading.set(false);
       },
       error: () => {
         this.loading.set(false);
+        // El reporte anterior deja de ser válido: no dejarlo en pantalla como si lo fuera.
+        this.loaded.set(false);
+        this.sales.set([]);
         this.notifications.error('No se pudo cargar el reporte.');
       },
     });

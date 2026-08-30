@@ -19,14 +19,38 @@ export function parseStaffRole(value: unknown): StaffRole | null {
 export type PermissionArea =
   | 'dashboard'
   | 'users'
+  /** Administrar lo vendido: leer ventas, anular, devolver, reembolsar. */
   | 'sales'
+  /**
+   * Operar la caja: levantar la venta, cobrar con la terminal, mover y cerrar el
+   * turno, dar de alta al cliente en el mostrador. Separada de `sales` a
+   * propósito: con una sola área, habilitar la caja le daba al cajero el poder de
+   * anular y reembolsar sus propias ventas.
+   */
+  | 'pos'
   | 'categories'
   | 'products'
   | 'suppliers'
   | 'inventory'
   | 'invoices'
   | 'uploads'
-  | 'doctor';
+  | 'doctor'
+  /**
+   * Áreas del consultorio. El POS no tiene pantallas para ellas, pero el perfil
+   * que devuelve `/auth/me` sí las trae: omitirlas hacía que un permiso válido
+   * del backend no tuviera representación aquí.
+   */
+  | 'patients'
+  | 'medicalRecords'
+  | 'appointments'
+  /** Cobros fuera de una venta; área propia, no `sales` (ver `direct-charge`). */
+  | 'directCharges'
+  /**
+   * Recibir mercancía contra factura desde la caja. Área propia y no
+   * `inventory`: `inventory:write` abriría además conteos, salidas y el libro
+   * de control, que no son del mostrador.
+   */
+  | 'stockEntry';
 
 export type PermissionLevel = 'read' | 'write';
 
@@ -143,6 +167,34 @@ export interface Product {
   hasIvaZero?: boolean;
   hasIeps?: boolean;
   iepsRate?: number;
+  /**
+   * Campos que el catálogo ya devuelve y que solo necesita la entrada de stock
+   * para poder editar el producto sin perderlos. La venta no los usa.
+   */
+  categoryId?: string;
+  unit?: string;
+  minStock?: number;
+}
+
+/** Categoría del catálogo; el POS solo la lista para el alta de productos. */
+export interface Category {
+  id: string;
+  name: string;
+}
+
+/**
+ * Factura de **compra** ya registrada en el sistema, contra la que se recibe
+ * mercancía. No confundir con `SaleBilling`, que es la factura al cliente.
+ */
+export interface PurchaseInvoice {
+  id: string;
+  invoiceNumber: string;
+  invoiceDate: Date;
+  supplierId: string;
+  supplierName: string;
+  totalAmount: number;
+  /** `false` cuando el proveedor entregó la mercancía sin comprobante fiscal. */
+  hasInvoice: boolean;
 }
 
 export interface ProductBatch {
@@ -319,4 +371,60 @@ export interface CashSessionCut {
   session: CashSession;
   summary: CashSessionSummary;
   expectedCashAmount?: number;
+}
+
+/* ── Cobro directo con tarjeta (sin venta) ─────────────────────────────── */
+
+export type DirectChargeStatus = 'pending' | 'approved' | 'failed' | 'canceled';
+
+/** Cómo se cobró: terminal física (Point) o link de pago de Mercado Pago. */
+export type DirectChargeChannel = 'point' | 'online';
+
+/** Foto de la order Point que respalda el cobro. */
+export interface DirectChargePoint {
+  orderId: string;
+  paymentId: string | null;
+  status: string;
+  amount: string;
+  terminalId: string;
+  externalReference: string;
+}
+
+/**
+ * Cobro con terminal que no corresponde a una venta de mostrador. Vive en su
+ * propia colección del backend (`directCharges`): no entra al ticket, ni al
+ * inventario, ni al arqueo de caja, ni a los reportes de ventas.
+ */
+/** Link de pago (Checkout Pro) que respalda un cobro en línea. */
+export interface DirectChargeOnline {
+  preferenceId: string;
+  /** URL que se comparte con el cliente para pagar. */
+  initPoint: string;
+  sandboxInitPoint: string | null;
+  paymentId: string | null;
+  /** Estado crudo del pago en Mercado Pago (`approved`, `rejected`, …). */
+  paymentStatus: string | null;
+  externalReference: string;
+  /** ISO; pasada esta hora el link deja de cobrar. */
+  expiresAt: string | null;
+}
+
+export interface DirectCharge {
+  id: string;
+  folio: string;
+  amount: number;
+  concept: string;
+  channel: DirectChargeChannel;
+  status: DirectChargeStatus;
+  /** Detalle del rechazo tal como lo reporta Mercado Pago. */
+  statusDetail: string | null;
+  /** Presente solo en cobros por terminal. */
+  point: DirectChargePoint | null;
+  /** Presente solo en cobros en línea. */
+  online: DirectChargeOnline | null;
+  cashierId: string;
+  canceledBy: string | null;
+  canceledAt: Date | null;
+  approvedAt: Date | null;
+  createdAt: Date;
 }

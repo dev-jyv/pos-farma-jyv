@@ -1,22 +1,80 @@
 <div class="flex h-full min-h-0 flex-col bg-white">
   <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-[var(--pos-border)] px-4 py-3">
-    <h1 class="text-lg font-bold text-slate-900">{{ 'history.title' | translate }}</h1>
+    <div class="flex flex-col">
+      <h1 class="text-lg font-bold text-slate-900">{{ 'history.title' | translate }}</h1>
+      <p class="text-xs text-slate-500">
+        @if (scope() === 'shift') {
+          {{ 'history.scopeShift' | translate }} {{ shiftOpenedAt() | date: 'HH:mm' }}
+        } @else {
+          {{ 'history.scopeDay' | translate }}
+        }
+      </p>
+    </div>
     <div class="relative ml-auto min-w-[14rem] flex-1 max-w-md">
+      <label for="history-search" class="sr-only">{{ 'history.searchLabel' | translate }}</label>
       <i class="pi pi-search pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-slate-400"></i>
       <input
         pInputText
+        id="history-search"
+        name="historySearch"
         type="search"
+        autocomplete="off"
         class="w-full !pl-9"
         [ngModel]="search()"
         (ngModelChange)="onSearch($event)"
         [placeholder]="'history.search' | translate"
       />
     </div>
-    <p-button icon="pi pi-refresh" [text]="true" (onClick)="reload()" [loading]="loading()" />
+    <p-button
+      icon="pi pi-refresh"
+      [text]="true"
+      (onClick)="reload()"
+      [loading]="loading()"
+      [ariaLabel]="'history.refresh' | translate"
+      [pTooltip]="'history.refresh' | translate"
+    />
   </div>
 
   <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
-    <p-table [value]="sales()" dataKey="id" styleClass="pos-product-table" [rowHover]="true" [loading]="loading()">
+    @if (loadError(); as error) {
+      <div
+        class="mb-3 flex flex-wrap items-center gap-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+        role="alert"
+      >
+        <i class="pi pi-exclamation-triangle"></i>
+        <span class="flex-1">{{ 'history.loadFailed' | translate }} {{ error }}</span>
+        <p-button
+          size="small"
+          severity="danger"
+          [outlined]="true"
+          [label]="'history.retry' | translate"
+          (onClick)="reload()"
+          [loading]="loading()"
+        />
+      </div>
+    }
+
+    @if (pendingSales().length) {
+      <div class="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <p class="font-semibold">{{ 'history.pendingQueue' | translate }}</p>
+        <ul class="mt-1 space-y-0.5">
+          @for (pending of pendingSales(); track pending.queueId) {
+            <li class="tabular-nums">{{ pending.folioHint }}</li>
+          }
+        </ul>
+      </div>
+    }
+
+    <p-table
+      [value]="sales()"
+      dataKey="id"
+      styleClass="pos-product-table"
+      [loading]="loading()"
+      [scrollable]="true"
+      scrollHeight="flex"
+      [paginator]="true"
+      [rows]="10"
+    >
       <ng-template #header>
         <tr>
           <th>{{ 'history.folio' | translate }}</th>
@@ -50,8 +108,22 @@
           </td>
           <td>
             <div class="flex justify-end gap-1">
-              <p-button icon="pi pi-eye" [rounded]="true" [text]="true" (onClick)="openDetail(sale)" />
-              <p-button icon="pi pi-print" [rounded]="true" [text]="true" (onClick)="print(sale)" />
+              <p-button
+                icon="pi pi-eye"
+                [rounded]="true"
+                [text]="true"
+                (onClick)="openDetail(sale)"
+                [ariaLabel]="('history.viewDetail' | translate) + ' ' + sale.folio"
+                [pTooltip]="'history.viewDetail' | translate"
+              />
+              <p-button
+                icon="pi pi-print"
+                [rounded]="true"
+                [text]="true"
+                (onClick)="print(sale)"
+                [ariaLabel]="('history.printSale' | translate) + ' ' + sale.folio"
+                [pTooltip]="'history.print' | translate"
+              />
               @if (isAdmin() && !sale.voidedAt) {
                 <p-button
                   icon="pi pi-ban"
@@ -59,6 +131,10 @@
                   [rounded]="true"
                   [text]="true"
                   (onClick)="voidSale(sale)"
+                  [loading]="voiding() === sale.id"
+                  [disabled]="!!voiding()"
+                  [ariaLabel]="('history.voidSale' | translate) + ' ' + sale.folio"
+                  [pTooltip]="'history.void' | translate"
                 />
               }
             </div>
@@ -68,7 +144,11 @@
       <ng-template #emptymessage>
         <tr>
           <td colspan="6" class="!py-16 text-center text-sm text-slate-500">
-            {{ 'history.empty' | translate }}
+            @if (scope() === 'shift') {
+              {{ 'history.emptyShift' | translate }}
+            } @else {
+              {{ 'history.emptyDay' | translate }}
+            }
           </td>
         </tr>
       </ng-template>
@@ -79,13 +159,15 @@
 <p-dialog
   [visible]="detailVisible()"
   (visibleChange)="detailVisible.set($event)"
+  (onHide)="onDetailHide()"
   [modal]="true"
   [style]="{ width: '24rem' }"
   [header]="detailSale()?.folio ?? ''"
+  [closeAriaLabel]="'history.close' | translate"
 >
   @if (detailSale(); as sale) {
     <div class="ticket-preview max-h-[70vh] overflow-auto">
-      <app-sale-ticket [sale]="sale" [cashierLabel]="sale.cashierId" [preview]="true" />
+      <app-sale-ticket [sale]="sale" [cashierLabel]="cashierLabel(sale)" [preview]="true" />
     </div>
   }
   <ng-template #footer>
@@ -103,6 +185,8 @@
           severity="danger"
           styleClass="flex-1"
           (onClick)="voidSale(detailSale()!)"
+          [loading]="voiding() === detailSale()!.id"
+          [disabled]="!!voiding()"
         />
       }
     </div>

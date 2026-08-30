@@ -1,13 +1,20 @@
 <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-900 px-4">
-  <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_#065f46_0%,_transparent_55%),radial-gradient(ellipse_at_bottom_right,_#0f766e_0%,_transparent_40%)] opacity-80"></div>
+  <!-- Los dos focos son los dos colores del logo: verde arriba, azul abajo. -->
+  <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_#245312_0%,_transparent_55%),radial-gradient(ellipse_at_bottom_right,_#003c6c_0%,_transparent_45%)] opacity-90"></div>
 
   <div class="relative w-full max-w-md rounded-2xl border border-white/10 bg-white p-8 shadow-2xl">
     <div class="mb-8 text-center">
-      <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-600 text-lg font-bold text-white shadow-lg shadow-emerald-600/30">
-        FJ
-      </div>
-      <h1 class="text-2xl font-bold text-slate-900">{{ 'app.name' | translate }}</h1>
-      <p class="mt-1 text-sm text-slate-500">Inicia sesión para abrir la caja</p>
+      <!-- El logo completo ya trae el nombre y el lema: es el único punto de la app
+           donde hay espacio para la marca entera. -->
+      <img
+        src="brand/logo-completo.png"
+        [alt]="'app.name' | translate"
+        class="mx-auto mb-4 h-32 w-auto object-contain"
+      />
+      <p class="text-sm text-slate-500">Inicia sesión para abrir la caja</p>
+      @if (appVersion) {
+        <p class="mt-2 font-mono text-xs text-slate-400">{{ appVersion }}</p>
+      }
     </div>
 
     <form [formGroup]="form" (ngSubmit)="onSubmit()" class="space-y-5">
@@ -20,7 +27,7 @@
           type="email"
           formControlName="email"
           autocomplete="email"
-          class="w-full rounded-xl border border-slate-300 px-3.5 py-3 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/15"
+          class="w-full rounded-xl border border-slate-300 px-3.5 py-3 text-slate-900 outline-none transition focus:border-emerald-600 focus:ring-4 focus:ring-emerald-500/25"
         />
       </div>
 
@@ -33,14 +40,14 @@
           type="password"
           formControlName="password"
           autocomplete="current-password"
-          class="w-full rounded-xl border border-slate-300 px-3.5 py-3 text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/15"
+          class="w-full rounded-xl border border-slate-300 px-3.5 py-3 text-slate-900 outline-none transition focus:border-emerald-600 focus:ring-4 focus:ring-emerald-500/25"
         />
       </div>
 
       <button
         type="submit"
         [disabled]="form.invalid || submitting()"
-        class="w-full rounded-xl bg-emerald-600 px-4 py-3.5 text-base font-semibold text-white shadow-lg shadow-emerald-600/25 transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+        class="w-full rounded-xl bg-emerald-700 px-4 py-3.5 text-base font-semibold text-white shadow-lg shadow-emerald-700/25 transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {{ (submitting() ? 'common.loading' : 'auth.login.submit') | translate }}
       </button>

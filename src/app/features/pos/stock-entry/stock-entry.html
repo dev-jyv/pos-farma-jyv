@@ -1,0 +1,493 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-[var(--pos-border)] px-4 py-3">
+    <div class="flex flex-col">
+      <h1 class="text-lg font-bold text-slate-900">{{ 'stockEntry.title' | translate }}</h1>
+      <p class="text-xs text-slate-500">{{ 'stockEntry.subtitle' | translate }}</p>
+    </div>
+    <p-button
+      class="ml-auto"
+      icon="pi pi-refresh"
+      [text]="true"
+      (onClick)="loadInvoices()"
+      [loading]="invoicesLoading()"
+      [ariaLabel]="'stockEntry.reloadInvoices' | translate"
+    />
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
+      <section class="flex flex-col gap-4">
+        <!-- 1. Factura ------------------------------------------------------ -->
+        <fieldset class="rounded-lg border border-[var(--pos-border)] px-3 py-3">
+          <legend class="px-1 text-sm font-bold text-slate-900">
+            {{ 'stockEntry.invoice' | translate }}
+          </legend>
+
+          @if (invoicesError(); as error) {
+            <div
+              class="mb-2 flex flex-wrap items-center gap-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+              role="alert"
+            >
+              <span class="flex-1">{{ error }}</span>
+              <p-button
+                size="small"
+                [outlined]="true"
+                [label]="'stockEntry.retry' | translate"
+                (onClick)="loadInvoices()"
+                [loading]="invoicesLoading()"
+              />
+            </div>
+          }
+
+          <span id="stock-entry-invoice-label" class="sr-only">
+            {{ 'stockEntry.invoice' | translate }}
+          </span>
+          <p-select
+            ariaLabelledBy="stock-entry-invoice-label"
+            [options]="invoiceOptions()"
+            optionLabel="label"
+            optionValue="value"
+            [ngModel]="selectedInvoiceId()"
+            (ngModelChange)="selectedInvoiceId.set($event)"
+            [loading]="invoicesLoading()"
+            [placeholder]="'stockEntry.invoicePlaceholder' | translate"
+            styleClass="w-full"
+          />
+
+          @if (selectedInvoice(); as invoice) {
+            <p class="mt-2 text-xs text-slate-500">
+              {{ invoice.supplierName }} ·
+              {{ 'stockEntry.invoiceTotal' | translate }} ${{ invoice.totalAmount | number: '1.2-2' }}
+              @if (!invoice.hasInvoice) {
+                · <span class="text-amber-800">{{ 'stockEntry.withoutTaxDoc' | translate }}</span>
+              }
+            </p>
+          }
+        </fieldset>
+
+        <!-- 2. Buscador ----------------------------------------------------- -->
+        <fieldset class="rounded-lg border border-[var(--pos-border)] px-3 py-3">
+          <legend class="px-1 text-sm font-bold text-slate-900">
+            {{ 'stockEntry.product' | translate }}
+          </legend>
+
+          @if (!editingProduct()) {
+            <label for="stock-entry-search" class="mb-1 block text-sm font-medium text-slate-700">
+              {{ 'stockEntry.search' | translate }}
+            </label>
+            <input
+              pInputText
+              id="stock-entry-search"
+              name="stockEntrySearch"
+              type="search"
+              autocomplete="off"
+              class="w-full"
+              [ngModel]="searchTerm()"
+              (ngModelChange)="onSearchChange($event)"
+              [placeholder]="'stockEntry.searchPlaceholder' | translate"
+            />
+
+            @if (searching()) {
+              <p class="mt-2 text-sm text-slate-500">{{ 'stockEntry.searching' | translate }}</p>
+            }
+
+            @if (results().length) {
+              <ul class="mt-2 divide-y divide-[var(--pos-border)] rounded border border-[var(--pos-border)]">
+                @for (item of results(); track item.id) {
+                  <li>
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-emerald-50"
+                      (click)="selectProduct(item)"
+                    >
+                      <span class="min-w-0 flex-1">
+                        <span class="block truncate text-sm font-medium text-slate-900">
+                          {{ item.name }}
+                        </span>
+                        <span class="block truncate text-xs text-slate-500">
+                          {{ item.sku }}
+                          @if (item.activeIngredient) { · {{ item.activeIngredient }} }
+                        </span>
+                      </span>
+                      <span class="shrink-0 text-xs text-slate-500">
+                        {{ 'stockEntry.currentStock' | translate }} {{ item.stock }}
+                      </span>
+                    </button>
+                  </li>
+                }
+              </ul>
+            }
+
+            @if (searched() && !results().length && !searching()) {
+              <div class="mt-2 flex flex-wrap items-center gap-3 rounded border border-[var(--pos-border)] bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                <span class="flex-1">{{ 'stockEntry.notFound' | translate }}</span>
+                <p-button
+                  size="small"
+                  icon="pi pi-plus"
+                  [label]="'stockEntry.createNew' | translate"
+                  (onClick)="startNewProduct()"
+                />
+              </div>
+            }
+          }
+
+          @if (editingProduct()) {
+            <div class="mb-3 flex flex-wrap items-center gap-2">
+              <span
+                class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
+                [class]="
+                  isNewProduct()
+                    ? 'bg-[var(--pos-accent-soft)] text-[var(--pos-accent-ink)]'
+                    : 'bg-[var(--pos-primary-soft)] text-[var(--pos-primary-ink)]'
+                "
+              >
+                {{ (isNewProduct() ? 'stockEntry.newProduct' : 'stockEntry.existingProduct') | translate }}
+              </span>
+              @if (!isNewProduct()) {
+                <span class="text-xs text-slate-500">
+                  {{ 'stockEntry.currentStock' | translate }} {{ currentStock() }}
+                </span>
+              }
+              <p-button
+                class="ml-auto"
+                size="small"
+                [text]="true"
+                icon="pi pi-times"
+                [label]="'stockEntry.changeProduct' | translate"
+                (onClick)="clearProduct()"
+              />
+            </div>
+
+            @if (categoriesError(); as error) {
+              <div class="mb-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">
+                {{ error }}
+              </div>
+            }
+
+            <div class="grid gap-3 md:grid-cols-2">
+              <div class="flex flex-col gap-1 md:col-span-2">
+                <label for="stock-entry-name" class="text-sm font-medium text-slate-700">
+                  {{ 'stockEntry.name' | translate }}
+                </label>
+                <input
+                  pInputText
+                  id="stock-entry-name"
+                  name="stockEntryName"
+                  class="w-full"
+                  [ngModel]="name()"
+                  (ngModelChange)="name.set($event ?? '')"
+                />
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <label for="stock-entry-sku" class="text-sm font-medium text-slate-700">
+                  {{ 'stockEntry.sku' | translate }}
+                </label>
+                <input
+                  pInputText
+                  id="stock-entry-sku"
+                  name="stockEntrySku"
+                  class="w-full"
+                  [ngModel]="sku()"
+                  (ngModelChange)="sku.set($event ?? '')"
+                />
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <label for="stock-entry-barcode" class="text-sm font-medium text-slate-700">
+                  {{ 'stockEntry.barcode' | translate }}
+                </label>
+                <input
+                  pInputText
+                  id="stock-entry-barcode"
+                  name="stockEntryBarcode"
+                  inputmode="numeric"
+                  class="w-full"
+                  [ngModel]="barcode()"
+                  (ngModelChange)="barcode.set($event ?? '')"
+                  [placeholder]="'stockEntry.barcodePlaceholder' | translate"
+                />
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <label for="stock-entry-ingredient" class="text-sm font-medium text-slate-700">
+                  {{ 'stockEntry.activeIngredient' | translate }}
+                </label>
+                <input
+                  pInputText
+                  id="stock-entry-ingredient"
+                  name="stockEntryIngredient"
+                  class="w-full"
+                  [ngModel]="activeIngredient()"
+                  (ngModelChange)="activeIngredient.set($event ?? '')"
+                />
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <label for="stock-entry-concentration" class="text-sm font-medium text-slate-700">
+                  {{ 'stockEntry.concentration' | translate }}
+                </label>
+                <input
+                  pInputText
+                  id="stock-entry-concentration"
+                  name="stockEntryConcentration"
+                  class="w-full"
+                  [ngModel]="concentration()"
+                  (ngModelChange)="concentration.set($event ?? '')"
+                  [placeholder]="'stockEntry.concentrationPlaceholder' | translate"
+                />
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <span id="stock-entry-category-label" class="text-sm font-medium text-slate-700">
+                  {{ 'stockEntry.category' | translate }}
+                </span>
+                <p-select
+                  ariaLabelledBy="stock-entry-category-label"
+                  [options]="categoryOptions()"
+                  optionLabel="name"
+                  optionValue="id"
+                  [filter]="true"
+                  filterBy="name"
+                  [ngModel]="categoryId()"
+                  (ngModelChange)="categoryId.set($event)"
+                  [placeholder]="'stockEntry.categoryPlaceholder' | translate"
+                  styleClass="w-full"
+                />
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <span id="stock-entry-unit-label" class="text-sm font-medium text-slate-700">
+                  {{ 'stockEntry.unit' | translate }}
+                </span>
+                <p-select
+                  ariaLabelledBy="stock-entry-unit-label"
+                  [options]="unitOptions"
+                  [editable]="true"
+                  [ngModel]="unit()"
+                  (ngModelChange)="unit.set($event ?? '')"
+                  styleClass="w-full"
+                />
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <label for="stock-entry-price" class="text-sm font-medium text-slate-700">
+                  {{ 'stockEntry.salePrice' | translate }}
+                </label>
+                <p-inputnumber
+                  inputId="stock-entry-price"
+                  mode="currency"
+                  currency="MXN"
+                  locale="es-MX"
+                  [min]="0"
+                  [ngModel]="salePrice()"
+                  (ngModelChange)="salePrice.set($event)"
+                  styleClass="w-full"
+                  inputStyleClass="w-full text-right"
+                />
+              </div>
+
+              <div class="flex flex-col gap-1">
+                <label for="stock-entry-min-stock" class="text-sm font-medium text-slate-700">
+                  {{ 'stockEntry.minStock' | translate }}
+                </label>
+                <p-inputnumber
+                  inputId="stock-entry-min-stock"
+                  [min]="0"
+                  [ngModel]="minStock()"
+                  (ngModelChange)="minStock.set($event)"
+                  styleClass="w-full"
+                  inputStyleClass="w-full text-right"
+                />
+              </div>
+
+              <div class="flex flex-col gap-1 md:col-span-2">
+                <span id="stock-entry-controlled-label" class="text-sm font-medium text-slate-700">
+                  {{ 'stockEntry.controlledGroup' | translate }}
+                </span>
+                <p-select
+                  ariaLabelledBy="stock-entry-controlled-label"
+                  [options]="controlledOptions"
+                  optionLabel="label"
+                  optionValue="value"
+                  [ngModel]="controlledGroup()"
+                  (ngModelChange)="controlledGroup.set($event)"
+                  styleClass="w-full"
+                />
+                <p class="text-xs text-slate-500">{{ 'stockEntry.controlledHint' | translate }}</p>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-4 md:col-span-2">
+                <label class="flex items-center gap-2 text-sm text-slate-700">
+                  <p-checkbox
+                    [binary]="true"
+                    [ngModel]="hasIva()"
+                    (ngModelChange)="hasIva.set($event)"
+                    name="stockEntryHasIva"
+                    inputId="stock-entry-has-iva"
+                  />
+                  <span>{{ 'stockEntry.hasIva' | translate }}</span>
+                </label>
+
+                <label class="flex items-center gap-2 text-sm text-slate-700">
+                  <p-checkbox
+                    [binary]="true"
+                    [ngModel]="hasIvaZero()"
+                    (ngModelChange)="hasIvaZero.set($event)"
+                    name="stockEntryHasIvaZero"
+                    inputId="stock-entry-has-iva-zero"
+                  />
+                  <span>{{ 'stockEntry.hasIvaZero' | translate }}</span>
+                </label>
+
+                <label class="flex items-center gap-2 text-sm text-slate-700">
+                  <p-checkbox
+                    [binary]="true"
+                    [ngModel]="hasIeps()"
+                    (ngModelChange)="hasIeps.set($event)"
+                    name="stockEntryHasIeps"
+                    inputId="stock-entry-has-ieps"
+                  />
+                  <span>{{ 'stockEntry.hasIeps' | translate }}</span>
+                </label>
+
+                @if (hasIeps()) {
+                  <div class="flex items-center gap-2">
+                    <label for="stock-entry-ieps" class="text-sm text-slate-700">
+                      {{ 'stockEntry.iepsRate' | translate }}
+                    </label>
+                    <p-inputnumber
+                      inputId="stock-entry-ieps"
+                      suffix=" %"
+                      [min]="0"
+                      [max]="160"
+                      [minFractionDigits]="0"
+                      [maxFractionDigits]="2"
+                      [ngModel]="iepsPercent()"
+                      (ngModelChange)="iepsPercent.set($event)"
+                      inputStyleClass="w-24 text-right"
+                    />
+                  </div>
+                }
+              </div>
+            </div>
+          }
+        </fieldset>
+
+        <!-- 3. Partida que entra -------------------------------------------- -->
+        <fieldset class="rounded-lg border border-[var(--pos-border)] px-3 py-3">
+          <legend class="px-1 text-sm font-bold text-slate-900">
+            {{ 'stockEntry.batch' | translate }}
+          </legend>
+
+          <div class="grid gap-3 md:grid-cols-4">
+            <div class="flex flex-col gap-1">
+              <label for="stock-entry-lot" class="text-sm font-medium text-slate-700">
+                {{ 'stockEntry.lotNumber' | translate }}
+              </label>
+              <input
+                pInputText
+                id="stock-entry-lot"
+                name="stockEntryLot"
+                class="w-full"
+                [ngModel]="lotNumber()"
+                (ngModelChange)="lotNumber.set($event ?? '')"
+              />
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <label for="stock-entry-expiry" class="text-sm font-medium text-slate-700">
+                {{ 'stockEntry.expiryDate' | translate }}
+              </label>
+              <!-- `input type=date` nativo, como el libro de control. -->
+              <input
+                id="stock-entry-expiry"
+                name="stockEntryExpiry"
+                type="date"
+                class="w-full rounded-md border border-[var(--pos-border-strong)] px-3 py-2 text-sm"
+                [min]="minExpiryDate"
+                [ngModel]="expiryDate()"
+                (ngModelChange)="expiryDate.set($event ?? '')"
+              />
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <label for="stock-entry-quantity" class="text-sm font-medium text-slate-700">
+                {{ 'stockEntry.quantity' | translate }}
+              </label>
+              <p-inputnumber
+                inputId="stock-entry-quantity"
+                [min]="1"
+                [showButtons]="true"
+                [ngModel]="quantity()"
+                (ngModelChange)="quantity.set($event)"
+                styleClass="w-full"
+                inputStyleClass="w-full text-right text-lg font-bold"
+              />
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <label for="stock-entry-cost" class="text-sm font-medium text-slate-700">
+                {{ 'stockEntry.costPrice' | translate }}
+              </label>
+              <p-inputnumber
+                inputId="stock-entry-cost"
+                mode="currency"
+                currency="MXN"
+                locale="es-MX"
+                [min]="0"
+                [ngModel]="costPrice()"
+                (ngModelChange)="costPrice.set($event)"
+                styleClass="w-full"
+                inputStyleClass="w-full text-right"
+              />
+            </div>
+          </div>
+        </fieldset>
+      </section>
+
+      <!-- Resumen y guardar ------------------------------------------------- -->
+      <aside class="flex flex-col gap-3">
+        <div class="rounded-lg border border-[var(--pos-border)] px-3 py-3">
+          <p class="text-sm font-bold text-slate-900">{{ 'stockEntry.summary' | translate }}</p>
+          <p class="mt-2 text-3xl font-bold text-slate-900">
+            {{ currentStock() }} <span class="text-slate-400">→</span> {{ resultingStock() }}
+          </p>
+          <p class="text-xs text-slate-500">{{ 'stockEntry.summaryHint' | translate }}</p>
+
+          @if (blockers().length) {
+            <ul class="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">
+              @for (blocker of blockers(); track blocker) {
+                <li>{{ blocker }}</li>
+              }
+            </ul>
+          }
+
+          <div class="mt-3 flex flex-wrap items-center gap-2">
+            <p-button
+              icon="pi pi-save"
+              [label]="'stockEntry.submit' | translate"
+              (onClick)="submit()"
+              [disabled]="!canSubmit()"
+              [loading]="submitting()"
+            />
+            <span class="pos-kbd">F9</span>
+          </div>
+        </div>
+
+        @if (lastResult(); as result) {
+          <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
+            <p class="font-semibold">{{ 'stockEntry.saved' | translate }}</p>
+            <p class="mt-1">{{ result.name }}: +{{ result.added }}</p>
+            <p class="text-xs">{{ 'stockEntry.savedStock' | translate }} {{ result.stock }}</p>
+          </div>
+        }
+
+        <div class="rounded-lg border border-[var(--pos-accent-soft-border)] bg-[var(--pos-accent-soft)] px-3 py-3 text-sm text-[var(--pos-accent-ink)]">
+          <i class="pi pi-info-circle mr-1"></i>
+          {{ 'stockEntry.notice' | translate }}
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>

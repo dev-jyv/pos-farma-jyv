@@ -46,3 +46,6 @@ Thumbs.db
 
 # Graphify knowledge graph (regenerate with: graphify extract . --code-only)
 /graphify-out/
+
+# Artefactos de auditoría con Playwright MCP
+/.playwright-mcp/

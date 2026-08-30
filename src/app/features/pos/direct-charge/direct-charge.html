@@ -1,0 +1,314 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-[var(--pos-border)] px-4 py-3">
+    <div class="flex flex-col">
+      <h1 class="text-lg font-bold text-slate-900">{{ 'directCharge.title' | translate }}</h1>
+      <p class="text-xs text-slate-500">{{ 'directCharge.subtitle' | translate }}</p>
+    </div>
+    <p-button
+      class="ml-auto"
+      icon="pi pi-refresh"
+      [text]="true"
+      (onClick)="loadRecent()"
+      [loading]="recentLoading()"
+      [ariaLabel]="'directCharge.refresh' | translate"
+    />
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+    <!-- Aviso permanente: es la diferencia entre este módulo y el cobro de una venta. -->
+    <div class="mb-3 flex items-start gap-2 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+      <i class="pi pi-info-circle mt-0.5"></i>
+      <span>{{ 'directCharge.notice' | translate }}</span>
+    </div>
+
+    <!-- `valueChange` y no `[(value)]`: cambiar de canal con un cobro vivo se rechaza. -->
+    <p-tabs [value]="channel()" (valueChange)="selectChannel($any($event))">
+      <p-tablist>
+        <p-tab value="point">
+          <i class="pi pi-credit-card mr-2"></i>{{ 'directCharge.tab.point' | translate }}
+        </p-tab>
+        <p-tab value="online">
+          <i class="pi pi-link mr-2"></i>{{ 'directCharge.tab.online' | translate }}
+        </p-tab>
+      </p-tablist>
+
+      <p-tabpanels>
+        <p-tabpanel value="point">
+          <div class="grid gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+            <section class="flex flex-col gap-3">
+              <ng-container [ngTemplateOutlet]="amountFields" />
+
+              <div class="flex flex-col gap-1">
+                <label for="direct-charge-device" class="text-sm font-medium text-slate-700">
+                  {{ 'directCharge.device' | translate }}
+                </label>
+                <p-select
+                  inputId="direct-charge-device"
+                  [options]="deviceOptions()"
+                  optionLabel="label"
+                  optionValue="id"
+                  [ngModel]="selectedDeviceId()"
+                  (ngModelChange)="selectedDeviceId.set($event)"
+                  [disabled]="pending() || approved()"
+                  [loading]="devicesLoading()"
+                  [placeholder]="'directCharge.devicePlaceholder' | translate"
+                  styleClass="w-full"
+                />
+                @if (devicesError(); as error) {
+                  <div class="flex flex-wrap items-center gap-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">
+                    <span class="flex-1">{{ error }}</span>
+                    <p-button
+                      size="small"
+                      [outlined]="true"
+                      [label]="'directCharge.reloadDevices' | translate"
+                      (onClick)="loadDevices()"
+                      [loading]="devicesLoading()"
+                    />
+                  </div>
+                }
+                @if (selectedDevice(); as device) {
+                  @if (device.operatingMode !== 'PDV') {
+                    <!-- Sin modo PDV la terminal ignora las órdenes que manda la caja. -->
+                    <div class="flex flex-wrap items-center gap-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                      <span class="flex-1">{{ 'directCharge.pdvHint' | translate }}</span>
+                      <p-button
+                        size="small"
+                        [outlined]="true"
+                        [label]="'directCharge.activatePdv' | translate"
+                        (onClick)="activatePdv()"
+                        [loading]="activatingPdv()"
+                      />
+                    </div>
+                  }
+                }
+              </div>
+
+              <ng-container [ngTemplateOutlet]="actions" />
+            </section>
+
+            <section>
+              <ng-container [ngTemplateOutlet]="chargeState" />
+            </section>
+          </div>
+        </p-tabpanel>
+
+        <p-tabpanel value="online">
+          <div class="grid gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+            <section class="flex flex-col gap-3">
+              <ng-container [ngTemplateOutlet]="amountFields" />
+              <p class="text-xs text-slate-500">{{ 'directCharge.onlineHint' | translate }}</p>
+              <ng-container [ngTemplateOutlet]="actions" />
+            </section>
+
+            <section class="flex flex-col gap-3">
+              @if (paymentLink(); as link) {
+                <div class="rounded border border-emerald-200 bg-emerald-50 px-3 py-3">
+                  <p class="text-sm font-semibold text-emerald-900">
+                    {{ 'directCharge.linkReady' | translate }}
+                  </p>
+                  @if (qrDataUrl(); as qr) {
+                    <img
+                      [src]="qr"
+                      [alt]="'directCharge.qrAlt' | translate"
+                      class="mt-2 h-[220px] w-[220px] rounded bg-white p-2"
+                    />
+                  }
+                  <p class="mt-1 break-all font-mono text-xs text-emerald-900">{{ link }}</p>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <p-button
+                      size="small"
+                      icon="pi pi-copy"
+                      [label]="(linkCopied() ? 'directCharge.linkCopied' : 'directCharge.copyLink') | translate"
+                      (onClick)="copyLink()"
+                    />
+                    <p-button
+                      size="small"
+                      icon="pi pi-external-link"
+                      [outlined]="true"
+                      [label]="'directCharge.openLink' | translate"
+                      (onClick)="openLink()"
+                    />
+                  </div>
+                  @if (charge()?.online?.expiresAt; as expiresAt) {
+                    <p class="mt-2 text-xs text-emerald-800">
+                      {{ 'directCharge.linkExpires' | translate }} {{ expiresAt | date: 'short' }}
+                    </p>
+                  }
+                </div>
+              }
+              <ng-container [ngTemplateOutlet]="chargeState" />
+            </section>
+          </div>
+        </p-tabpanel>
+      </p-tabpanels>
+    </p-tabs>
+
+    <!-- Cobros recientes: el registro paralelo que no aparece en ventas. -->
+    <section class="mt-6">
+      <h2 class="mb-2 text-sm font-bold text-slate-900">{{ 'directCharge.recent' | translate }}</h2>
+      @if (recentError(); as error) {
+        <div class="mb-2 flex flex-wrap items-center gap-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+          <span class="flex-1">{{ error }}</span>
+          <p-button
+            size="small"
+            severity="danger"
+            [outlined]="true"
+            [label]="'directCharge.retry' | translate"
+            (onClick)="loadRecent()"
+            [loading]="recentLoading()"
+          />
+        </div>
+      }
+      <p-table [value]="recent()" [loading]="recentLoading()" size="small" styleClass="text-sm">
+        <ng-template #header>
+          <tr>
+            <th>{{ 'directCharge.column.folio' | translate }}</th>
+            <th>{{ 'directCharge.column.date' | translate }}</th>
+            <th>{{ 'directCharge.column.concept' | translate }}</th>
+            <th>{{ 'directCharge.column.channel' | translate }}</th>
+            <th class="text-right">{{ 'directCharge.column.amount' | translate }}</th>
+            <th>{{ 'directCharge.column.status' | translate }}</th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-item>
+          <tr>
+            <td class="font-mono">{{ item.folio }}</td>
+            <td>{{ item.createdAt | date: 'short' }}</td>
+            <td>{{ item.concept }}</td>
+            <td>{{ 'directCharge.tab.' + item.channel | translate }}</td>
+            <td class="text-right font-semibold">${{ item.amount | number: '1.2-2' }}</td>
+            <td>
+              <p-tag
+                [value]="'directCharge.status.' + item.status | translate"
+                [severity]="statusSeverity(item.status)"
+              />
+            </td>
+          </tr>
+        </ng-template>
+        <ng-template #emptymessage>
+          <tr>
+            <td colspan="6" class="py-4 text-center text-slate-500">
+              {{ 'directCharge.empty' | translate }}
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+    </section>
+  </div>
+</div>
+
+<!-- Monto y concepto: idénticos en ambos canales. -->
+<ng-template #amountFields>
+  <div class="flex flex-col gap-1">
+    <label for="direct-charge-amount" class="text-sm font-medium text-slate-700">
+      {{ 'directCharge.amount' | translate }}
+    </label>
+    <p-inputnumber
+      inputId="direct-charge-amount"
+      mode="currency"
+      currency="MXN"
+      locale="es-MX"
+      [min]="0"
+      [ngModel]="amount()"
+      (ngModelChange)="amount.set($event)"
+      [disabled]="pending() || approved()"
+      styleClass="w-full"
+      inputStyleClass="w-full text-right text-lg font-bold"
+    />
+  </div>
+
+  <div class="flex flex-col gap-1">
+    <label for="direct-charge-concept" class="text-sm font-medium text-slate-700">
+      {{ 'directCharge.concept' | translate }}
+    </label>
+    <input
+      pInputText
+      id="direct-charge-concept"
+      name="directChargeConcept"
+      autocomplete="off"
+      class="w-full"
+      [ngModel]="concept()"
+      (ngModelChange)="concept.set($event)"
+      [disabled]="pending() || approved()"
+      [placeholder]="'directCharge.conceptPlaceholder' | translate"
+    />
+  </div>
+</ng-template>
+
+<!-- Botonera: enviar, cancelar el cobro vivo o arrancar uno nuevo. -->
+<ng-template #actions>
+  @if (blockers().length && !charge()) {
+    <ul class="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+      @for (blocker of blockers(); track blocker) {
+        <li>{{ blocker }}</li>
+      }
+    </ul>
+  }
+
+  <div class="flex flex-wrap gap-2">
+    @if (!charge() || charge()?.status === 'failed' || charge()?.status === 'canceled') {
+      <p-button
+        icon="pi pi-send"
+        [label]="'directCharge.submit' | translate"
+        (onClick)="submit()"
+        [disabled]="!canSubmit()"
+        [loading]="submitting()"
+      />
+      <span class="pos-kbd self-center">F9</span>
+    }
+    @if (pending()) {
+      <p-button
+        icon="pi pi-times"
+        severity="danger"
+        [outlined]="true"
+        [label]="'directCharge.cancel' | translate"
+        (onClick)="cancel()"
+        [loading]="canceling()"
+      />
+    }
+    @if (charge() && !pending()) {
+      <p-button
+        icon="pi pi-plus"
+        [outlined]="true"
+        [label]="'directCharge.new' | translate"
+        (onClick)="newCharge()"
+      />
+    }
+  </div>
+</ng-template>
+
+<!-- Estado del cobro en curso. -->
+<ng-template #chargeState>
+  @if (charge(); as current) {
+    <div class="rounded border border-[var(--pos-border)] px-3 py-3">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="font-mono text-sm font-bold text-slate-900">{{ current.folio }}</span>
+        <p-tag
+          [value]="'directCharge.status.' + current.status | translate"
+          [severity]="statusSeverity(current.status)"
+        />
+        @if (polling()) {
+          <p-progressspinner styleClass="!h-4 !w-4" strokeWidth="6" />
+          <span class="text-xs text-slate-500">{{ 'directCharge.waiting' | translate }}</span>
+        }
+      </div>
+      <p class="mt-2 text-2xl font-bold text-slate-900">${{ current.amount | number: '1.2-2' }}</p>
+      <p class="text-sm text-slate-600">{{ current.concept }}</p>
+      @if (current.statusDetail; as detail) {
+        <p class="mt-2 text-sm text-red-700">{{ detail }}</p>
+      }
+      @if (current.point; as point) {
+        <p class="mt-2 font-mono text-xs text-slate-500">
+          {{ 'directCharge.orderId' | translate }}: {{ point.orderId }}
+        </p>
+      }
+      @if (current.online; as online) {
+        <p class="mt-2 font-mono text-xs text-slate-500">
+          {{ 'directCharge.preferenceId' | translate }}: {{ online.preferenceId }}
+        </p>
+      }
+    </div>
+  } @else {
+    <p class="text-sm text-slate-500">{{ 'directCharge.idle' | translate }}</p>
+  }
+</ng-template>

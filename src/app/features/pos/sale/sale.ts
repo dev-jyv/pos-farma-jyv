@@ -10,6 +10,7 @@ import { debounceTime, distinctUntilChanged, Subject, switchMap } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { environment } from '../../../../environments/environment';
+import { getApiErrorMessage } from '../../../core/api/api.utils';
 import { ScanSoundService } from '../../../core/audio/scan-sound.service';
 import { AuthService } from '../../../core/auth/auth.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
@@ -27,6 +28,13 @@ import { CashSessionDialog } from '../cash-session/cash-session-dialog';
 import { CashMovementDialog } from '../cash-session/cash-movement-dialog';
 import { TicketPrintService } from '../ticket/ticket-print.service';
 import { SubstitutesDialog } from './substitutes-dialog';
+
+/**
+ * Longitud mínima para consultar el catálogo. El backend resuelve la búsqueda
+ * leyendo hasta 500 productos y filtrando en memoria, así que cada pulsación
+ * cuesta; con menos de dos caracteres el resultado además no discrimina nada.
+ */
+const MIN_SEARCH_LENGTH = 2;
 
 function startOfToday(): Date {
   const now = new Date();
@@ -102,6 +110,7 @@ export class Sale {
   readonly cashSessionDialogVisible = signal(false);
   readonly cashMovementDialogVisible = signal(false);
   readonly blockedDialogVisible = signal(false);
+  readonly pendingDialogVisible = signal(false);
   readonly lastSale = signal<SaleModel | null>(null);
   readonly substitutesVisible = signal(false);
   readonly substitutesSource = signal<Product | null>(null);
@@ -112,6 +121,7 @@ export class Sale {
   readonly cashSessionOpen = this.cashSessionService.isOpen;
   readonly cashSession = this.cashSessionService.current;
   readonly pendingOfflineSales = this.saleService.pendingCount;
+  readonly pendingSales = this.saleService.pendingSales;
   readonly blockedSales = this.saleService.blockedSales;
 
   readonly subtotal = computed(() =>
@@ -126,12 +136,23 @@ export class Sale {
     const lines = this.cart();
     return lines.length ? lines[lines.length - 1].product.id : null;
   });
+  /**
+   * `queueId` de la última venta si aún no llegó al servidor. `enqueueOffline` embebe
+   * la llave de la cola en el id (`offline-<queueId>`), así que un id con ese prefijo
+   * significa a la vez "no sincronizada" y "esta es su entrada en la cola".
+   */
+  readonly lastSaleQueueId = computed(() => {
+    const id = this.lastSale()?.id ?? '';
+    return id.startsWith('offline-') ? id.slice('offline-'.length) : null;
+  });
 
   constructor() {
     this.search$
       .pipe(
         debounceTime(500),
         distinctUntilChanged(),
+        // El término vacío corta la cadena sin salir a la red (`ProductService`
+        // lo resuelve con una lista vacía) y sirve para cancelar el pendiente.
         switchMap((term) => this.productService.search(term)),
         takeUntilDestroyed(),
       )
@@ -189,6 +210,7 @@ export class Sale {
       this.cashSessionDialogVisible() ||
       this.cashMovementDialogVisible() ||
       this.blockedDialogVisible() ||
+      this.pendingDialogVisible() ||
       this.substitutesVisible()
     );
   }
@@ -260,12 +282,17 @@ export class Sale {
   }
 
   onSearchChange(term: string): void {
+    this.searchTerm.set(term);
     if (!this.cashSessionOpen()) {
-      this.searchTerm.set(term);
       this.results.set([]);
       return;
     }
-    this.searchTerm.set(term);
+    // Con una sola letra el servidor recorre el catálogo para devolver medio
+    // mostrador: no es una búsqueda útil y sí una consulta cara por pulsación.
+    if (term.trim().length < MIN_SEARCH_LENGTH) {
+      this.results.set([]);
+      return;
+    }
     this.search$.next(term);
   }
 
@@ -336,6 +363,9 @@ export class Sale {
   clearSearch(): void {
     this.searchTerm.set('');
     this.results.set([]);
+    // Cancela la búsqueda que quedó en el debounce: tras escanear, esa consulta
+    // ya no le sirve a nadie y llegaría a pintar resultados de un término borrado.
+    this.search$.next('');
   }
 
   addToCart(product: Product, qty = 1, fromScanner = false): void {
@@ -367,9 +397,16 @@ export class Sale {
     this.substitutes.set([]);
   }
 
-  updateQuantity(productId: string, rawQuantity: number): void {
+  updateQuantity(productId: string, rawQuantity: number | null): void {
+    // Campo vacío mientras el cajero reescribe la cantidad: no es un 0 deliberado.
+    if (rawQuantity === null || !Number.isFinite(rawQuantity)) {
+      return;
+    }
     const quantity = Math.floor(rawQuantity);
     if (quantity < 1) {
+      // Bajar de 1 es quitar la partida. Salir en silencio dejaba el `−` (y el atajo
+      // `-`) sin efecto y sin explicación: el cajero repetía la tecla sin entender.
+      this.removeFromCart(productId);
       return;
     }
     const line = this.cart().find((item) => item.product.id === productId);
@@ -484,12 +521,20 @@ export class Sale {
 
   onSaleCompleted(sale: SaleModel): void {
     this.lastSale.set(sale);
+    // El stock que se acaba de descontar no debe volver a pintarse desde la
+    // caché de búsquedas: la siguiente consulta va al servidor.
+    this.productService.invalidate();
     this.cart.set([]);
     this.manualDiscounts.set({});
     this.checkoutVisible.set(false);
+    this.adjustResultsStock(sale.items, -1);
+    this.refreshResultsAfterStockChange(sale);
     this.notifications.success(`Venta ${sale.folio} registrada.`);
     if (environment.printTicketOnSale) {
-      this.printSale(sale);
+      // Esperar a que PrimeNG cierre el diálogo de cobro. Imprimir en el mismo tick
+      // (sobre todo tras tarjeta, cuando el modal se cierra al confirmar) hace que
+      // Electron/Chrome a veces no muestre el diálogo de impresión.
+      window.setTimeout(() => this.printSale(sale), 400);
     }
   }
 
@@ -534,15 +579,88 @@ export class Sale {
     }
   }
 
-  voidLastSale(): void {
-    const sale = this.lastSale();
-    if (!sale) {
+  /** Ventas en cola que todavía pueden salir solas; el cajero puede forzar el envío. */
+  reviewPendingSales(): void {
+    if (this.pendingSales().length === 0) {
       return;
     }
-    this.saleService.void(sale.id).subscribe((voided) => {
-      this.lastSale.set(voided);
-      this.notifications.success('Venta anulada.');
+    this.pendingDialogVisible.set(true);
+  }
+
+  flushPendingSales(): void {
+    this.saleService.flushQueue();
+    this.notifications.success('Enviando las ventas pendientes.');
+  }
+
+  /**
+   * Una venta que sigue en la cola no existe en el servidor: anularla es imposible y
+   * lo único correcto es sacarla de la cola antes de que se envíe al reconectar.
+   */
+  discardLastSaleFromQueue(): void {
+    const queueId = this.lastSaleQueueId();
+    if (!queueId) {
+      return;
+    }
+    if (!window.confirm('¿Descartar esta venta? Aún no se envió al servidor y no se registrará.')) {
+      return;
+    }
+    this.saleService.discardBlockedSale(queueId);
+    this.lastSale.set(null);
+    this.notifications.success('Venta descartada de la cola.');
+  }
+
+  voidLastSale(): void {
+    const sale = this.lastSale();
+    if (!sale || this.lastSaleQueueId()) {
+      return;
+    }
+    this.saleService.void(sale.id).subscribe({
+      next: (voided) => {
+        this.lastSale.set(voided);
+        this.adjustResultsStock(voided.items, 1);
+        this.refreshResultsAfterStockChange(voided);
+        this.notifications.success('Venta anulada.');
+      },
+      // Sin handler, un rechazo del servidor dejaba al cajero creyendo que anuló.
+      error: (error: unknown) => this.notifications.error(getApiErrorMessage(error)),
     });
+  }
+
+  /** Ajusta el stock visible en la lista de búsqueda sin esperar otra consulta. */
+  private adjustResultsStock(
+    items: Array<{ productId: string; quantity: number }> | undefined,
+    sign: 1 | -1,
+  ): void {
+    if (!items?.length) {
+      return;
+    }
+    const deltas = new Map<string, number>();
+    for (const item of items) {
+      deltas.set(item.productId, (deltas.get(item.productId) ?? 0) + item.quantity * sign);
+    }
+    this.results.update((list) =>
+      list.map((product) => {
+        const delta = deltas.get(product.id);
+        return delta === undefined
+          ? product
+          : { ...product, stock: Math.max(0, product.stock + delta) };
+      }),
+    );
+  }
+
+  /**
+   * Si la búsqueda sigue abierta, reconsulta el API para alinear con el servidor.
+   * En ventas offline el backend aún no descontó: basta el ajuste local.
+   */
+  private refreshResultsAfterStockChange(sale: SaleModel): void {
+    if (sale.id.startsWith('offline-')) {
+      return;
+    }
+    const term = this.searchTerm().trim();
+    if (!term) {
+      return;
+    }
+    this.productService.search(term).subscribe((products) => this.results.set(products));
   }
 
   private commitAdd(

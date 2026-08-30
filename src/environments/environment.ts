@@ -19,8 +19,16 @@ export const environment = {
     rfc: '',
   },
   mercadoPago: {
-    storeId: '79584227',
-    posId: '136088410',
+    /**
+     * Terminal Point desactivada por ahora: no hay TPV emparejada, así que el cobro
+     * con tarjeta y la parte con tarjeta del mixto se **registran** igual que el
+     * efectivo, sin mandar nada a la terminal. Poner en `true` cuando la TPV esté
+     * emparejada; el flujo de orders sigue intacto en el código.
+     */
+    terminalEnabled: false,
+    storeId: '79847455',
+    posId: '136414381',
+    terminalId: 'NEWLAND_N950__N950NCCA05098242',
   },
   firebase: {
     apiKey: 'AIzaSyCDkNTzuKSvhXzC716e9fGjGSrk-BctJS0',

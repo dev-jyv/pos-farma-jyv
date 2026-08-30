@@ -45,6 +45,12 @@ export class CashSessionDialog {
   });
   readonly openingAmount = signal(0);
   readonly countedCashAmount = signal(0);
+  /**
+   * El campo de efectivo contado se precarga con lo esperado: sin exigir que el cajero
+   * lo toque, cerrar el turno confirmaría un arqueo que nadie contó (y en un turno sin
+   * ventas, un $0.00 que cuadra por accidente).
+   */
+  readonly countedTouched = signal(false);
   readonly submitting = signal(false);
   readonly summaryLoading = signal(false);
   readonly preview = signal<CashSessionCut | null>(null);
@@ -68,6 +74,7 @@ export class CashSessionDialog {
       }
       this.openingAmount.set(0);
       this.countedCashAmount.set(0);
+      this.countedTouched.set(false);
       this.submitting.set(false);
       this.closeResult.set(null);
       const session = this.session();
@@ -91,6 +98,33 @@ export class CashSessionDialog {
         this.notifications.error(this.translate.instant('cashCut.openError'));
       },
     });
+  }
+
+  setCountedCash(value: number | null): void {
+    this.countedCashAmount.set(value ?? 0);
+    this.countedTouched.set(true);
+  }
+
+  /**
+   * Cerrar turno es irreversible. Con diferencia distinta de cero el cajero debe
+   * confirmarla explícitamente: casi siempre es un conteo a medias, no un faltante real.
+   */
+  requestClose(): void {
+    if (!this.countedTouched()) {
+      return;
+    }
+    const diff = this.difference();
+    if (diff !== 0) {
+      const label = diff > 0 ? 'sobrante' : 'faltante';
+      const confirmed = window.confirm(
+        `El arqueo tiene un ${label} de $${Math.abs(diff).toFixed(2)}. ` +
+          'El cierre no se puede deshacer. ¿Cerrar el turno de todos modos?',
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+    this.confirmClose();
   }
 
   confirmClose(): void {

@@ -1,16 +1,25 @@
 <div class="flex h-screen flex-col bg-[var(--pos-bg)]">
-  <header class="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--pos-border)] bg-white px-4 shadow-sm">
-    <div class="flex items-center gap-2 border-r border-slate-200 pr-4">
-      <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600 text-sm font-bold text-white">
-        FJ
-      </span>
+  <!-- `flex-wrap` + `min-h-14`: por debajo del ancho mínimo de Electron (1024px) la
+       barra baja a una segunda línea en vez de empujar el bloque de usuario fuera del
+       viewport y provocar scroll horizontal en toda la app. -->
+  <header
+    class="flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-1 shadow-sm"
+  >
+    <div class="flex items-center gap-2 border-r border-[var(--pos-border)] pr-4">
+      <!-- Isotipo (manos + corazón) recortado del logo; decorativo, el nombre va al lado. -->
+      <img src="brand/isotipo.png" alt="" aria-hidden="true" class="h-9 w-9 shrink-0 object-contain" />
       <div class="leading-tight">
-        <div class="text-sm font-bold text-slate-900">{{ 'app.name' | translate }}</div>
-        <div class="text-[11px] text-slate-500">Caja</div>
+        <div class="text-sm font-bold text-[var(--pos-ink)]">{{ 'app.name' | translate }}</div>
+        <div class="text-[11px] text-[var(--pos-muted)]">
+          Caja
+          @if (appVersion) {
+            <span class="font-mono"> · {{ appVersion }}</span>
+          }
+        </div>
       </div>
     </div>
 
-    <nav class="flex items-center gap-1">
+    <nav class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
       @for (item of navItems(); track item.path) {
         <a
           [routerLink]="item.path"
@@ -27,17 +36,22 @@
       }
     </nav>
 
-    <div class="ml-auto flex items-center gap-3">
+    <!-- El correo y el rol son informativos: se ocultan antes que la barra desborde. -->
+    <div class="ml-auto flex shrink-0 items-center gap-3">
       @if (roleLabel(); as currentRoleLabel) {
         <span
-          class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
-          [class]="isAdmin() ? 'bg-violet-100 text-violet-700' : 'bg-emerald-100 text-emerald-700'"
+          class="hidden rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide md:inline-block"
+          [class]="
+            isAdmin()
+              ? 'bg-[var(--pos-accent-soft)] text-[var(--pos-accent-ink)]'
+              : 'bg-[var(--pos-primary-soft)] text-[var(--pos-primary-ink)]'
+          "
         >
           {{ currentRoleLabel }}
         </span>
       }
       @if (user(); as currentUser) {
-        <span class="hidden max-w-48 truncate text-sm text-slate-600 sm:inline">
+        <span class="hidden max-w-48 truncate text-sm text-[var(--pos-muted)] lg:inline">
           {{ currentUser.email }}
         </span>
       }
@@ -45,7 +59,7 @@
       <button
         type="button"
         (click)="logout()"
-        class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+        class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-[var(--pos-ink-soft)] transition hover:bg-[var(--neutral-100)] hover:text-[var(--pos-ink)]"
       >
         <i class="pi pi-sign-out"></i>
         <span class="hidden sm:inline">{{ 'auth.logout' | translate }}</span>
@@ -53,10 +67,13 @@
     </div>
   </header>
 
+  <!-- Cinta de marca: verde → azul, el recorrido de las manos del logo. -->
+  <div class="pos-brand-bar shrink-0"></div>
+
   @if (degraded()) {
     <div
       class="flex shrink-0 items-center justify-center gap-2 px-4 py-1.5 text-sm font-semibold text-white"
-      [class]="browserOnline() ? 'bg-amber-500' : 'bg-red-600'"
+      [class]="browserOnline() ? 'bg-[var(--pos-warn)]' : 'bg-[var(--pos-danger)]'"
     >
       <i class="pi pi-exclamation-triangle text-xs"></i>
       <span>

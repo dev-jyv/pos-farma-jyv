@@ -2,6 +2,7 @@
   [visible]="visible()"
   [modal]="true"
   [closable]="true"
+  [closeAriaLabel]="'Cerrar'"
   [draggable]="false"
   [dismissableMask]="false"
   [style]="{ width: '58rem', maxWidth: '96vw' }"
@@ -12,10 +13,12 @@
   <ng-template #header>
     <div class="flex w-full items-center gap-3">
       <span class="text-lg font-semibold text-slate-900">Cobrar</span>
-      <span class="text-xs text-slate-500">
+      <!-- slate-600 sobre blanco = 7.58:1; slate-400/500 no llegaban al 4.5:1 de AA
+           a estos tamaños (11-12px). -->
+      <span class="text-xs text-slate-600">
         {{ itemCount() }} {{ itemCount() === 1 ? 'artículo' : 'artículos' }}
       </span>
-      <span class="ml-auto hidden items-center gap-1.5 text-[11px] text-slate-400 sm:flex">
+      <span class="ml-auto hidden items-center gap-1.5 text-[11px] text-slate-600 sm:flex">
         <span class="pos-kbd">Alt</span>+<span class="pos-kbd">1</span>
         <span class="pos-kbd">2</span>
         <span class="pos-kbd">3</span>
@@ -44,11 +47,13 @@
       </div>
 
       <div>
-        <div class="grid grid-cols-3 gap-2" role="tablist" aria-label="Método de pago">
+        <!-- Es una selección única, no una navegación por pestañas: no hay ningún
+             `tabpanel` que controlar, así que la semántica real es radiogroup/radio. -->
+        <div class="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Método de pago">
           @for (method of paymentMethods; track method.value) {
             <button
               type="button"
-              role="tab"
+              role="radio"
               class="flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-xs font-semibold transition-all"
               [class.border-emerald-500]="paymentMethod() === method.value"
               [class.bg-emerald-50]="paymentMethod() === method.value"
@@ -58,7 +63,7 @@
               [class.bg-white]="paymentMethod() !== method.value"
               [class.text-slate-600]="paymentMethod() !== method.value"
               [class.hover:border-slate-300]="paymentMethod() !== method.value"
-              [attr.aria-selected]="paymentMethod() === method.value"
+              [attr.aria-checked]="paymentMethod() === method.value"
               (click)="selectPaymentMethod(method.value)"
             >
               <i [class]="method.icon + ' text-base'" aria-hidden="true"></i>
@@ -168,115 +173,145 @@
       }
 
       @if (paymentMethod() === 'card' || paymentMethod() === 'mixed') {
-        <div class="space-y-3 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
-          <div>
-            <div class="mb-1.5 flex items-center justify-between gap-2">
-              <label for="pointDevice" class="block text-sm font-medium text-slate-700">
-                Terminal Mercado Pago
-              </label>
-              <button
-                type="button"
-                class="text-xs font-medium text-emerald-700 hover:underline disabled:opacity-50"
-                [disabled]="devicesLoading()"
-                (click)="loadDevices()"
-              >
-                {{ devicesLoading() ? 'Buscando…' : 'Actualizar' }}
-              </button>
-            </div>
-            <p-select
-              inputId="pointDevice"
-              [options]="deviceOptions()"
-              [ngModel]="selectedDeviceId()"
-              (ngModelChange)="selectedDeviceId.set($event)"
-              optionLabel="label"
-              optionValue="id"
-              placeholder="Selecciona terminal"
-              [loading]="devicesLoading()"
-              [disabled]="devicesLoading() || devices().length === 0"
-              styleClass="w-full"
-            />
-            @if (selectedDevice()?.operatingMode === 'STANDALONE') {
-              <p-button
-                [label]="'checkout.activatePdv' | translate"
-                icon="pi pi-mobile"
-                severity="secondary"
-                size="small"
-                styleClass="mt-2 w-full"
-                [loading]="activatingPdv()"
-                (onClick)="activatePdv()"
-              />
-            }
-            @if (devicesError()) {
-              <p class="mt-2 text-xs leading-relaxed text-amber-800">{{ devicesError() }}</p>
-            }
-          </div>
-
-          @if (!cardOrder()) {
-            <p-button
-              [label]="'Enviar $' + (cardChargeAmount() | number: '1.2-2') + ' a la terminal'"
-              icon="pi pi-send"
-              styleClass="w-full"
-              [disabled]="!selectedDeviceId() || cardChargeAmount() <= 0 || !!tenderError()"
-              (onClick)="startCardPayment()"
-            />
-          } @else {
-            <div
-              class="flex items-start gap-3 rounded-lg px-3 py-3"
-              aria-live="polite"
-              [class.bg-emerald-100]="cardOrderApproved()"
-              [class.bg-red-100]="
-                cardOrder()?.status === 'failed' ||
-                cardOrder()?.status === 'canceled' ||
-                cardOrder()?.status === 'expired'
-              "
-              [class.bg-white]="cardPolling()"
-            >
-              @if (cardPolling()) {
-                <p-progressspinner styleClass="!h-5 !w-5 shrink-0" strokeWidth="6" />
-              } @else if (cardOrderApproved()) {
-                <i class="pi pi-check-circle mt-0.5 text-lg text-emerald-600" aria-hidden="true"></i>
-              } @else {
-                <i class="pi pi-times-circle mt-0.5 text-lg text-red-600" aria-hidden="true"></i>
-              }
-              <div class="text-sm font-medium text-slate-800">
-                @switch (cardOrder()?.status) {
-                  @case ('created') { Esperando terminal… }
-                  @case ('at_terminal') { Inserte o pase la tarjeta en la terminal… }
-                  @case ('action_required') { Confirma la operación en la terminal… }
-                  @case ('processed') { Pago aprobado }
-                  @case ('canceled') { Pago cancelado en terminal }
-                  @case ('expired') { El cobro expiró sin completarse }
-                  @case ('failed') { Error en el cobro }
-                  @case ('refunded') { Pago reembolsado }
-                }
-                @if (cardOrderApproved()) {
-                  <span class="block text-xs font-normal text-slate-600">
-                    Tarjeta ${{ cardAmount() | number: '1.2-2' }}
-                    @if (paymentMethod() === 'mixed') {
-                      · Efectivo ${{ cashDue() | number: '1.2-2' }}
-                    }
-                  </span>
-                }
+        @if (terminalEnabled) {
+          <div class="space-y-3 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+            <div>
+              <div class="mb-1.5 flex items-center justify-between gap-2">
+                <label for="pointDevice" class="block text-sm font-medium text-slate-700">
+                  Terminal Mercado Pago
+                </label>
+                <button
+                  type="button"
+                  class="text-xs font-medium text-emerald-700 hover:underline disabled:opacity-50"
+                  [disabled]="devicesLoading()"
+                  (click)="loadDevices()"
+                >
+                  {{ devicesLoading() ? 'Buscando…' : 'Actualizar' }}
+                </button>
               </div>
-            </div>
-            @if (cardAmountLocked() && !cardOrderApproved()) {
-              <p-button
-                label="Cancelar cobro en terminal"
-                severity="secondary"
+              <p-select
+                inputId="pointDevice"
+                [options]="deviceOptions()"
+                [ngModel]="selectedDeviceId()"
+                (ngModelChange)="selectedDeviceId.set($event)"
+                optionLabel="label"
+                optionValue="id"
+                placeholder="Selecciona terminal"
+                [loading]="devicesLoading()"
+                [disabled]="devicesLoading() || devices().length === 0"
                 styleClass="w-full"
-                (onClick)="cancelCardPayment()"
               />
-            } @else if (!cardOrderApproved()) {
+              @if (selectedDevice()?.operatingMode === 'STANDALONE') {
+                <p-button
+                  [label]="'checkout.activatePdv' | translate"
+                  icon="pi pi-mobile"
+                  severity="secondary"
+                  size="small"
+                  styleClass="mt-2 w-full"
+                  [loading]="activatingPdv()"
+                  (onClick)="activatePdv()"
+                />
+              }
+              @if (devicesError()) {
+                <p class="mt-2 text-xs leading-relaxed text-amber-800">{{ devicesError() }}</p>
+              }
+            </div>
+
+            @if (!cardOrder()) {
               <p-button
-                [label]="'Reintentar $' + (cardChargeAmount() | number: '1.2-2') + ' en la terminal'"
-                icon="pi pi-refresh"
+                [label]="'Enviar $' + (cardChargeAmount() | number: '1.2-2') + ' a la terminal'"
+                icon="pi pi-send"
                 styleClass="w-full"
                 [disabled]="!selectedDeviceId() || cardChargeAmount() <= 0 || !!tenderError()"
-                (onClick)="retryCardPayment()"
+                (onClick)="startCardPayment()"
               />
+            } @else {
+              <div
+                class="flex items-start gap-3 rounded-lg px-3 py-3"
+                aria-live="polite"
+                [class.bg-emerald-100]="cardOrderApproved()"
+                [class.bg-red-100]="
+                  cardOrder()?.status === 'failed' ||
+                  cardOrder()?.status === 'canceled' ||
+                  cardOrder()?.status === 'expired'
+                "
+                [class.bg-white]="cardPolling()"
+              >
+                @if (cardPolling()) {
+                  <p-progressspinner styleClass="!h-5 !w-5 shrink-0" strokeWidth="6" />
+                } @else if (cardOrderApproved()) {
+                  <i class="pi pi-check-circle mt-0.5 text-lg text-emerald-600" aria-hidden="true"></i>
+                } @else {
+                  <i class="pi pi-times-circle mt-0.5 text-lg text-red-600" aria-hidden="true"></i>
+                }
+                <div class="text-sm font-medium text-slate-800">
+                  @switch (cardOrder()?.status) {
+                    @case ('created') { Esperando terminal… }
+                    @case ('at_terminal') { Inserte o pase la tarjeta en la terminal… }
+                    @case ('action_required') { Confirma la operación en la terminal… }
+                    @case ('processed') { Pago aprobado }
+                    @case ('canceled') { Pago cancelado en terminal }
+                    @case ('expired') { El cobro expiró sin completarse }
+                    @case ('failed') { Error en el cobro }
+                    @case ('refunded') { Pago reembolsado }
+                  }
+                  <!-- La orden vence a los 15 min; sin verlo, el cajero lee el
+                       vencimiento como que la terminal se colgó. -->
+                  @if (cardCountdown(); as countdown) {
+                    <span class="block text-xs font-normal text-slate-600">
+                      Vence en {{ countdown }}
+                    </span>
+                  }
+                  @if (cardOrderApproved()) {
+                    <span class="block text-xs font-normal text-slate-600">
+                      Tarjeta ${{ cardAmount() | number: '1.2-2' }}
+                      @if (paymentMethod() === 'mixed') {
+                        · Efectivo ${{ cashDue() | number: '1.2-2' }}
+                      }
+                    </span>
+                  }
+                </div>
+              </div>
+              @if (cardAmountLocked() && !cardOrderApproved()) {
+                <p-button
+                  label="Cancelar cobro en terminal"
+                  severity="secondary"
+                  styleClass="w-full"
+                  [loading]="cancelingCard()"
+                  (onClick)="cancelCardPayment()"
+                />
+              } @else if (!cardOrderApproved()) {
+                <p-button
+                  [label]="'Reintentar $' + (cardChargeAmount() | number: '1.2-2') + ' en la terminal'"
+                  icon="pi pi-refresh"
+                  styleClass="w-full"
+                  [disabled]="!selectedDeviceId() || cardChargeAmount() <= 0 || !!tenderError()"
+                  (onClick)="retryCardPayment()"
+                />
+              }
             }
-          }
-        </div>
+          </div>
+        } @else {
+          <!-- Terminal desactivada: el cobro con tarjeta se registra, no se envía a
+               ninguna TPV. Se dice explícitamente para que el cajero no espere un
+               voucher que nunca va a salir. -->
+          <div class="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+            <p class="flex items-center gap-2 text-sm font-medium text-slate-700">
+              <i class="pi pi-info-circle text-slate-500" aria-hidden="true"></i>
+              Cobro con tarjeta registrado
+            </p>
+            <p class="mt-1 text-xs leading-relaxed text-slate-600">
+              @if (paymentMethod() === 'card') {
+                Cobra ${{ total() | number: '1.2-2' }} con la tarjeta y confirma aquí.
+              } @else {
+                Cobra ${{ cardChargeAmount() | number: '1.2-2' }} con la tarjeta y captura
+                arriba el efectivo del resto.
+              }
+              La venta queda registrada con el reparto; el POS no está conectado a ninguna
+              terminal.
+            </p>
+          </div>
+        }
       }
     </div>
 
@@ -306,86 +341,121 @@
         </div>
       }
 
-      @if (needsPrescription() || hasPrescriptionData()) {
-        <div class="space-y-3 rounded-xl border border-slate-200 p-3">
-          <p class="text-sm font-semibold text-slate-800">
-            Receta médica
+      <!-- Receta plegable: obligatoria (y abierta) en los grupos que la exigen, pero
+           siempre alcanzable para registrarla como trazabilidad voluntaria. -->
+      <div class="rounded-xl border border-slate-200">
+        <button
+          type="button"
+          class="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left"
+          [attr.aria-expanded]="prescriptionPanelOpen()"
+          aria-controls="prescriptionPanel"
+          (click)="prescriptionPanelOpen.set(!prescriptionPanelOpen())"
+        >
+          <span class="text-sm font-semibold text-slate-800">
             @if (needsPrescription()) {
+              Receta médica
               <span class="text-red-600" aria-hidden="true">*</span>
+            } @else {
+              Registrar receta
+              <span class="ml-1 text-xs font-normal text-slate-600">(opcional)</span>
             }
-          </p>
+            @if (hasPrescriptionData()) {
+              <span class="ml-1 text-xs font-normal text-slate-600">· {{ doctorName() }}</span>
+            }
+          </span>
+          <i
+            class="pi text-xs text-slate-500"
+            [class.pi-chevron-down]="!prescriptionPanelOpen()"
+            [class.pi-chevron-up]="prescriptionPanelOpen()"
+            aria-hidden="true"
+          ></i>
+        </button>
 
-          <div>
-            <label for="doctorName" class="mb-1 block text-xs font-medium text-slate-600">
-              Médico
-            </label>
-            <input
-              #prescriptionInput
-              pInputText
-              id="doctorName"
-              class="w-full"
-              [ngModel]="doctorName()"
-              (ngModelChange)="doctorName.set($event ?? '')"
-              placeholder="Nombre del médico"
-              [attr.aria-required]="needsPrescription()"
-            />
-          </div>
-
-          <div class="grid grid-cols-2 gap-2">
+        @if (prescriptionPanelOpen()) {
+          <div id="prescriptionPanel" class="space-y-3 border-t border-slate-100 p-3">
             <div>
-              <label for="doctorLicense" class="mb-1 block text-xs font-medium text-slate-600">
-                Cédula profesional
+              <label for="doctorName" class="mb-1 block text-xs font-medium text-slate-600">
+                Médico
               </label>
+              <!-- `aria-invalid`/`aria-describedby` apuntan al motivo del pie: sin esto
+                   el lector de pantalla oye "no se puede cobrar" sin saber qué campo. -->
               <input
+                #prescriptionInput
                 pInputText
-                id="doctorLicense"
-                class="w-full tabular-nums"
-                inputmode="numeric"
-                maxlength="8"
-                [ngModel]="doctorLicense()"
-                (ngModelChange)="doctorLicense.set($event ?? '')"
-                placeholder="7 u 8 dígitos"
-                [attr.aria-required]="needsPrescription()"
-              />
-            </div>
-            <div>
-              <label for="prescriptionFolio" class="mb-1 block text-xs font-medium text-slate-600">
-                Folio de receta
-                @if (needsFolio()) {
-                  <span class="text-red-600" aria-hidden="true">*</span>
-                }
-              </label>
-              <input
-                pInputText
-                id="prescriptionFolio"
+                id="doctorName"
                 class="w-full"
-                [ngModel]="prescriptionFolio()"
-                (ngModelChange)="prescriptionFolio.set($event ?? '')"
-                [placeholder]="needsFolio() ? 'Obligatorio' : 'Opcional'"
-                [attr.aria-required]="needsFolio()"
+                [ngModel]="doctorName()"
+                (ngModelChange)="doctorName.set($event ?? '')"
+                placeholder="Nombre del médico"
+                [attr.aria-required]="needsPrescription()"
+                [attr.aria-invalid]="isBlocked('prescription') ? 'true' : null"
+                [attr.aria-describedby]="blockerDescribedBy('prescription')"
               />
             </div>
-          </div>
 
-          @if (needsRetention()) {
-            <label
-              class="flex items-start gap-2 rounded-lg px-3 py-2"
-              [class.bg-slate-50]="prescriptionRetained()"
-              [class.bg-amber-50]="!prescriptionRetained()"
-            >
-              <p-checkbox
-                [ngModel]="prescriptionRetained()"
-                (ngModelChange)="prescriptionRetained.set($event === true)"
-                [binary]="true"
-                inputId="prescriptionRetained"
-              />
-              <span class="text-xs font-medium leading-snug text-slate-700">
-                Confirmo que la receta se retuvo en la farmacia (grupos I a III).
-              </span>
-            </label>
-          }
-        </div>
-      }
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label for="doctorLicense" class="mb-1 block text-xs font-medium text-slate-600">
+                  Cédula profesional
+                </label>
+                <input
+                  pInputText
+                  id="doctorLicense"
+                  class="w-full tabular-nums"
+                  inputmode="numeric"
+                  maxlength="8"
+                  [ngModel]="doctorLicense()"
+                  (ngModelChange)="doctorLicense.set($event ?? '')"
+                  placeholder="7 u 8 dígitos"
+                  [attr.aria-required]="needsPrescription()"
+                  [attr.aria-invalid]="isBlocked('prescription') ? 'true' : null"
+                  [attr.aria-describedby]="blockerDescribedBy('prescription')"
+                />
+              </div>
+              <div>
+                <label
+                  for="prescriptionFolio"
+                  class="mb-1 block text-xs font-medium text-slate-600"
+                >
+                  Folio de receta
+                  @if (needsFolio()) {
+                    <span class="text-red-600" aria-hidden="true">*</span>
+                  }
+                </label>
+                <input
+                  pInputText
+                  id="prescriptionFolio"
+                  class="w-full"
+                  [ngModel]="prescriptionFolio()"
+                  (ngModelChange)="prescriptionFolio.set($event ?? '')"
+                  [placeholder]="needsFolio() ? 'Obligatorio' : 'Opcional'"
+                  [attr.aria-required]="needsFolio()"
+                  [attr.aria-invalid]="needsFolio() && isBlocked('prescription') ? 'true' : null"
+                  [attr.aria-describedby]="needsFolio() ? blockerDescribedBy('prescription') : null"
+                />
+              </div>
+            </div>
+
+            @if (needsRetention()) {
+              <label
+                class="flex items-start gap-2 rounded-lg px-3 py-2"
+                [class.bg-slate-50]="prescriptionRetained()"
+                [class.bg-amber-50]="!prescriptionRetained()"
+              >
+                <p-checkbox
+                  [ngModel]="prescriptionRetained()"
+                  (ngModelChange)="prescriptionRetained.set($event === true)"
+                  [binary]="true"
+                  inputId="prescriptionRetained"
+                />
+                <span class="text-xs font-medium leading-snug text-slate-700">
+                  Confirmo que la receta se retuvo en la farmacia (grupos I a III).
+                </span>
+              </label>
+            }
+          </div>
+        }
+      </div>
 
       <div class="rounded-xl border border-slate-200">
         <button
@@ -527,6 +597,8 @@
                   placeholder="RFC receptor"
                   maxlength="13"
                   aria-label="RFC receptor"
+                  [attr.aria-invalid]="isBlocked('billing') ? 'true' : null"
+                  [attr.aria-describedby]="blockerDescribedBy('billing')"
                 />
                 <input
                   pInputText
@@ -535,6 +607,8 @@
                   (ngModelChange)="billingName.set($event ?? '')"
                   placeholder="Razón social"
                   aria-label="Razón social"
+                  [attr.aria-invalid]="isBlocked('billing') ? 'true' : null"
+                  [attr.aria-describedby]="blockerDescribedBy('billing')"
                 />
                 <p-select
                   [options]="usoCfdiOptions"
@@ -590,11 +664,13 @@
   <ng-template #footer>
     <div class="flex w-full flex-col gap-2">
       @if (blockers().length > 0) {
+        <!-- `track blocker.id`: la llave es la causa, no el texto. Con el texto como
+             llave (NG0956) cada cambio de redacción recreaba la lista completa. -->
         <ul class="space-y-1 text-left text-xs font-medium text-amber-800" role="alert">
-          @for (blocker of blockers(); track blocker) {
-            <li class="flex items-start gap-1.5">
+          @for (blocker of blockers(); track blocker.id) {
+            <li class="flex items-start gap-1.5" [id]="'checkout-blocker-' + blocker.id">
               <i class="pi pi-info-circle mt-0.5 text-[11px]" aria-hidden="true"></i>
-              <span>{{ blocker }}</span>
+              <span>{{ blocker.texto }}</span>
             </li>
           }
         </ul>

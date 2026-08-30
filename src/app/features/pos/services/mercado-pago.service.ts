@@ -1,6 +1,6 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, map } from 'rxjs';
+import { Observable, catchError, map, of } from 'rxjs';
 
 import { unwrapEntity, unwrapList } from '../../../core/api/api.utils';
 import { environment } from '../../../../environments/environment';
@@ -40,6 +40,23 @@ export class MercadoPagoService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = environment.apiUrl;
 
+  /**
+   * Terminal de **esta** caja. Con varias terminales en la misma cuenta, tomar la
+   * primera de la lista puede mandar el cobro a otra sucursal; `terminalId` del
+   * entorno fija la que está en este mostrador. Si no está configurada o no
+   * aparece en la lista, se cae a la primera disponible.
+   */
+  preferredDevice(devices: PointDevice[]): PointDevice | null {
+    const preferred = environment.mercadoPago.terminalId?.trim();
+    if (preferred) {
+      const match = devices.find((device) => device.id === preferred);
+      if (match) {
+        return match;
+      }
+    }
+    return devices[0] ?? null;
+  }
+
   listDevices(): Observable<PointDevice[]> {
     const { storeId, posId } = environment.mercadoPago;
     const params: Record<string, string> = {};
@@ -51,7 +68,10 @@ export class MercadoPagoService {
     }
     return this.http
       .get<unknown>(`${this.apiUrl}/payments/mercadopago/devices`, { params })
-      .pipe(map((response) => unwrapList<PointDevice>(response)));
+      .pipe(map((response) => unwrapList<PointDevice>(response)), catchError((error) => {
+        console.error(error);
+        return of([]);
+      }));
   }
 
   setDeviceOperatingMode(deviceId: string, operatingMode: 'PDV' | 'STANDALONE'): Observable<PointDevice> {
@@ -63,13 +83,23 @@ export class MercadoPagoService {
       .pipe(map((response) => unwrapEntity<PointDevice>(response)));
   }
 
+  /**
+   * Manda el cobro a la terminal. La referencia externa se reusa como llave de
+   * idempotencia: ya es única por intento de cobro, y sin ella un reintento de
+   * red del mismo POST crea una **segunda** orden en la misma terminal.
+   */
   createOrder(deviceId: string, amount: number, externalReference: string): Observable<PointOrder> {
     return this.http
-      .post<unknown>(`${this.apiUrl}/payments/mercadopago/orders`, {
-        deviceId,
-        amount,
-        externalReference,
-      })
+      .post<unknown>(
+        `${this.apiUrl}/payments/mercadopago/orders`,
+        {
+          deviceId,
+          amount,
+          externalReference,
+          idempotencyKey: externalReference,
+        },
+        { headers: { 'Idempotency-Key': externalReference } },
+      )
       .pipe(map((response) => unwrapEntity<PointOrder>(response)));
   }
 

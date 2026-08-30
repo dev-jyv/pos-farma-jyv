@@ -74,9 +74,11 @@ export class TicketPrintService {
     };
 
     window.addEventListener('afterprint', cleanup);
-    queueMicrotask(() => {
+    // Un frame + breve pausa: el host ya está en el DOM y el diálogo de cobro
+    // (si venía de ahí) ya empezó a cerrarse.
+    window.setTimeout(() => {
       window.print();
       setTimeout(cleanup, 1500);
-    });
+    }, 100);
   }
 }

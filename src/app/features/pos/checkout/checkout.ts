@@ -2,6 +2,7 @@ import { DecimalPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
   computed,
   effect,
@@ -20,9 +21,20 @@ import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
 import { ProgressSpinnerModule } from 'primeng/progressspinner';
 import { SelectModule } from 'primeng/select';
-import { EMPTY, Subject, catchError, debounceTime, distinctUntilChanged, interval, switchMap, takeWhile } from 'rxjs';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import {
+  EMPTY,
+  Subject,
+  catchError,
+  debounceTime,
+  distinctUntilChanged,
+  finalize,
+  interval,
+  switchMap,
+  takeWhile,
+} from 'rxjs';
+import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 
+import { environment } from '../../../../environments/environment';
 import { getApiErrorMessage } from '../../../core/api/api.utils';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { CartLine, Customer, PaymentMethod, Sale } from '../../../shared/models';
@@ -34,6 +46,7 @@ import {
   validatePrescription,
 } from '../../../shared/utils/controlled';
 import { previewTaxSummary } from '../../../shared/utils/taxes';
+import { formatCountdown, pointOrderSecondsLeft } from '../../../shared/utils/point-order';
 import { CashDrawerService } from '../services/cash-drawer.service';
 import { CustomerService } from '../services/customer.service';
 import {
@@ -47,6 +60,19 @@ import { roundMoney } from '../../../shared/utils/money';
 import { resolveTender } from '../../../shared/utils/tender';
 
 const CASH_QUICK_AMOUNTS = [0, 10, 20, 50, 100, 200];
+
+/**
+ * Motivo por el que aún no se puede cobrar. El `id` es estable por causa (no por
+ * texto) para dos cosas: dar una llave de `@for` que no recree la lista cada vez que
+ * cambia la redacción del mensaje, y poder señalar con `aria-describedby` el campo
+ * concreto que hay que corregir.
+ */
+export type CheckoutBlockerId = 'prescription' | 'tender' | 'card' | 'cash' | 'billing';
+
+export interface CheckoutBlocker {
+  id: CheckoutBlockerId;
+  texto: string;
+}
 
 /**
  * Enfoca y selecciona el `input` real: `pInputText` es el input mismo, mientras que
@@ -88,6 +114,13 @@ export class Checkout {
   private readonly mercadoPago = inject(MercadoPagoService);
   private readonly notifications = inject(NotificationService);
   private readonly cashDrawer = inject(CashDrawerService);
+  /**
+   * `takeUntilDestroyed()` sin argumento exige contexto de inyección, y el sondeo
+   * de la terminal arranca dentro de un `subscribe` (ya fuera de él): sin este
+   * `DestroyRef` explícito, `pollOrder` reventaba con NG0203 y el cobro con
+   * tarjeta se quedaba sin seguimiento.
+   */
+  private readonly destroyRef = inject(DestroyRef);
   private readonly customerSearch$ = new Subject<string>();
 
   // `read: ElementRef` para tomar el host y buscar el `input` real de PrimeNG.
@@ -112,6 +145,13 @@ export class Checkout {
     { labelKey: 'payment.mixed', value: 'mixed', icon: 'pi pi-arrows-h' },
   ];
 
+  /**
+   * Con la terminal Point desactivada, tarjeta y mixto se **registran** igual que
+   * el efectivo: no se manda nada a la TPV y no hay order que esperar. El flujo de
+   * orders sigue completo debajo; se reactiva con `mercadoPago.terminalEnabled`.
+   */
+  readonly terminalEnabled = environment.mercadoPago.terminalEnabled;
+
   readonly paymentMethod = signal<PaymentMethod>('cash');
   readonly amountReceived = signal<number>(0);
   /** Monto que se cobra con tarjeta en pago mixto; el resto va en efectivo. */
@@ -132,6 +172,12 @@ export class Checkout {
   readonly devicesLoading = signal(false);
   readonly devicesError = signal<string | null>(null);
   readonly activatingPdv = signal(false);
+  /** Cancelación en vuelo; bloquea el botón para no mandar dos veces la baja. */
+  readonly cancelingCard = signal(false);
+  /** Momento en que la orden salió a la terminal, para la cuenta atrás. */
+  private readonly cardOrderStartedAt = signal<number | null>(null);
+  /** Reloj de la cuenta atrás; solo corre mientras hay una orden viva. */
+  private readonly tick = toSignal(interval(1000), { initialValue: 0 });
 
   readonly doctorName = signal('');
   readonly doctorLicense = signal('');
@@ -151,6 +197,15 @@ export class Checkout {
    * público general, y cada campo visible es un campo que el cajero recorre con Tab.
    */
   readonly customerPanelOpen = signal(false);
+
+  /**
+   * La receta siempre es alcanzable, incluso cuando el grupo no la exige: en grupos
+   * V/VI el cajero puede registrarla como trazabilidad voluntaria y `confirm()` la
+   * manda si hay médico + cédula. Antes el panel solo se pintaba si ya había datos,
+   * datos que solo podían teclearse dentro del propio panel. Arranca abierto cuando
+   * la venta sí la exige (ver `reset()`).
+   */
+  readonly prescriptionPanelOpen = signal(false);
 
   readonly requiresInvoice = signal(false);
   readonly billingRfc = signal('');
@@ -258,6 +313,18 @@ export class Checkout {
   );
   readonly cardOrderApproved = computed(() => this.cardOrder()?.status === 'processed');
   /**
+   * Cuenta atrás de la orden en la terminal (`m:ss`). Mercado Pago la vence a los
+   * 15 minutos; sin verlo, el cajero interpretaba el vencimiento como que la
+   * terminal se colgó y remandaba el cobro a ciegas.
+   */
+  readonly cardCountdown = computed(() => {
+    if (!this.cardOrder() || this.cardOrderApproved()) {
+      return null;
+    }
+    this.tick();
+    return formatCountdown(pointOrderSecondsLeft(this.cardOrderStartedAt(), Date.now()));
+  });
+  /**
    * El monto con tarjeta queda fijo mientras la order está viva (en curso o
    * aprobada). Si la terminal falló o expiró se libera para reintentar con otro
    * reparto sin tener que cerrar el diálogo.
@@ -291,30 +358,47 @@ export class Checkout {
    * Por qué no se puede cobrar todavía, en el orden en que el cajero lo resuelve.
    * Un botón deshabilitado sin motivo visible es la queja número uno en caja.
    */
-  readonly blockers = computed<string[]>(() => {
-    const reasons: string[] = [];
+  readonly blockers = computed<CheckoutBlocker[]>(() => {
+    const reasons: CheckoutBlocker[] = [];
     const prescription = this.prescriptionError();
     if (prescription) {
-      reasons.push(prescription);
+      reasons.push({ id: 'prescription', texto: prescription });
     }
     const tender = this.tenderError();
     if (tender) {
-      reasons.push(tender);
+      reasons.push({ id: 'tender', texto: tender });
     }
     if (
+      this.terminalEnabled &&
       (this.paymentMethod() === 'card' || this.paymentMethod() === 'mixed') &&
       !this.cardOrderApproved()
     ) {
-      reasons.push('Falta que la terminal apruebe el cobro con tarjeta.');
+      reasons.push({ id: 'card', texto: 'Falta que la terminal apruebe el cobro con tarjeta.' });
     }
     if (this.cashDue() > 0 && !this.cashSatisfied()) {
-      reasons.push(`Falta efectivo: $${this.shortfall().toFixed(2)}.`);
+      reasons.push({ id: 'cash', texto: `Falta efectivo: $${this.shortfall().toFixed(2)}.` });
     }
     if (this.requiresInvoice() && !this.billingOk()) {
-      reasons.push('Para facturar se requiere RFC (12–13 caracteres) y razón social.');
+      reasons.push({
+        id: 'billing',
+        texto: 'Para facturar se requiere RFC (12–13 caracteres) y razón social.',
+      });
     }
     return reasons;
   });
+
+  /** Causas activas, para marcar `aria-invalid` en el campo que hay que corregir. */
+  private readonly blockerIds = computed(() => new Set(this.blockers().map((item) => item.id)));
+
+  /** `true` si el motivo `id` está bloqueando el cobro ahora mismo. */
+  isBlocked(id: CheckoutBlockerId): boolean {
+    return this.blockerIds().has(id);
+  }
+
+  /** Id del elemento que describe el motivo, o `null` si ese motivo no está activo. */
+  blockerDescribedBy(id: CheckoutBlockerId): string | null {
+    return this.blockerIds().has(id) ? `checkout-blocker-${id}` : null;
+  }
 
   readonly canConfirm = computed(() => {
     if (this.submitting() || !this.prescriptionOk() || !this.billingOk() || this.tenderError()) {
@@ -324,11 +408,14 @@ export class Checkout {
       return this.cashSatisfied();
     }
     if (this.paymentMethod() === 'card') {
-      return this.cardOrderApproved();
+      // Sin terminal es un registro: el cajero afirma que la tarjeta se cobró,
+      // igual que afirma haber recibido el efectivo.
+      return this.terminalEnabled ? this.cardOrderApproved() : true;
     }
-    // Mixto: la tarjeta debe estar aprobada **y** el efectivo cubrir el resto. Con
-    // uno solo de los dos la venta quedaría cobrada a medias.
-    return this.cardOrderApproved() && this.cashSatisfied();
+    // Mixto: con terminal, la tarjeta debe estar aprobada **y** el efectivo cubrir
+    // el resto — con uno solo de los dos la venta quedaría cobrada a medias. Sin
+    // terminal basta con que el reparto sea válido y el efectivo alcance.
+    return (this.terminalEnabled ? this.cardOrderApproved() : true) && this.cashSatisfied();
   });
 
   constructor() {
@@ -374,7 +461,7 @@ export class Checkout {
     }
     const [firstBlocker] = this.blockers();
     if (firstBlocker) {
-      this.notifications.error(firstBlocker);
+      this.notifications.error(firstBlocker.texto);
     }
   }
 
@@ -408,9 +495,15 @@ export class Checkout {
       return;
     }
     if (this.cardOrder()) {
-      // Order viva sin aprobar: se cancela para no dejar un cobro huérfano.
-      this.cancelCardPayment();
+      // Order viva sin aprobar: el método solo cambia si la terminal confirma la
+      // cancelación. Cambiarlo antes dejaba el cobro anterior en pie.
+      this.cancelCardPayment(() => this.applyPaymentMethod(method));
+      return;
     }
+    this.applyPaymentMethod(method);
+  }
+
+  private applyPaymentMethod(method: PaymentMethod): void {
     this.paymentMethod.set(method);
     if (method === 'cash') {
       this.amountReceived.set(this.total());
@@ -507,12 +600,17 @@ export class Checkout {
   }
 
   loadDevices(): void {
+    // Con la terminal desactivada no hay a quién preguntar: evita el 404/aviso
+    // "no hay terminales vinculadas" en cada apertura del cobro.
+    if (!this.terminalEnabled) {
+      return;
+    }
     this.devicesLoading.set(true);
     this.devicesError.set(null);
     this.mercadoPago.listDevices().subscribe({
       next: (devices) => {
         this.devices.set(devices);
-        this.selectedDeviceId.set(devices[0]?.id ?? null);
+        this.selectedDeviceId.set(this.mercadoPago.preferredDevice(devices)?.id ?? null);
         this.devicesLoading.set(false);
         if (devices.length === 0) {
           this.devicesError.set(
@@ -570,27 +668,46 @@ export class Checkout {
     this.mercadoPago.createOrder(deviceId, amount, reference).subscribe({
       next: (order) => {
         this.cardOrder.set(order);
+        this.cardOrderStartedAt.set(Date.now());
         this.pollOrder(order.id);
       },
-      error: () => this.notifications.error('No se pudo enviar el cobro a la terminal.'),
+      error: (error: unknown) => this.notifications.error(getApiErrorMessage(error)),
     });
   }
 
   /** Reintenta tras un rechazo de la terminal sin cancelar (la order ya está muerta). */
   retryCardPayment(): void {
     this.cardOrder.set(null);
+    this.cardOrderStartedAt.set(null);
     this.cardPolling.set(false);
     this.startCardPayment();
   }
 
-  cancelCardPayment(): void {
+  /**
+   * Cancela el cobro en la terminal. El estado local **solo** se limpia cuando
+   * Mercado Pago confirma la cancelación: olvidarla de forma optimista dejaba una
+   * orden viva que el cajero ya no veía y que la terminal podía cobrar después,
+   * encima del cobro que la sustituyó.
+   */
+  cancelCardPayment(onCanceled?: () => void): void {
     const order = this.cardOrder();
     if (!order) {
+      onCanceled?.();
       return;
     }
-    this.mercadoPago.cancelOrder(order.id).subscribe();
-    this.cardOrder.set(null);
-    this.cardPolling.set(false);
+    this.cancelingCard.set(true);
+    this.mercadoPago
+      .cancelOrder(order.id)
+      .pipe(finalize(() => this.cancelingCard.set(false)))
+      .subscribe({
+        next: () => {
+          this.cardOrder.set(null);
+          this.cardOrderStartedAt.set(null);
+          this.cardPolling.set(false);
+          onCanceled?.();
+        },
+        error: (error: unknown) => this.notifications.error(getApiErrorMessage(error)),
+      });
   }
 
   private pollOrder(orderId: string): void {
@@ -599,7 +716,7 @@ export class Checkout {
       .pipe(
         switchMap(() => this.mercadoPago.getOrder(orderId).pipe(catchError(() => EMPTY))),
         takeWhile((order) => POINT_ORDER_PENDING_STATUSES.includes(order.status), true),
-        takeUntilDestroyed(),
+        takeUntilDestroyed(this.destroyRef),
       )
       .subscribe((order) => {
         this.cardOrder.set(order);
@@ -610,10 +727,28 @@ export class Checkout {
           // El monto real de la order es el que define la parte en efectivo.
           this.amountReceived.set(this.cashDue());
         }
+        if (order.status === 'processed') {
+          // Auto-confirma cuando ya no hay bloqueos (tarjeta pura, o mixto con
+          // efectivo suficiente y receta/factura OK). Si no, el cajero ve el voucher
+          // de la Point y se va sin Confirmar → sin ticket FarmaJyV.
+          queueMicrotask(() => this.tryAutoConfirmAfterCard());
+        }
         if (order.status === 'failed' || order.status === 'expired') {
           this.notifications.error('La terminal reportó un error en el cobro.');
         }
       });
+  }
+
+  /**
+   * Tras `processed` en la Point: registra la venta sola si `canConfirm()`. Así el
+   * ticket de farmacia (print al completar) no depende de un segundo clic que a
+   * menudo se omite porque la terminal ya imprimió su voucher.
+   */
+  private tryAutoConfirmAfterCard(): void {
+    if (!this.visible() || this.submitting() || !this.canConfirm()) {
+      return;
+    }
+    this.confirm();
   }
 
   confirm(): void {
@@ -651,6 +786,12 @@ export class Checkout {
             }
           : null,
         idempotencyKey: this.idempotencyKey,
+        // Sin terminal, el reparto del mixto solo lo sabe el POS: el backend ya no
+        // puede deducirlo del monto de la order.
+        cardAmount:
+          this.paymentMethod() === 'mixed' && !this.terminalEnabled
+            ? this.cardAmount()
+            : undefined,
       },
     );
     this.saleService
@@ -689,12 +830,15 @@ export class Checkout {
     this.cardAmountInput.set(0);
     this.submitting.set(false);
     this.cardOrder.set(null);
+    this.cardOrderStartedAt.set(null);
     this.cardPolling.set(false);
     this.devicesError.set(null);
     this.doctorName.set('');
     this.doctorLicense.set('');
     this.prescriptionFolio.set('');
     this.prescriptionRetained.set(false);
+    // Abierto solo si el ticket la exige: si no, es un panel opcional y plegado.
+    this.prescriptionPanelOpen.set(this.needsPrescription());
     this.customerQuery.set('');
     this.customerResults.set([]);
     this.selectedCustomer.set(null);

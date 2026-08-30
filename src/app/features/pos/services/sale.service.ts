@@ -43,6 +43,11 @@ export interface CreateSalePayload {
   paymentMethod: PaymentMethod;
   amountReceived: number | null;
   cardPaymentReference: string | null;
+  /**
+   * Reparto con tarjeta en pago mixto **sin** terminal Point. Con terminal, el
+   * backend toma el monto de la order y este campo se ignora.
+   */
+  cardAmount?: number | null;
   cashSessionId: string;
   customerId?: string | null;
   customerName?: string | null;
@@ -166,14 +171,34 @@ export class SaleService {
 
   private flushing = false;
 
-  readonly pendingCount = signal(this.readQueue().length);
+  /**
+   * Solo las que siguen esperando reenvío: una venta bloqueada ya se cuenta en
+   * `blockedSales` y contarla también aquí la pintaba dos veces en la barra
+   * ("1 pendiente" + "1 rechazada") para una única venta.
+   */
+  readonly pendingCount = signal(this.readPending().length);
+  /** Ventas en cola pendientes de enviar, para que el cajero pueda verlas y forzar el envío. */
+  readonly pendingSales = signal<Array<{ queueId: string; folioHint: string; total: number }>>(
+    this.readPending(),
+  );
   /** Ventas en cola que el servidor rechazó y no se reintentan solas. */
   readonly blockedSales = signal<Array<{ queueId: string; folioHint: string; reason: string }>>(
     this.readBlocked(),
   );
+  /**
+   * `listAll` alcanzó la cota de páginas y devolvió un resultado incompleto. Las
+   * pantallas lo consultan para avisar en vez de presentar totales truncados como
+   * si fueran el corte completo.
+   */
+  readonly lastListTruncated = signal(false);
 
   constructor() {
     window.addEventListener('online', () => this.flushQueue());
+    // El evento `online` solo dispara en la transición; si el POS arranca con red
+    // y cola pendiente (cierre de sesión, reinicio del equipo) nadie la enviaría.
+    if (navigator.onLine) {
+      this.flushQueue();
+    }
   }
 
   buildPayload(
@@ -189,6 +214,8 @@ export class SaleService {
       prescription?: SalePrescription | null;
       prescriptionRetained?: boolean;
       billing?: SaleBilling | null;
+      /** Parte con tarjeta capturada por el cajero (mixto sin terminal). */
+      cardAmount?: number | null;
       /**
        * Llave del cobro en curso. El checkout la genera una vez y la reusa en cada
        * reintento del mismo cobro; sin ella se genera una nueva (cobro nuevo).
@@ -207,6 +234,9 @@ export class SaleService {
       paymentMethod,
       amountReceived,
       cardPaymentReference,
+      ...(extras.cardAmount === undefined || extras.cardAmount === null
+        ? {}
+        : { cardAmount: extras.cardAmount }),
       cashSessionId,
       customerId: extras.customerId ?? null,
       customerName: extras.customerName ?? null,
@@ -248,13 +278,24 @@ export class SaleService {
 
   listAll(params: Omit<ListSalesParams, 'page' | 'limit'> = {}): Observable<Sale[]> {
     const pageSize = 100;
+    // Cota dura: un backend que ignore `page` (o un filtro mal armado) devolvería
+    // páginas llenas para siempre y el POS quedaría girando contra el servidor.
+    const maxPages = 50;
     const fetchPage = (page: number, acc: Sale[]): Observable<Sale[]> =>
       this.list({ ...params, page, limit: pageSize }).pipe(
         switchMap((sales) => {
           const all = [...acc, ...sales];
-          return sales.length < pageSize ? of(all) : fetchPage(page + 1, all);
+          if (sales.length < pageSize) {
+            return of(all);
+          }
+          if (page >= maxPages) {
+            this.lastListTruncated.set(true);
+            return of(all);
+          }
+          return fetchPage(page + 1, all);
         }),
       );
+    this.lastListTruncated.set(false);
     return fetchPage(1, []);
   }
 
@@ -365,7 +406,11 @@ export class SaleService {
       cardAmount: totals.cardAmount,
     });
     return {
-      id: `offline-${now.getTime()}`,
+      // El id lleva embebida la `queueId` (= `idempotencyKey`): es la vía más simple
+      // de que la pantalla, con solo el `Sale` en mano, sepa que la venta sigue en la
+      // cola y a qué entrada corresponde para descartarla. El modelo `Sale` es
+      // compartido con el backend y no admite un campo extra solo para el POS.
+      id: `offline-${queued.queueId}`,
       folio: `PENDIENTE-${now.getTime()}`,
       items: queued.offlineItems,
       subtotal: totals.subtotal,
@@ -442,6 +487,16 @@ export class SaleService {
     }
   }
 
+  private readPending(): Array<{ queueId: string; folioHint: string; total: number }> {
+    return this.readQueue()
+      .filter((item) => !item.blockedReason)
+      .map((item) => ({
+        queueId: item.queueId,
+        folioHint: `${item.offlineItems.length} art. · $${item.offlineTotals.total.toFixed(2)}`,
+        total: item.offlineTotals.total,
+      }));
+  }
+
   private readBlocked(): Array<{ queueId: string; folioHint: string; reason: string }> {
     return this.readQueue()
       .filter((item) => item.blockedReason)
@@ -454,7 +509,9 @@ export class SaleService {
 
   private writeQueue(queue: QueuedSalePayload[]): void {
     localStorage.setItem(PENDING_SALES_KEY, JSON.stringify(queue));
-    this.pendingCount.set(queue.length);
+    const pending = this.readPending();
+    this.pendingSales.set(pending);
+    this.pendingCount.set(pending.length);
     this.blockedSales.set(this.readBlocked());
   }
 }

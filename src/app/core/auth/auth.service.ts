@@ -9,7 +9,7 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth';
-import { Observable, catchError, finalize, map, of, shareReplay, switchMap } from 'rxjs';
+import { Observable, catchError, finalize, map, of, shareReplay, switchMap, tap } from 'rxjs';
 
 import { FIREBASE_AUTH } from '../firebase/firebase.providers';
 import { unwrapEntity } from '../api/api.utils';
@@ -25,6 +25,13 @@ import {
 } from '../../shared/models';
 import { environment } from '../../../environments/environment';
 
+/**
+ * Vida de la caché del perfil. Corto frente a un turno de caja: si un
+ * administrador cambia un rol a media jornada, la caja lo toma sola en minutos
+ * sin obligar a cerrar sesión.
+ */
+const PROFILE_TTL_MS = 5 * 60 * 1000;
+
 function authState(auth: Auth): Observable<User | null> {
   return new Observable((subscriber) => onAuthStateChanged(auth, (user) => subscriber.next(user)));
 }
@@ -37,6 +44,8 @@ export class AuthService {
   private readonly notifications = inject(NotificationService);
   private readonly apiUrl = environment.apiUrl;
   private profileRequest$: Observable<StaffProfile | null> | null = null;
+  /** Último perfil resuelto, con el `uid` al que pertenece y cuándo se resolvió. */
+  private profileCache: { uid: string; profile: StaffProfile; at: number } | null = null;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
   readonly user = toSignal(authState(this.auth), { initialValue: null as User | null });
@@ -60,7 +69,12 @@ export class AuthService {
   readonly isAuthenticated = computed(() => this.user() !== null);
   /** `assertCanVoidSale` en el backend exige exactamente el slug `admin`. */
   readonly isAdmin = computed(() => this.role() === 'admin');
-  readonly canSell = computed(() => this.can('sales', 'write'));
+  /**
+   * Operar la caja es `pos:write`, no `sales:write`: el backend separó vender de
+   * administrar lo vendido (anular, devolver, reembolsar) justamente para que
+   * habilitar el mostrador no reparta también el poder de cancelar.
+   */
+  readonly canSell = computed(() => this.can('pos', 'write'));
 
   /** Instante en que el backend deja de aceptar el token vigente. */
   readonly sessionExpiresAt = signal<Date | null>(null);
@@ -74,6 +88,10 @@ export class AuthService {
     effect(() => {
       const user = this.user();
       this.clearExpiryTimer();
+      // Cerrar sesión (o entrar con otro usuario) invalida el perfil cacheado.
+      if (this.profileCache && this.profileCache.uid !== (user?.uid ?? '')) {
+        this.refreshProfile();
+      }
       if (!user) {
         this.sessionExpiresAt.set(null);
         return;
@@ -129,11 +147,37 @@ export class AuthService {
     }
   }
 
+  /**
+   * Perfil del backend, cacheado por sesión.
+   *
+   * `shareReplay(1)` solo deduplica las peticiones **en vuelo**: el `finalize`
+   * limpia la referencia al completar, así que cada `permissionGuard` disparaba
+   * un `GET /auth/me` nuevo y navegar entre pantallas costaba un viaje de red por
+   * cambio de ruta. La caché lo reduce a uno por sesión (o por `PROFILE_TTL_MS`),
+   * que es lo que tarda en cambiar un rol.
+   *
+   * La caché se ata al `uid`: cambiar de usuario en el mismo equipo nunca puede
+   * servir el perfil del anterior. `refreshProfile()` la invalida a mano, y el
+   * backend sigue siendo la autoridad —un permiso revocado responde 403 aunque
+   * la caché diga otra cosa.
+   */
   fetchProfile(): Observable<StaffProfile | null> {
+    const uid = this.auth.currentUser?.uid ?? '';
+    const cached = this.profileCache;
+    if (cached && cached.uid === uid && Date.now() - cached.at < PROFILE_TTL_MS) {
+      return of(cached.profile);
+    }
+
     if (!this.profileRequest$) {
       this.profileRequest$ = this.http.get<unknown>(`${this.apiUrl}/auth/me`).pipe(
         map((response) => parseStaffProfile(unwrapEntity<unknown>(response))),
         catchError(() => of(null as StaffProfile | null)),
+        tap((profile) => {
+          // Un fallo no se cachea: la siguiente navegación debe volver a intentar.
+          if (profile) {
+            this.profileCache = { uid, profile, at: Date.now() };
+          }
+        }),
         shareReplay(1),
         finalize(() => {
           this.profileRequest$ = null;
@@ -141,6 +185,12 @@ export class AuthService {
       );
     }
     return this.profileRequest$;
+  }
+
+  /** Descarta el perfil cacheado; el siguiente acceso lo vuelve a pedir. */
+  refreshProfile(): void {
+    this.profileCache = null;
+    this.profileRequest$ = null;
   }
 
   /** Compatibilidad: los guards solo necesitan saber si hay rol utilizable. */

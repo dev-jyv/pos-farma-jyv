@@ -1,77 +1,133 @@
 <div class="flex h-full min-h-0 flex-col bg-white">
-  <div
-    class="flex shrink-0 flex-wrap items-end gap-3 border-b border-[var(--pos-border)] px-4 py-3 print:hidden"
-  >
-    <h1 class="text-lg font-bold text-slate-900">Libro de control</h1>
+  @if (canRead()) {
+    <div
+      class="flex shrink-0 flex-wrap items-end gap-3 border-b border-[var(--pos-border)] px-4 py-3 print:hidden"
+    >
+      <h1 class="text-lg font-bold text-slate-900">Libro de control</h1>
 
-    <div>
-      <label class="mb-1 block text-xs font-medium text-slate-500">Desde</label>
-      <input
-        type="date"
-        class="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-        [ngModel]="from()"
-        (ngModelChange)="from.set($event ?? '')"
-      />
-    </div>
-    <div>
-      <label class="mb-1 block text-xs font-medium text-slate-500">Hasta</label>
-      <input
-        type="date"
-        class="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
-        [ngModel]="to()"
-        (ngModelChange)="to.set($event ?? '')"
-      />
-    </div>
-    <div class="min-w-56">
-      <label for="ledgerGroup" class="mb-1 block text-xs font-medium text-slate-500">Grupo</label>
-      <p-select
-        inputId="ledgerGroup"
-        [options]="groupOptions"
-        [ngModel]="group()"
-        (ngModelChange)="group.set($event); reload()"
-        optionLabel="label"
-        optionValue="value"
-        styleClass="w-full"
-      />
-    </div>
+      <div>
+        <label for="ledgerFrom" class="mb-1 block text-xs font-medium text-slate-500">Desde</label>
+        <input
+          id="ledgerFrom"
+          name="ledgerFrom"
+          type="date"
+          class="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+          [max]="to()"
+          [ngModel]="from()"
+          (ngModelChange)="from.set($event ?? ''); reload()"
+        />
+      </div>
+      <div>
+        <label for="ledgerTo" class="mb-1 block text-xs font-medium text-slate-500">Hasta</label>
+        <input
+          id="ledgerTo"
+          name="ledgerTo"
+          type="date"
+          class="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+          [min]="from()"
+          [ngModel]="to()"
+          (ngModelChange)="to.set($event ?? ''); reload()"
+        />
+      </div>
+      <div class="min-w-56">
+        <span id="ledgerGroupLabel" class="mb-1 block text-xs font-medium text-slate-500">
+          Grupo
+        </span>
+        <!-- `p-select` monta un `span[role=combobox]`, y `label[for]` no asocia con
+             un span: el nombre accesible se da con `ariaLabelledBy`. -->
+        <p-select
+          inputId="ledgerGroup"
+          ariaLabelledBy="ledgerGroupLabel"
+          [options]="groupOptions"
+          [ngModel]="group()"
+          (ngModelChange)="group.set($event); reload()"
+          optionLabel="label"
+          optionValue="value"
+          styleClass="w-full"
+        />
+      </div>
 
-    <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1" role="group" aria-label="Rango">
-      @for (range of quickRanges; track range.days) {
-        <button
-          type="button"
-          class="rounded-md px-2.5 py-1.5 text-sm font-medium transition"
-          [class]="
-            activeRangeDays() === range.days
-              ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-500 hover:text-slate-800'
-          "
-          [attr.aria-pressed]="activeRangeDays() === range.days"
-          (click)="selectQuickRange(range.days)"
-        >
-          {{ range.label }}
-        </button>
+      <div
+        class="flex items-center gap-1 rounded-lg bg-slate-100 p-1"
+        role="group"
+        aria-label="Rango"
+      >
+        @for (range of quickRanges; track range.days) {
+          <button
+            type="button"
+            class="rounded-md px-2.5 py-1.5 text-sm font-medium transition"
+            [class]="
+              activeRangeDays() === range.days
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            "
+            [attr.aria-pressed]="activeRangeDays() === range.days"
+            (click)="selectQuickRange(range.days)"
+          >
+            {{ range.label }}
+          </button>
+        }
+      </div>
+
+      <div class="ml-auto flex items-center gap-2">
+        <p-button
+          icon="pi pi-refresh"
+          ariaLabel="Actualizar el libro"
+          pTooltip="Actualizar"
+          [text]="true"
+          [loading]="loading()"
+          (onClick)="reload()"
+        />
+        <p-button
+          icon="pi pi-download"
+          label="CSV del periodo"
+          [outlined]="true"
+          [loading]="exporting()"
+          [disabled]="!!rangeError()"
+          pTooltip="Descarga el periodo completo, sin truncar"
+          (onClick)="exportCsv()"
+        />
+        <p-button
+          icon="pi pi-print"
+          label="Imprimir"
+          [outlined]="true"
+          [disabled]="printBlocked()"
+          (onClick)="print()"
+        />
+      </div>
+
+      @if (rangeError(); as invalid) {
+        <p class="w-full text-sm font-medium text-amber-800" role="alert">{{ invalid }}</p>
+      }
+      @if (rangeDirty() && !rangeError()) {
+        <p class="w-full text-xs font-medium text-slate-600">
+          Los filtros cambiaron: la hoja sigue mostrando
+          {{ appliedFrom() }} a {{ appliedTo() }} hasta que actualices.
+        </p>
       }
     </div>
-
-    <div class="ml-auto flex items-center gap-2">
-      <p-button icon="pi pi-refresh" [text]="true" [loading]="loading()" (onClick)="reload()" />
-      <p-button icon="pi pi-print" label="Imprimir" [outlined]="true" (onClick)="print()" />
-    </div>
-  </div>
+  }
 
   <div class="min-h-0 flex-1 overflow-auto">
-    <div class="pos-print-root mx-auto flex max-w-6xl flex-col gap-4 px-4 py-4">
-      <header class="text-xs text-slate-500">
+    <div class="pos-print-root ledger-sheet mx-auto flex max-w-6xl flex-col gap-4 px-4 py-4">
+      <!-- Encabezado repetido en cada página impresa (ver controlled-ledger.css). -->
+      <header class="ledger-running-head text-xs text-slate-500">
         <p class="text-sm font-semibold text-slate-800">
           {{ pharmacy.name }}
           @if (pharmacy.rfc) {
             <span class="font-normal">· RFC {{ pharmacy.rfc }}</span>
           }
+          @if (pharmacy.address) {
+            <span class="font-normal">· {{ pharmacy.address }}</span>
+          }
         </p>
         <p>
           Libro de control de medicamentos controlados (art. 226 LGS) ·
-          {{ from() }} a {{ to() }} · impreso
-          {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
+          {{ appliedFrom() }} a {{ appliedTo() }}
+          @if (appliedGroup(); as onlyGroup) {
+            · solo {{ groupLabel(onlyGroup) }}
+          }
+          · impreso {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
         </p>
       </header>
 
@@ -80,11 +136,55 @@
           Tu rol no tiene permiso de lectura de inventario, que es lo que resguarda el libro de
           control. Pide acceso a un administrador.
         </p>
+      } @else if (loadError(); as failure) {
+        <!-- El error se imprime con la hoja: una hoja en blanco por un fallo de red
+             no puede confundirse con un periodo sin movimientos. -->
+        <div class="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm" role="alert">
+          <p class="font-semibold text-red-900">No se pudo cargar el libro de control.</p>
+          <p class="mt-1 text-red-800">{{ failure }}</p>
+          <p-button
+            label="Reintentar"
+            icon="pi pi-refresh"
+            size="small"
+            styleClass="mt-2 print:hidden"
+            (onClick)="reload()"
+          />
+        </div>
       } @else {
+        @if (truncated()) {
+          <div
+            class="rounded-xl border border-amber-400 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+            role="alert"
+          >
+            <p class="font-semibold">Esta hoja está incompleta.</p>
+            <p class="mt-1">
+              El periodo tiene {{ totalInPeriod() }} movimientos y aquí se muestran
+              {{ entries().length }}. Para el entregable de una visita, descarga el
+              <strong>CSV del periodo</strong>, que no se trunca.
+            </p>
+          </div>
+        }
+
+        @if (ungrouped().length > 0) {
+          <div
+            class="rounded-xl border border-amber-400 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+            role="alert"
+          >
+            {{ ungrouped().length }} movimiento(s) llegaron sin grupo COFEPRIS registrado y se
+            listan como «Sin grupo». No se suman al resumen por grupo: revisa el catálogo antes de
+            entregar esta hoja.
+          </div>
+        }
+
         <div class="flex flex-wrap items-start gap-6 text-sm">
           <div>
             <div class="text-xs font-medium text-slate-500">Movimientos</div>
-            <div class="text-xl font-bold tabular-nums text-slate-900">{{ entries().length }}</div>
+            <div class="text-xl font-bold tabular-nums text-slate-900">
+              {{ entries().length }}
+              @if (truncated()) {
+                <span class="text-sm font-medium text-amber-800">de {{ totalInPeriod() }}</span>
+              }
+            </div>
           </div>
           <div>
             <div class="text-xs font-medium text-slate-500">Piezas netas (salidas − reingresos)</div>
@@ -95,7 +195,9 @@
               <div class="mb-1 text-xs font-medium text-slate-500">Por grupo</div>
               <div class="flex flex-wrap gap-2">
                 @for (row of byGroup(); track row.group) {
-                  <span class="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                  <span
+                    class="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
+                  >
                     {{ row.label }}:
                     <span class="font-bold tabular-nums">{{ row.quantity }}</span>
                     pzas · {{ row.movements }} mov.
@@ -106,66 +208,77 @@
           }
         </div>
 
-        <p-table [value]="entries()" [loading]="loading()" styleClass="pos-product-table">
-          <ng-template #header>
-            <tr>
-              <th>Fecha</th>
-              <th>Folio</th>
-              <th>Movimiento</th>
-              <th>Producto</th>
-              <th>Grupo</th>
-              <th class="text-right">Cant.</th>
-              <th>Lotes</th>
-              <th>Receta</th>
-              <th>Paciente</th>
-            </tr>
-          </ng-template>
-          <ng-template #body let-entry>
-            <tr>
-              <td class="whitespace-nowrap">{{ entry.createdAt | date: 'dd/MM/yy HH:mm' }}</td>
-              <td class="whitespace-nowrap font-medium">
-                {{ entry.saleFolio }}
-                @if (entry.referenceFolio) {
-                  <span class="block text-xs text-slate-500">ref. {{ entry.referenceFolio }}</span>
-                }
-              </td>
-              <td>{{ typeLabel(entry.type) }}</td>
-              <td>{{ entry.productName }}</td>
-              <td class="whitespace-nowrap">{{ groupLabel(entry.controlledGroup) }}</td>
-              <td
-                class="text-right font-semibold tabular-nums"
-                [class.text-red-700]="entry.quantity < 0"
-              >
-                {{ entry.quantity }}
-              </td>
-              <td class="text-xs">{{ entry.lotNumbers.join(', ') || '—' }}</td>
-              <td class="text-xs">
-                @if (entry.prescription) {
-                  {{ entry.prescription.doctorName }}
-                  <span class="block text-slate-500">
-                    Céd. {{ entry.prescription.doctorLicense }}
-                    @if (entry.prescription.folio) {
-                      · Folio {{ entry.prescription.folio }}
-                    }
-                  </span>
-                  @if (entry.prescriptionRetained) {
-                    <span class="block font-medium text-slate-700">Retenida</span>
+        <div class="ledger-scroll">
+          <p-table
+            [value]="entries()"
+            [loading]="loading()"
+            styleClass="pos-product-table"
+            [attr.aria-label]="'Movimientos de medicamentos controlados'"
+          >
+            <ng-template #header>
+              <tr>
+                <th scope="col">Fecha</th>
+                <th scope="col">Folio</th>
+                <th scope="col">Movimiento</th>
+                <th scope="col">Producto</th>
+                <th scope="col">Grupo</th>
+                <th scope="col" class="text-right">Cant.</th>
+                <th scope="col">Lotes</th>
+                <th scope="col">Receta</th>
+                <th scope="col">Paciente</th>
+              </tr>
+            </ng-template>
+            <ng-template #body let-entry>
+              <tr>
+                <td class="whitespace-nowrap">{{ entry.createdAt | date: 'dd/MM/yy HH:mm' }}</td>
+                <td class="whitespace-nowrap font-medium">
+                  {{ entry.saleFolio }}
+                  @if (entry.referenceFolio) {
+                    <span class="block text-xs text-slate-500">ref. {{ entry.referenceFolio }}</span>
                   }
-                } @else {
-                  —
-                }
-              </td>
-              <td class="text-xs">{{ entry.customerName || 'Público general' }}</td>
-            </tr>
-          </ng-template>
-          <ng-template #emptymessage>
-            <tr>
-              <td colspan="9" class="py-6 text-center text-sm text-slate-500">
-                Sin movimientos de medicamentos controlados en el periodo.
-              </td>
-            </tr>
-          </ng-template>
-        </p-table>
+                </td>
+                <td>{{ typeLabel(entry.type) }}</td>
+                <td>{{ entry.productName }}</td>
+                <td class="whitespace-nowrap">
+                  <span [class.font-semibold]="entry.controlledGroup === null">
+                    {{ groupLabel(entry.controlledGroup) }}
+                  </span>
+                </td>
+                <td
+                  class="text-right font-semibold tabular-nums"
+                  [class.text-red-700]="entry.quantity < 0"
+                >
+                  {{ entry.quantity }}
+                </td>
+                <td class="text-xs">{{ entry.lotNumbers.join(', ') || '—' }}</td>
+                <td class="text-xs">
+                  @if (entry.prescription) {
+                    {{ entry.prescription.doctorName }}
+                    <span class="block text-slate-500">
+                      Céd. {{ entry.prescription.doctorLicense }}
+                      @if (entry.prescription.folio) {
+                        · Folio {{ entry.prescription.folio }}
+                      }
+                    </span>
+                    @if (entry.prescriptionRetained) {
+                      <span class="block font-medium text-slate-700">Retenida</span>
+                    }
+                  } @else {
+                    —
+                  }
+                </td>
+                <td class="text-xs">{{ entry.customerName || 'Público general' }}</td>
+              </tr>
+            </ng-template>
+            <ng-template #emptymessage>
+              <tr>
+                <td colspan="9" class="py-6 text-center text-sm text-slate-500">
+                  Sin movimientos de medicamentos controlados en el periodo.
+                </td>
+              </tr>
+            </ng-template>
+          </p-table>
+        </div>
 
         <!-- Pie de la hoja impresa: la visita sanitaria pide un responsable firmante. -->
         <footer class="mt-8 hidden text-xs text-slate-600 print:block">
@@ -178,8 +291,12 @@
             </div>
           </div>
           <p class="mt-3 text-center text-[10px] text-slate-500">
-            Impreso desde FarmaJyV Venta · {{ entries().length }} movimientos ·
-            {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
+            Impreso desde FarmaJyV Venta · {{ appliedFrom() }} a {{ appliedTo() }} ·
+            {{ entries().length }}
+            @if (truncated()) {
+              de {{ totalInPeriod() }}
+            }
+            movimientos · {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
           </p>
         </footer>
       }

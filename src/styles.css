@@ -1,18 +1,175 @@
 @import 'tailwindcss';
 @import 'primeicons/primeicons.css';
 
+/**
+ * Las pantallas ya estaban escritas con la paleta de Tailwind (`slate-*` para el
+ * texto, `emerald-*` para lo verde, `sky-*` para lo informativo). En vez de tocar
+ * ~350 clases repartidas por las plantillas —con el riesgo de romper una— se
+ * reasignan esas familias a la paleta de la marca: cada `text-slate-600` existente
+ * pasa a ser el neutro de FarmaJyV y cada `bg-emerald-50` el verde del logo, sin
+ * cambiar una sola plantilla.
+ *
+ * Consecuencia buscada: en este POS `emerald` significa "verde de marca", `sky` y
+ * `blue` significan "azul de marca" y `slate` significa "neutro". `amber` y `red`
+ * se dejan en su tono semántico, que no es identidad sino alarma.
+ */
+@theme {
+  --color-slate-50: #f1f5f7;
+  --color-slate-100: #e6ecef;
+  --color-slate-200: #d5dee3;
+  --color-slate-300: #b9c6cd;
+  --color-slate-400: #8a9ba5;
+  --color-slate-500: #64757f;
+  --color-slate-600: #4b5b64;
+  --color-slate-700: #37454c;
+  --color-slate-800: #243035;
+  --color-slate-900: #131c21;
+  --color-slate-950: #0a1013;
+
+  --color-emerald-50: #f2faec;
+  --color-emerald-100: #e0f4d3;
+  --color-emerald-200: #c2e8aa;
+  --color-emerald-300: #9bd87a;
+  --color-emerald-400: #74c64b;
+  --color-emerald-500: #4ca820;
+  --color-emerald-600: #3c8a19;
+  --color-emerald-700: #2e6c14;
+  --color-emerald-800: #245312;
+  --color-emerald-900: #1b3f0e;
+  --color-emerald-950: #122b09;
+
+  --color-sky-50: #eaf5fd;
+  --color-sky-100: #cde8fa;
+  --color-sky-200: #9ad1f4;
+  --color-sky-300: #5fb4ea;
+  --color-sky-400: #2494da;
+  --color-sky-500: #0078c8;
+  --color-sky-600: #0062a6;
+  --color-sky-700: #004e85;
+  --color-sky-800: #003c6c;
+  --color-sky-900: #002b4e;
+
+  /* `blue`, `teal` y `violet` aparecen sueltos en algunas pantallas; se alinean al
+     azul de marca para que no entre un cuarto tono por la puerta de atrás. */
+  --color-blue-50: #eaf5fd;
+  --color-blue-100: #cde8fa;
+  --color-blue-500: #0078c8;
+  --color-blue-600: #0062a6;
+  --color-blue-700: #004e85;
+  --color-blue-800: #003c6c;
+  --color-teal-50: #eaf5fd;
+  --color-teal-600: #0062a6;
+  --color-teal-700: #004e85;
+  --color-violet-100: #cde8fa;
+  --color-violet-700: #004e85;
+  --color-violet-800: #003c6c;
+
+  /* El rojo de error se unifica con `--pos-danger` (5.62:1 sobre blanco). */
+  --color-red-600: #c62828;
+  --color-red-700: #b02121;
+}
+
+/**
+ * Paleta FarmaJyV — derivada del logo (`public/brand/logo.png`).
+ *
+ * El logo es bicolor: las manos y la cruz verdes (#4CA820) sobre el azul del
+ * corazón y las siluetas (#0078C8 → #003C6C), con el wordmark en verde profundo.
+ * La marca se traduce así: **el verde manda** (acción, confirmación, identidad) y
+ * el **azul acompaña** (información, datos, estados neutros de sistema). Nada más
+ * compite con esos dos: los neutros son grises azulados para que el verde no se
+ * ensucie, y el ámbar/rojo quedan reservados a avisos y errores —en una caja, un
+ * color de alarma usado como decoración deja de alarmar.
+ *
+ * Todos los pares de texto/fondo de estas variables cumplen WCAG AA (≥4.5:1);
+ * los tonos 500 se usan para relleno y bordes, no para texto sobre blanco.
+ */
 :root {
-  --pos-bg: #eef2f6;
+  /* Verde marca (hojas, cruz, wordmark). 500 = color del logo. */
+  --brand-green-50: #f2faec;
+  --brand-green-100: #e0f4d3;
+  --brand-green-200: #c2e8aa;
+  --brand-green-300: #9bd87a;
+  --brand-green-400: #74c64b;
+  --brand-green-500: #4ca820;
+  --brand-green-600: #3c8a19;
+  --brand-green-700: #2e6c14;
+  --brand-green-800: #245312;
+  --brand-green-900: #1b3f0e;
+
+  /* Azul marca (corazón, siluetas, cruz del círculo). 500 = color del logo. */
+  --brand-blue-50: #eaf5fd;
+  --brand-blue-100: #cde8fa;
+  --brand-blue-200: #9ad1f4;
+  --brand-blue-300: #5fb4ea;
+  --brand-blue-400: #2494da;
+  --brand-blue-500: #0078c8;
+  --brand-blue-600: #0062a6;
+  --brand-blue-700: #004e85;
+  --brand-blue-800: #003c6c;
+  --brand-blue-900: #002b4e;
+
+  /* Neutros con matiz frío: acompañan al verde sin apagarlo. */
+  --neutral-25: #f7fafb;
+  --neutral-50: #f1f5f7;
+  --neutral-100: #e6ecef;
+  --neutral-200: #d5dee3;
+  --neutral-300: #b9c6cd;
+  --neutral-400: #8a9ba5;
+  --neutral-500: #64757f;
+  --neutral-600: #4b5b64;
+  --neutral-700: #37454c;
+  --neutral-800: #243035;
+  --neutral-900: #131c21;
+
+  /* ── Roles: es lo que usan las pantallas, nunca los tonos crudos ───────── */
+  --pos-bg: var(--neutral-50);
   --pos-surface: #ffffff;
-  --pos-ink: #0f172a;
-  --pos-muted: #64748b;
-  --pos-border: #d8dee8;
-  --pos-primary: #059669;
-  --pos-primary-dark: #047857;
-  --pos-accent: #0ea5e9;
-  --pos-danger: #dc2626;
-  --pos-warn: #d97706;
-  --pos-ticket: #0f766e;
+  --pos-surface-alt: var(--neutral-25);
+  --pos-ink: var(--neutral-900);
+  --pos-ink-soft: var(--neutral-700);
+  --pos-muted: var(--neutral-500);
+  --pos-border: var(--neutral-200);
+  --pos-border-strong: var(--neutral-300);
+
+  /**
+   * Acción principal. El 500 de marca con texto blanco da 3.03:1 y no llega al
+   * 4.5:1 de WCAG 1.4.3, así que el relleno usa el 700 (6.42:1) y el 500 queda
+   * para acentos, bordes y focos, donde basta 3:1.
+   */
+  --pos-primary: var(--brand-green-700);
+  --pos-primary-dark: var(--brand-green-800);
+  --pos-primary-strong: var(--brand-green-900);
+  --pos-primary-soft: var(--brand-green-50);
+  --pos-primary-soft-border: var(--brand-green-200);
+  --pos-primary-ink: var(--brand-green-800);
+  --pos-focus: var(--brand-green-600);
+
+  /* Acento azul: información, datos y todo lo que no es "confirmar". */
+  --pos-accent: var(--brand-blue-600);
+  --pos-accent-strong: var(--brand-blue-800);
+  --pos-accent-soft: var(--brand-blue-50);
+  --pos-accent-soft-border: var(--brand-blue-200);
+  --pos-accent-ink: var(--brand-blue-700);
+
+  /* Semánticos. Éxito comparte el verde de marca: en caja, "cobrado" es la marca. */
+  --pos-success: var(--brand-green-700);
+  --pos-success-soft: var(--brand-green-50);
+  --pos-info: var(--brand-blue-600);
+  --pos-info-soft: var(--brand-blue-50);
+  --pos-danger: #c62828;
+  --pos-danger-soft: #fdecec;
+  --pos-warn: #b45309;
+  --pos-warn-soft: #fef3c7;
+
+  --pos-ticket: var(--brand-blue-800);
+
+  /* Degradado de marca: verde → azul, el mismo recorrido que las manos del logo. */
+  --pos-brand-gradient: linear-gradient(
+    90deg,
+    var(--brand-green-500) 0%,
+    var(--brand-green-600) 35%,
+    var(--brand-blue-500) 100%
+  );
 }
 
 body {
@@ -26,13 +183,13 @@ body {
 select,
 input:not([type='checkbox']):not([type='radio']),
 textarea {
-  color: #0f172a;
-  background-color: #fff;
+  color: var(--pos-ink);
+  background-color: var(--pos-surface);
 }
 
 select option {
-  color: #0f172a;
-  background-color: #fff;
+  color: var(--pos-ink);
+  background-color: var(--pos-surface);
 }
 
 .p-inputtext,
@@ -40,17 +197,17 @@ select option {
 .p-datepicker-input,
 .p-autocomplete-input,
 .p-inputnumber-input {
-  color: #0f172a !important;
-  background-color: #ffffff !important;
+  color: var(--pos-ink) !important;
+  background-color: var(--pos-surface) !important;
 }
 
 .p-select,
 .p-inputnumber {
-  background-color: #ffffff;
+  background-color: var(--pos-surface);
 }
 
 .p-floatlabel label {
-  color: #64748b;
+  color: var(--pos-muted);
 }
 
 .pos-kbd {
@@ -60,9 +217,11 @@ select option {
   min-width: 1.5rem;
   padding: 0.1rem 0.35rem;
   border-radius: 0.25rem;
-  border: 1px solid #cbd5e1;
-  background: #f8fafc;
-  color: #475569;
+  border: 1px solid var(--neutral-300);
+  background: var(--neutral-50);
+  /* neutral-700 sobre neutral-50 = 9.6:1. A 0.65rem (≈10px) el texto de las teclas
+     queda por debajo del umbral de "texto grande", así que necesita el 4.5:1 completo. */
+  color: var(--neutral-700);
   font-size: 0.65rem;
   font-weight: 700;
   line-height: 1.2;
@@ -77,18 +236,22 @@ select option {
   padding: 0.5rem 0.85rem;
   font-size: 0.875rem;
   font-weight: 600;
-  color: #475569;
-  transition: background-color 0.15s, color 0.15s;
+  color: var(--pos-ink-soft);
+  /* Reserva el hueco del subrayado activo para que el ancho de la barra no salte. */
+  border-bottom: 2px solid transparent;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .pos-nav-btn:hover {
-  background: #f1f5f9;
-  color: #0f172a;
+  background: var(--neutral-100);
+  color: var(--pos-ink);
 }
 
 .pos-nav-btn.active {
-  background: #ecfdf5;
-  color: #047857;
+  background: var(--pos-primary-soft);
+  color: var(--pos-primary-ink);
+  /* El color solo no basta (WCAG 1.4.1): la pestaña activa también se subraya. */
+  border-bottom-color: var(--brand-green-500);
 }
 
 .pos-search-input.p-inputtext {
@@ -101,7 +264,7 @@ select option {
 
 .pos-search-input.p-inputtext:focus {
   border-color: var(--pos-primary) !important;
-  box-shadow: 0 0 0 3px rgb(5 150 105 / 0.15) !important;
+  box-shadow: 0 0 0 3px rgb(76 168 32 / 0.2) !important;
 }
 
 .pos-product-table .p-datatable-tbody > tr {
@@ -109,7 +272,7 @@ select option {
 }
 
 .pos-product-table .p-datatable-tbody > tr:hover {
-  background: #ecfdf5 !important;
+  background: var(--pos-primary-soft) !important;
 }
 
 .pos-product-table .p-datatable-tbody > tr > td {
@@ -121,6 +284,23 @@ select option {
   font-size: 1.05rem !important;
   font-weight: 700 !important;
   padding: 0.9rem 1.25rem !important;
+  /* El verde del logo (#4CA820) con texto blanco da 3.03:1 y no alcanza el 4.5:1
+     de WCAG 1.4.3; el 700 sube a 6.42:1 sin salirse de la marca, y el hover baja
+     al 800 (8.4:1). Es el botón que más se pulsa del POS: se queda en el verde. */
+  background: var(--pos-primary) !important;
+  border-color: var(--pos-primary) !important;
+  color: #ffffff !important;
+}
+
+.pos-cobrar-btn.p-button:not(:disabled):hover {
+  background: var(--pos-primary-dark) !important;
+  border-color: var(--pos-primary-dark) !important;
+}
+
+/* Cinta de marca: el mismo recorrido verde → azul de las manos del logo. */
+.pos-brand-bar {
+  height: 3px;
+  background: var(--pos-brand-gradient);
 }
 
 .ticket-preview app-sale-ticket {

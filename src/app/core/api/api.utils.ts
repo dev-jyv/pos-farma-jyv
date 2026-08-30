@@ -63,6 +63,50 @@ export function unwrapEntity<T>(response: unknown): T {
   return response as T;
 }
 
+/**
+ * Paginación tal como la devuelve el backend (`buildListMeta`). Ojo: el campo es
+ * `limit`, no `pageSize` como en `shared/models`.
+ */
+export interface ApiListMeta {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+function parseListMeta(value: unknown): ApiListMeta | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const dto = value as Record<string, unknown>;
+  const numbers = ['page', 'limit', 'total', 'totalPages'].map((key) =>
+    typeof dto[key] === 'number' ? (dto[key] as number) : null,
+  );
+  if (numbers.some((entry) => entry === null)) {
+    return null;
+  }
+  const [page, limit, total, totalPages] = numbers as number[];
+  return { page, limit, total, totalPages };
+}
+
+/**
+ * Igual que `unwrapList`, pero conservando el `meta` de paginación.
+ *
+ * `unwrapList` lo descarta, y sin él una pantalla no puede saber que el servidor
+ * tiene más renglones de los que le mandó: el libro de control se imprimía
+ * truncado sin ninguna señal de que faltaba algo.
+ */
+export function unwrapListWithMeta<T>(
+  response: unknown,
+  key?: string,
+): { items: T[]; meta: ApiListMeta | null } {
+  const items = unwrapList<T>(response, key);
+  if (response && typeof response === 'object') {
+    return { items, meta: parseListMeta((response as Record<string, unknown>)['meta']) };
+  }
+  return { items, meta: null };
+}
+
 export function unwrapList<T>(response: unknown, key?: string): T[] {
   if (Array.isArray(response)) {
     return response;

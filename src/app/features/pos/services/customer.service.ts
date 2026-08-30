@@ -1,6 +1,6 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, map } from 'rxjs';
+import { Observable, map, of } from 'rxjs';
 
 import { unwrapEntity, unwrapList } from '../../../core/api/api.utils';
 import { Customer } from '../../../shared/models';
@@ -11,11 +11,17 @@ export class CustomerService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = environment.apiUrl;
 
+  /**
+   * Busca clientes por término. Sin término no se consulta: `GET /customers` sin
+   * `search` hace que el backend lea la colección completa para devolver 20, y
+   * eso ocurría cada vez que el cajero limpiaba el campo del cobro.
+   */
   search(term: string): Observable<Customer[]> {
-    let params = new HttpParams().set('limit', '20');
-    if (term.trim()) {
-      params = params.set('search', term.trim());
+    const search = term.trim();
+    if (!search) {
+      return of([]);
     }
+    const params = new HttpParams().set('limit', '20').set('search', search);
     return this.http
       .get<unknown>(`${this.apiUrl}/customers`, { params })
       .pipe(map((response) => unwrapList<Customer>(response)));

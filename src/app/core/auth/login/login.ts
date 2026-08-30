@@ -6,6 +6,7 @@ import { firstValueFrom } from 'rxjs';
 
 import { AuthService } from '../auth.service';
 import { NotificationService } from '../../notifications/notification.service';
+import { environment } from '../../../../environments/environment';
 
 @Component({
   selector: 'app-login',
@@ -21,6 +22,7 @@ export class Login {
   private readonly translate = inject(TranslateService);
 
   readonly submitting = signal(false);
+  readonly appVersion = environment.version;
 
   readonly form = this.fb.nonNullable.group({
     email: ['', [Validators.required, Validators.email]],

@@ -2,7 +2,11 @@
   <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-[var(--pos-border)] px-4 py-3 print:hidden">
     <h1 class="text-lg font-bold text-slate-900">{{ 'reports.title' | translate }}</h1>
 
-    <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+    <div
+      class="flex items-center gap-1 rounded-lg bg-slate-100 p-1"
+      role="group"
+      [attr.aria-label]="'reports.scopeGroup' | translate"
+    >
       @for (option of scopeOptions; track option.value) {
         <button
           type="button"
@@ -10,8 +14,9 @@
           [class]="
             scope() === option.value
               ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-500 hover:text-slate-800'
+              : 'text-slate-600 hover:text-slate-900'
           "
+          [attr.aria-pressed]="scope() === option.value"
           [disabled]="option.value === 'session' && !cashSession()"
           (click)="onScopeChange(option.value)"
         >
@@ -20,8 +25,20 @@
       }
     </div>
 
+    <!-- Nunca un botón deshabilitado sin motivo: si no hay turno abierto, dilo. -->
+    @if (!cashSession() && !sessionError()) {
+      <span class="text-xs text-slate-600">{{ 'reports.noSession' | translate }}</span>
+    }
+
     <div class="ml-auto flex items-center gap-2">
-      <p-button icon="pi pi-refresh" [text]="true" (onClick)="reload()" [loading]="loading()" />
+      <p-button
+        icon="pi pi-refresh"
+        [text]="true"
+        [ariaLabel]="'reports.refresh' | translate"
+        [attr.title]="'reports.refresh' | translate"
+        (onClick)="reload()"
+        [loading]="loading()"
+      />
       <p-button
         icon="pi pi-print"
         [label]="'reports.print' | translate"
@@ -32,37 +49,91 @@
   </div>
 
   <div class="min-h-0 flex-1 overflow-auto">
-    <div class="pos-print-root mx-auto flex max-w-5xl flex-col gap-6 px-4 py-4">
-      <div class="text-xs text-slate-500">
+    <div
+      class="pos-print-root mx-auto flex max-w-5xl flex-col gap-6 px-4 py-4"
+      [attr.aria-busy]="loading()"
+    >
+      <!-- Encabezado imprimible: en papel la barra superior no sale, así que la hoja
+           tiene que identificarse sola (farmacia, reporte, cajero y turno). -->
+      <header class="flex flex-col gap-0.5 border-b border-[var(--pos-border)] pb-3">
+        <div class="text-sm font-bold text-slate-900">{{ pharmacyName }}</div>
+        <div class="text-base font-bold text-slate-900">{{ 'reports.title' | translate }}</div>
+        @if (cashierEmail()) {
+          <div class="text-xs text-slate-600">
+            {{ 'reports.cashier' | translate }}: {{ cashierEmail() }}
+          </div>
+        }
+        @if (scope() === 'session') {
+          @if (cashSession(); as session) {
+            <div class="text-xs text-slate-600">
+              {{ 'reports.session' | translate }}: {{ session.id }} ·
+              {{ 'reports.openedAt' | translate }} {{ session.openedAt | date: 'dd/MM/yyyy HH:mm' }}
+            </div>
+          }
+        }
+      </header>
+
+      <div class="text-xs text-slate-600">
         {{ 'reports.scopeLabel' | translate }}:
         <span class="font-semibold text-slate-700">
           {{ (scope() === 'session' ? 'reports.scope.session' : 'reports.scope.day') | translate }}
         </span>
-        · {{ 'reports.generatedAt' | translate }} {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
+        <!-- generatedAt solo tras una carga exitosa: con hora fresca sobre datos a
+             medias la hoja miente. -->
+        @if (loaded() && !loading()) {
+          · {{ 'reports.generatedAt' | translate }} {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
+        }
       </div>
 
+      <!-- Anuncio para lector de pantalla mientras dura la petición. -->
+      <div role="status" class="sr-only">
+        @if (loading()) {
+          {{ 'reports.loading' | translate }}
+        }
+      </div>
+
+      @if (loading()) {
+        <div class="flex flex-col gap-6">
+          <div class="text-sm text-slate-600">{{ 'reports.loading' | translate }}</div>
+          <div class="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-hidden="true">
+            @for (placeholder of skeletonCards; track placeholder) {
+              <div class="h-20 animate-pulse rounded-xl bg-slate-100"></div>
+            }
+          </div>
+          <div class="h-40 animate-pulse rounded-xl bg-slate-100" aria-hidden="true"></div>
+        </div>
+      } @else if (sessionError()) {
+        <!-- "No se pudo determinar el turno" ≠ "sin ventas": el estado vacío nunca
+             debe pintarse cuando en realidad hubo un fallo. -->
+        <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-6 text-center">
+          <div class="text-sm font-semibold text-red-700">
+            {{ 'reports.sessionError' | translate }}
+          </div>
+          <div class="mt-1 text-xs text-red-600">{{ 'reports.sessionErrorHint' | translate }}</div>
+        </div>
+      } @else {
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div class="rounded-xl border border-[var(--pos-border)] px-4 py-3">
-          <div class="text-xs font-medium text-slate-500">{{ 'reports.netTotal' | translate }}</div>
+          <div class="text-xs font-medium text-slate-600">{{ 'reports.netTotal' | translate }}</div>
           <div class="text-2xl font-bold tabular-nums text-slate-900">
             ${{ netTotal() | number: '1.2-2' }}
           </div>
         </div>
         <div class="rounded-xl border border-[var(--pos-border)] px-4 py-3">
-          <div class="text-xs font-medium text-slate-500">{{ 'reports.salesCount' | translate }}</div>
+          <div class="text-xs font-medium text-slate-600">{{ 'reports.salesCount' | translate }}</div>
           <div class="text-2xl font-bold tabular-nums text-slate-900">{{ validSales().length }}</div>
           @if (voidedCount() > 0) {
             <div class="text-xs text-red-600">{{ voidedCount() }} {{ 'reports.voided' | translate }}</div>
           }
         </div>
         <div class="rounded-xl border border-[var(--pos-border)] px-4 py-3">
-          <div class="text-xs font-medium text-slate-500">{{ 'reports.ticketAverage' | translate }}</div>
+          <div class="text-xs font-medium text-slate-600">{{ 'reports.ticketAverage' | translate }}</div>
           <div class="text-2xl font-bold tabular-nums text-slate-900">
             ${{ ticketAverage() | number: '1.2-2' }}
           </div>
         </div>
         <div class="rounded-xl border border-[var(--pos-border)] px-4 py-3">
-          <div class="text-xs font-medium text-slate-500">{{ 'reports.discounts' | translate }}</div>
+          <div class="text-xs font-medium text-slate-600">{{ 'reports.discounts' | translate }}</div>
           <div class="text-2xl font-bold tabular-nums text-slate-900">
             ${{ discountTotal() | number: '1.2-2' }}
           </div>
@@ -73,19 +144,23 @@
         <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
           {{ 'reports.byMethod' | translate }}
         </h2>
-        <p class="mb-2 text-xs text-slate-500">
+        <p class="mb-2 text-xs text-slate-600">
           Efectivo cobrado (entra al cajón):
           <span class="font-semibold tabular-nums text-slate-700">
             ${{ cashCollected() | number: '1.2-2' }}
           </span>
           · en pago mixto solo cuenta la parte pagada en efectivo.
         </p>
-        <p-table [value]="byMethod()" styleClass="pos-product-table">
+        <p-table
+          [value]="byMethod()"
+          styleClass="pos-product-table"
+          [attr.aria-label]="'reports.byMethod' | translate"
+        >
           <ng-template #header>
             <tr>
-              <th>{{ 'reports.method' | translate }}</th>
-              <th class="text-right">{{ 'reports.count' | translate }}</th>
-              <th class="text-right">{{ 'reports.total' | translate }}</th>
+              <th scope="col">{{ 'reports.method' | translate }}</th>
+              <th scope="col" class="text-right">{{ 'reports.count' | translate }}</th>
+              <th scope="col" class="text-right">{{ 'reports.total' | translate }}</th>
             </tr>
           </ng-template>
           <ng-template #body let-row>
@@ -99,7 +174,7 @@
           </ng-template>
           <ng-template #emptymessage>
             <tr>
-              <td colspan="3" class="!py-8 text-center text-sm text-slate-500">
+              <td colspan="3" class="!py-8 text-center text-sm text-slate-600">
                 {{ 'reports.empty' | translate }}
               </td>
             </tr>
@@ -112,23 +187,24 @@
           {{ 'reports.byHour' | translate }}
         </h2>
         @if (byHour().length === 0) {
-          <div class="rounded-lg border border-dashed border-slate-200 py-6 text-center text-sm text-slate-500">
+          <div class="rounded-lg border border-dashed border-slate-200 py-6 text-center text-sm text-slate-600">
             {{ 'reports.empty' | translate }}
           </div>
         } @else {
           <div class="flex flex-col gap-1.5">
             @for (row of byHour(); track row.hour) {
               <div class="flex items-center gap-2 text-sm">
-                <span class="w-14 shrink-0 font-mono text-xs text-slate-500">
+                <span class="w-14 shrink-0 font-mono text-xs text-slate-600">
                   {{ row.hour }}:00
                 </span>
-                <div class="h-5 flex-1 overflow-hidden rounded bg-slate-100">
+                <!-- Barra decorativa: importe y conteo ya van en texto al lado. -->
+                <div class="h-5 flex-1 overflow-hidden rounded bg-slate-100" aria-hidden="true">
                   <div class="h-full rounded bg-emerald-500" [style.width.%]="row.pct"></div>
                 </div>
                 <span class="w-24 shrink-0 text-right font-semibold tabular-nums">
                   ${{ row.total | number: '1.2-2' }}
                 </span>
-                <span class="w-12 shrink-0 text-right text-xs text-slate-500">
+                <span class="w-12 shrink-0 text-right text-xs text-slate-600">
                   {{ row.count }}
                 </span>
               </div>
@@ -142,12 +218,16 @@
           <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
             {{ 'reports.topByQuantity' | translate }}
           </h2>
-          <p-table [value]="topByQuantity()" styleClass="pos-product-table">
+          <p-table
+            [value]="topByQuantity()"
+            styleClass="pos-product-table"
+            [attr.aria-label]="'reports.topByQuantity' | translate"
+          >
             <ng-template #header>
               <tr>
-                <th>{{ 'reports.product' | translate }}</th>
-                <th class="text-right">{{ 'reports.quantity' | translate }}</th>
-                <th class="text-right">{{ 'reports.total' | translate }}</th>
+                <th scope="col">{{ 'reports.product' | translate }}</th>
+                <th scope="col" class="text-right">{{ 'reports.quantity' | translate }}</th>
+                <th scope="col" class="text-right">{{ 'reports.total' | translate }}</th>
               </tr>
             </ng-template>
             <ng-template #body let-row>
@@ -159,7 +239,7 @@
             </ng-template>
             <ng-template #emptymessage>
               <tr>
-                <td colspan="3" class="!py-8 text-center text-sm text-slate-500">
+                <td colspan="3" class="!py-8 text-center text-sm text-slate-600">
                   {{ 'reports.empty' | translate }}
                 </td>
               </tr>
@@ -171,12 +251,16 @@
           <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
             {{ 'reports.topByAmount' | translate }}
           </h2>
-          <p-table [value]="topByAmount()" styleClass="pos-product-table">
+          <p-table
+            [value]="topByAmount()"
+            styleClass="pos-product-table"
+            [attr.aria-label]="'reports.topByAmount' | translate"
+          >
             <ng-template #header>
               <tr>
-                <th>{{ 'reports.product' | translate }}</th>
-                <th class="text-right">{{ 'reports.total' | translate }}</th>
-                <th class="text-right">{{ 'reports.quantity' | translate }}</th>
+                <th scope="col">{{ 'reports.product' | translate }}</th>
+                <th scope="col" class="text-right">{{ 'reports.total' | translate }}</th>
+                <th scope="col" class="text-right">{{ 'reports.quantity' | translate }}</th>
               </tr>
             </ng-template>
             <ng-template #body let-row>
@@ -190,7 +274,7 @@
             </ng-template>
             <ng-template #emptymessage>
               <tr>
-                <td colspan="3" class="!py-8 text-center text-sm text-slate-500">
+                <td colspan="3" class="!py-8 text-center text-sm text-slate-600">
                   {{ 'reports.empty' | translate }}
                 </td>
               </tr>
@@ -198,6 +282,7 @@
           </p-table>
         </section>
       </div>
+      }
     </div>
   </div>
 </div>
