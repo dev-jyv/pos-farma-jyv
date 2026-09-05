@@ -16,6 +16,113 @@ Operar la caja de FarmaJyV de punta a punta: escanear/buscar, ticket, cobro (efe
 
 Todo lo que sigue **no** está en el POS. Lo marcado `B*` ya existe en la API (`backend-farma-jyv`): es deuda de integración, no diseño nuevo.
 
+### Módulo de edición de catálogo (`/pos/productos`, 2026-09-03)
+
+Nuevo módulo: alta y edición de producto **sin** lote/factura (a diferencia de "Entrada de
+stock", que solo toca el producto como parte de recibir mercancía). Local-first, igual patrón
+que venta/entrada de stock — busca y escribe directo en SQLite, sin red en el instante de la
+acción; sube a Firestore en el siguiente sync. Visible para **cajero y admin** (permiso
+`products:write`, antes el cajero solo tenía `read`).
+
+- Búsqueda 100% local reusando `ProductService` (mismo IPC que usa la venta).
+- Dos flags de push separados a propósito (`pendingPush` vs. `pendingCatalogPush`) para que
+  este módulo y "Entrada de stock" nunca compitan por subir el mismo producto dos veces.
+- `flushQueue()` reutiliza `POST /products`/`PATCH /products/:id` (ya existían para el panel de
+  administración) — sin endpoints nuevos en el backend. Para las altas nuevas, hace un `GET
+  /products?search=<sku>` antes de crear como defensa contra duplicados: `POST /products` no
+  tiene llave de idempotencia propia, así que un reintento tras una respuesta perdida por red
+  crearía un producto repetido sin esa comprobación.
+- Campo "Unidad" con `<input>` + `<datalist>` nativo, no `p-select` editable — evita el mismo
+  bug de cursor que se encontró y corrigió en `stock-entry.html` el mismo día.
+- Detalle completo en `docs/arquitectura/pos.md` §10.
+
+**Desplegado y verificado (2026-09-03)**: backend con `products:write` para `cashier` ya en
+producción (`npm run deploy` + `npm run migrate:roles` — "Roles con permisos actualizados:
+cashier", 3 usuarios migrados). Probado en vivo contra Electron real + backend real, 3 rondas:
+
+1. Primera ronda: bloqueado por permisos (esperado, antes del deploy).
+2. Segunda ronda (ya con permisos): encontró **2 bugs reales**, ambos corregidos el mismo día:
+   - **"Guardar" quedaba deshabilitado para siempre al dar de alta un producto** — los
+     `p-select`/`p-inputnumber` de `product-form.html` no tenían `name`, y dentro de un
+     `<form>` eso dispara `NG01352` en cada ciclo de detección de cambios, cortándolo antes de
+     refrescar los bloqueadores. Fix: `name="..."` en los 5 controles que faltaban.
+   - **El sync de cualquier edición de catálogo fallaba con 400** (`iepsRate: Expected number,
+     received null`) — `electron/db/products.js` mandaba explícitamente `null` en campos
+     opcionales (`iepsRate`, `controlledGroup`, y potencialmente `barcode`/`activeIngredient`/
+     `concentration`) que el backend espera *ausentes*, no `null` (Zod `.optional()`, no
+     `.nullable()`). Afectaba a cualquier producto sin IEPS ni grupo COFEPRIS — la mayoría del
+     catálogo. Fix: serializador dedicado `toPushFields()` que omite por completo los campos
+     opcionales vacíos en vez de mandarlos como `null`; también omite `isActive` en altas nuevas
+     (el backend no lo acepta en `createProductSchema`).
+3. Tercera ronda (con los 2 fixes): **todo Passed** — alta nueva, edición sin IEPS/COFEPRIS,
+   sync manual (`POST /v1/products` → 201, `PATCH /v1/products/:id` → 200) y persistencia
+   post-sync, verificados de punta a punta contra la app y el backend reales.
+
+### Pruebas exhaustivas de compras/stock/ventas/facturas (2026-09-03, segunda pasada)
+
+Con la app real corriendo (Electron vía CDP para Venta/Entrada de stock; navegador para Facturas/Proveedores/Categorías, que son online), se probaron a fondo casos borde más allá del camino feliz. **2 bugs reales encontrados y corregidos**, el resto son gaps de producto/UX documentados (no bugs de código):
+
+**Corregidos:**
+
+- **Búsqueda se quedaba sin resultados al repetir un término** (Venta y Entrada de stock): borrar la búsqueda a menos de 2 caracteres y volver a teclear EXACTAMENTE el mismo término de antes (ej. "para" → "p" → "para") no volvía a buscar — `distinctUntilChanged()` en el pipe de RxJS lo descartaba como "sin cambio" porque nunca se le avisó que el término había pasado por un valle. En Entrada de stock además dejaba el spinner "Buscando…" colgado para siempre. Fix: se quitó `distinctUntilChanged()` de ambos pipes (`sale.ts`, `stock-entry.ts`) — el catálogo es local (SQLite vía IPC), repetir la consulta no cuesta nada.
+- **El campo de descuento por línea no revertía visualmente** cuando el valor final aplicado coincidía con el que ya tenía (ej. escribir `-5` se clampa a `0`, pero si ya estaba en `0` el `<input>` se quedaba mostrando `-5` en pantalla aunque el cobro fuera correcto) — comportamiento normal de Angular cuando el valor del binding no cambia entre renders. Fix: el input pasó de `[ngModel]`/`(ngModelChange)` a `[value]`/`(change)` con reescritura explícita de `input.value` en cada rama de `updateLineDiscount()`.
+
+Verificado: `tsc --noEmit` limpio, 423/423 tests, sin tocar `package.json`/procesos de prueba tras cerrar.
+
+**Gaps documentados, no corregidos** (requieren decisión de producto o cambio de backend, no un fix aislado del POS):
+
+- Factura marcada "Sin factura" (`hasInvoice:false`) igual exige subir un archivo — el backend (`backend-farma-jyv/functions/src/schemas/inventory.ts`) declara `fileUrl` obligatorio sin importar `hasInvoice`. Inconsistente con el propósito de la opción "sin factura".
+- Sin validación de rango en la fecha de factura — acepta fechas futuras o de hace años sin aviso.
+- Categorías: nombre duplicado permitido (sin unicidad en el backend) y se puede desactivar una categoría en uso por productos sin ninguna advertencia.
+- Dato preexistente encontrado (no causado por esta sesión): proveedor con teléfono de 11 dígitos, de antes de que se afinara el validador a exactamente 10.
+- No se pudo ejercitar: producto con `controlledGroup` (no hay ninguno en el catálogo de prueba), producto `isActive:false` (no hay forma de desactivar uno desde Venta/Entrada de stock), anular venta y cerrar turno (usuario de prueba es cajero, no admin), pago mixto interactivo (comportamiento inconsistente del `p-inputnumber` bajo automatización, sin confirmar si es bug real o artefacto de la prueba — requiere verificación manual).
+
+### Auditoría post-pivot local-first + módulos admin (2026-09-03)
+
+El POS ya opera **local-first**: cobrar y dar de alta stock escriben directo a un SQLite
+propio (Prisma, proceso principal de Electron) vía IPC, sin ninguna llamada HTTP en el
+instante de la acción. La sincronización con el backend corre sola a las 10:30/14:00/20:00,
+al iniciar sesión, o a mano desde el botón del header. Se agregaron además 3 módulos
+administrativos nuevos que sí son online (Categorías, Proveedores, Facturas, replicando
+`farma-jyv-admin`). La matriz E2E (`qa/e2e/2026-08-30/`) cerró en **54/54 casos Passed**,
+incluida cobertura nueva de Venta/Historial/Entrada de stock/Sync contra la app Electron real
+(vía Playwright conectado por CDP). Documentación de arquitectura actualizada:
+`docs/arquitectura/{pos,core,shared-y-electron}.md`.
+
+Auditoría de código de esta fecha (2 agentes, código real, no hipotético) encontró 7 errores y
+7 mejoras — **todo corregido el mismo día**, verificado con `tsc --noEmit` limpio, `ng build
+--configuration electron` limpio, 423/423 tests en verde, y una prueba directa contra SQLite
+que reproduce el bug P0 y confirma el fix (alta de stock sobre un producto con `remoteId`:
+antes reventaba "Record to update not found", ahora incrementa el stock correctamente). El
+detalle completo con archivo:línea vive en `docs/arquitectura/pos.md` §10 y
+`docs/arquitectura/shared-y-electron.md` §7.
+
+**Errores corregidos (por prioridad):**
+
+| # | Hallazgo | Severidad | Fix |
+|---|---|---|---|
+| 1 | Dar de alta/reabastecer stock revenía para cualquier producto ya sincronizado (`stock-entry.ts` mandaba el `remoteId` como id local) | **P0** | `electron/db/products.js:recordStockEntry` resuelve el id local por `id` **o** `remoteId` antes de escribir |
+| 2 | Anular una venta justo mientras se sincroniza podía dejarla "anulada" en local pero activa en el backend | Alta | Nuevo campo `Sale.needsRemoteVoid` (migración `20260903000000_...`): `markSynced` detecta la carrera y marca la venta para un `POST /sales/:id/void` remoto explícito; `SaleService.reconcileRemoteVoids()` lo dispara tras cada `flushQueue()` |
+| 3 | Ventas/altas rechazadas por el servidor (4xx) se reintentaban solas en cada horario fijo | Alta | `getPendingPush`/`getPendingStockEntries` ahora excluyen `pushError` no nulo |
+| 4 | Escanear el código de barras de un producto dado de baja lo seguía vendiendo | Alta | `getByBarcode` filtra `isActive: true`, igual que `search` |
+| 5 | Fecha de nueva factura se precargaba con el día siguiente entre ~18:00 y medianoche hora de México | Alta | `invoice-form.ts` arma la fecha con componentes locales en vez de `toISOString()` |
+| 6 | Guardar una factura sin esperar la respuesta y abrir otra podía expulsar al cajero de la segunda a medio llenar | Alta | `takeUntilDestroyed(destroyRef)` en `invoice-form.ts`/`category-form.ts`/`supplier-form.ts` |
+| 7 | El botón "Venta" del header quedaba resaltado como activo en toda la sección POS | Media | `routerLinkActiveOptions` con `exact` solo para el item `/pos` |
+
+**Mejoras aplicadas:**
+
+- `abrirCajon` (`electron/main.js`) pasó de síncrono a async con timeout de 5 s — una impresora/cajón sin respuesta ya no congela el proceso principal.
+- `SyncScheduler.pullProducts()` ahora comparte una sola promesa en vuelo entre llamadores concurrentes (sync manual + horario fijo ya no duplican el fetch).
+- `catalog:upsertMany` envuelve cada producto+lotes en su propia transacción Prisma.
+- Formularios de Categorías/Proveedores/Facturas con `Validators.maxLength` + atributo `maxlength` alineados al backend (120/300/500/60 según campo).
+- `ApiHealthService.checkNow()` usa `switchMap` sobre un `Subject` para cancelar una llamada anterior en vuelo.
+- `sale-history.ts`: se conectó el botón de reimpresión (`history.print`) al método `print()` que ya existía sin usar, en el diálogo de detalle.
+- `flushQueue()` de `SaleService` ahora tiene `catchError` sobre el `getPendingPush()` por IPC.
+
+Pendiente real, no trivial de resolver en una pasada: sigue sin haber pruebas automatizadas
+sobre `electron/db/*.js`/`SyncSchedulerService` — es justo la capa donde apareció el bug P0;
+un test de integración sobre `recordStockEntry` lo habría atrapado antes de producción.
+
 ### P0 — bloquea operación real
 
 | # | Pendiente | Notas |
@@ -75,6 +182,90 @@ Repaso completo contra la documentación vigente de la Orders API de Point y de 
 | MP11 | TTL de Firestore sobre `mercadoPagoWebhookEvents.expiresAt` | Igual que DC3: sin la política, la bitácora de notificaciones crece sin límite |
 
 Además siguen abiertos DC4/DC5 (probar webhook y ambos canales contra la cuenta real), DC6 (reembolso de un cobro directo aprobado) y el emparejado físico de la TPV (#4).
+
+### El push dejaba ventas y productos atrás (2026-09-04)
+
+Reporte real: se cobraron dos ventas y se creó un producto, y al sincronizar solo subió una venta. Diagnóstico contra el SQLite de la caja — no sobre hipótesis:
+
+```
+V-000014                 sincronizada
+PENDIENTE-1788556679780  pushError: "Stock insuficiente para Prodducto de preuba"
+PENDIENTE-1788467939952  pushError: "Stock insuficiente para CORIVER"   (anulada)
+PENDIENTE-1788467823137  pendiente, anulada                              (excluida por diseño)
+PENDIENTE-1788467152355  pendiente, anulada                              (excluida por diseño)
+```
+
+Tres causas distintas, las tres corregidas:
+
+1. **El push salía en paralelo.** `runNow()` disparaba catálogo, entradas de stock y ventas a la vez. Una venta de un producto recién dado de alta —o que consumió mercancía recién recibida— perdía la carrera y el backend la rechazaba. Ahora se encadena: **catálogo → entradas → ventas** (`flushQueueAsync()` en los dos primeros).
+2. **El id del producto se congelaba al cobrar.** `buildPayload` grababa `remoteId ?? id`, así que un producto nuevo dejaba en el payload el uuid local, que el backend no conoce (404 "Producto") — y seguía ahí aunque el catálogo subiera después. La traducción pasó al **momento de empujar** (`resolvePayloadProductIds`, en el proceso main, que es donde están los datos). Si algún producto todavía no tiene `remoteId`, esa venta **espera** al siguiente sync en vez de romperse. Verificado contra un SQLite real: id local → remoto, id remoto intacto, venta con producto sin subir excluida.
+3. **Un rechazo por inventario mataba la venta.** Quedaba con `pushError` y no se reintentaba nunca, aunque el dinero ya se había cobrado. Ahora se distingue: lo que el cajero puede corregir (turno cerrado, llave reciclada) sigue marcándose como bloqueado; lo que **no** se arregla reintentando (stock que no alcanza allá, producto inexistente) se registra en **`unreconciledSales`**, colección nueva de Firestore — con el payload íntegro, el motivo, el importe, el cajero y la hora real del cobro, más su renglón de auditoría (`sale.unreconciled`). El dinero y el movimiento quedan guardados sin descuadrar el inventario, y el historial de la caja la muestra como **"No conciliada"** con su motivo.
+
+**Las anuladas que nunca sincronizaron ya suben.** Antes se excluían a propósito ("para el servidor esa venta nunca existió"); ahora se crean y se anulan en dos pasos, con su `voidedAt`/`voidedBy` reales, para que quede el rastro completo: la venta, la anulación, el contra-asiento del libro de control y la auditoría.
+
+**Backend nuevo:** `POST /v1/sales/unreconciled` (permiso `pos`), `GET /v1/sales/unreconciled` y `POST /v1/sales/unreconciled/:id/resolve` (permiso `sales`). El documento usa el `localId` como id, así que reintentar el mismo push no duplica nada.
+
+**Migración de datos** (`20260904130000_retry_inventory_rejections`): las ventas ya bloqueadas por inventario vuelven a la cola, para que el siguiente sync las registre en `unreconciledSales` en vez de dejarlas muertas en la caja.
+
+9 pruebas nuevas (rechazo por inventario, rechazo corregible, fallo del propio registro aparte, anuladas que suben con su autor, y el schema en el backend). 437 en el POS, 5 en el backend, todo en verde.
+
+**Pendiente:** desplegar el backend — hasta entonces `POST /sales/unreconciled` responde 404 y esas ventas seguirán marcándose como bloqueadas (el código cae a ese camino si el registro aparte falla).
+
+### Efectivo de farmacia (`/pos/efectivo`, 2026-09-04)
+
+Sacar o meter efectivo sin venta solo se podía desde un botón escondido en la pantalla de venta, protegido por un `@if (isAdmin())` de la plantilla —sin guard de ruta— y **solo con turno abierto**: el dueño no podía retirar efectivo con la caja cerrada. Tampoco había saldo ni historial a la vista.
+
+**Pantalla propia**, tras `permissionGuard('cashSessions', 'write')`. Se reusó esa área en vez de crear una nueva: ya es exclusiva de `admin` (`manager` la tiene excluida a propósito), así que no hubo que tocar roles ni volver a correr `migrate:roles`. El diálogo de la venta se eliminó — un solo camino, con guard real.
+
+**`cashSessionId` deja de ser obligatorio** en toda la cadena: tipo del backend, `CashMovement` de Prisma (migración `20260906000000_cash_movements_standalone`, que reconstruye la tabla porque SQLite no afloja un `NOT NULL` con `ALTER`) y el modelo del POS. El comportamiento es **híbrido**, y es la decisión de fondo: con turno abierto el movimiento se le cuelga y **baja su efectivo esperado** —si no, el cajero contaría un dinero que ya no está y cerraría con un faltante sin explicación—; sin turno queda con `cashSessionId: null` y fuera de todo corte, porque `buildSummary` filtra por sesión y los sueltos se excluyen solos.
+
+**Sync.** `pushOne` elige destino según el origen: la ruta de siempre para los del turno, `POST /cash-sessions/movements` (nuevo, `cashSessions:write`) para los de la farmacia, que además no esperan a que ningún turno sincronice. De paso se corrigió que `markSynced` se llamaba sin el `remoteId` que devuelve el backend, así que todos los movimientos quedaban con `remoteId: null` y un reintento los habría duplicado allá.
+
+**Auditoría.** El endpoint nuevo escribe `cashMovement.created` en `auditLogs` — `addMovement` no auditaba nada. Los gastos siguen exigiendo turno: su desglose por categoría solo tiene sentido dentro de un corte.
+
+18 pruebas nuevas (pantalla, ruta de push sin turno, saldo, el gasto que sigue exigiendo turno, el permiso que el cajero no tiene, y el schema en el backend). 587 en el POS, 87 en la capa local y 6 en el backend, todo en verde. Migración probada contra una copia de la base real: `NOT NULL` fuera, llaves íntegras, movimientos conservados.
+
+### Bitácora de movimientos de venta (2026-09-04)
+
+La anulación se guardaba como **estado** (`voidedAt`/`voidedBy` en la venta) pero no como **historia**: el historial mostraba la etiqueta "Anulada" sin decir quién ni cuándo, y en local no había ningún registro por movimiento. Ahora cada movimiento queda asentado en las dos bases.
+
+**Base local (SQLite).** Tabla nueva `SaleMovement` (migración `20260904000000_sale_movements`): un renglón por movimiento —`sale` al cobrar, `void` al anular— con `userId`, `userLabel` (el correo del cajero en ese momento; el uid no le dice nada a nadie), `reason` y `occurredAt`. Se escribe dentro de la misma transacción que la venta o la anulación, así que no puede haber una sin la otra. Se lee por IPC (`sales.listMovements`).
+
+**Historial.** El detalle de la venta muestra la bitácora bajo el ticket ("Cobrada por … 18:00", "Anulada por … 18:20") y la fila del listado dice quién anuló junto a la etiqueta roja. Si la venta es anterior a la bitácora y solo tiene el uid, cae al mismo criterio del ticket antes que mostrar un identificador de Firestore.
+
+**Firestore.** El movimiento remoto ya existía y no se tocó: `voidSale` escribe `stockMovements` negativos, contra-asienta el libro de control y deja el renglón en `auditLogs` (`sale.voided`, con usuario y rol). Lo que se corrigió es **la anulación hecha sin red**: antes se cerraba en el sync y quedaba sellada con la hora del sync y a nombre de quien sincronizó —que puede ser otro turno y otra persona—. Ahora el POS reporta `voidedAt` y `voidedBy` reales y el backend los usa para la venta, los movimientos de stock y el libro, **siempre que sean coherentes** (no futuros, no anteriores a la venta): un reloj desfasado en el equipo no debe escribir una línea de tiempo imposible. La identidad de la auditoría sigue siendo la del token —quien hizo la llamada—, y el dato reportado queda como metadata (`offlineVoid`, `reportedVoidedBy`, `reportedVoidedAt`), que es la única forma honesta de guardar ambas cosas.
+
+11 pruebas nuevas (bitácora local, autor legible, anulación offline que viaja con su hora y su autor, y el schema del cuerpo de anulación en el backend). 433 en el POS y 4 en el backend, todo en verde.
+
+### Anulación de venta y sincronización (2026-08-29)
+
+Revisión de qué pasa al anular en la base local y en Firestore. **Nada se borra en ninguna de las dos**, que es lo correcto: la anulación es un contra-asiento, no un `DELETE`.
+
+- **Local** (`voidLocal`): sella `voidedAt` + `voidedBy` y repone el stock descontado. La venta sigue en la tabla y en el historial marcada como anulada.
+- **Firestore** (`voidSale` del backend): sella `voidedAt`, repone las cantidades de cada lote, escribe un `stockMovement` negativo por partida, **contra-asienta el libro de control** con cantidad negativa y deja el renglón de auditoría `sale.voided`. El único borrado duro del POS es `discard`, y solo aplica a una venta que el servidor rechazó y **nunca** llegó a existir allá.
+
+**Hueco corregido:** anular una venta **ya sincronizada estando sin red** fallaba entera. El código pedía primero `POST /sales/:id/void` y solo después anulaba en local, así que sin internet el cajero recibía un error y la venta quedaba **activa en las dos bases**, con el dinero ya devuelto al cliente. Ahora, si el fallo es de red (status 0), se anula en local y la venta queda marcada con `needsRemoteVoid`; `reconcileRemoteVoids` la cierra en el servidor en el siguiente sync — la misma maquinaria que ya resolvía la carrera de `markSynced`. Cualquier otro error (400 "ya está anulada", 400 "tiene devoluciones", 403 de rol) **sigue propagándose sin tocar la base local**: son negativas del servidor, y anular igual dejaría las dos bases discrepando.
+
+Añadido para eso: `sales.markNeedsRemoteVoid` (SQLite → IPC → `preload` → tipos) y cuatro pruebas nuevas (anulación sin red, rechazo del servidor, cierre en el sync siguiente).
+
+**Queda una divergencia por decidir**, no un fallo: una venta creada y anulada **antes** de sincronizar nunca llega a Firestore (`getPendingPush` la excluye a propósito: no hay nada que anular allá). El movimiento queda solo en la base local; el backend no ve ni la venta ni su anulación, y si llevaba controlados, el libro de control tampoco. La alternativa sería empujarla y anularla en dos pasos para dejar el rastro completo. Decisión de cumplimiento, no técnica.
+
+### Limpieza y optimización del POS (2026-08-29)
+
+Repaso completo buscando código muerto, duplicado y peso innecesario.
+
+- **Un solo servicio de categorías.** Había dos (`CategoryService` de solo lectura y `CategoryAdminService` con CRUD) y eso escondía un fallo real: crear o editar una categoría en `/pos/categorias` no invalidaba la caché del otro, así que la entrada de stock no la veía hasta recargar la app. Ahora es uno: `list()` pagina para la pantalla de administración, `options()` cachea para los selectores, y toda escritura tira la caché. Cubierto con pruebas.
+- **`PageMeta` eliminado**: duplicaba `ApiListMeta` de `core/api/api.utils.ts` y lo importaban tres servicios *desde otro servicio*. También se borró `ListMeta` de `shared/models`, que no usaba nadie.
+- **`toHttpParams()`** en `core/api/api.utils.ts`: sustituye el bloque de `if (query.x) params = params.set(...)` repetido en cinco servicios. Los `false` y `0` sí viajan (`activeOnly=false` es un filtro legítimo).
+- **Los listados nuevos usan `unwrapListWithMeta`** en vez de leer `response.data` a pelo, como el resto del POS; si el backend cambia la forma del sobre, no se rompen en silencio.
+- **`ProductService.invalidate()` era un no-op** conservado "para no tocar llamadores": se borró junto con sus dos llamadas. Con el catálogo local en SQLite no hay caché que invalidar.
+- **QR con carga diferida**: `qrcode` es CommonJS y arrastraba ~90 kB con bailout de optimización dentro de la pantalla de cobro directo. Ahora se importa solo cuando hay un link que dibujar — el chunk de cobro directo pasó de **179 kB a 41 kB**. Los avisos de CommonJS quedan declarados en `allowedCommonJsDependencies`.
+- **i18n honesto**: 45 claves muertas (de pantallas que después usaron texto en español directo) fuera, y **82 claves que faltaban en `en.json`** (categorías, proveedores, facturas, sync, nav) traducidas. Ambos idiomas tienen ahora las mismas 266 claves.
+- **Presupuesto de bundle realista**: el inicial son 1.12 MB en crudo / **258 kB transferidos**, y el aviso estaba fijado en 700 kB, así que saltaba en cada build y tapaba regresiones de verdad. Sube a 1.2 MB de aviso y 1.6 MB de error. En una app de escritorio que carga desde disco, el crudo pesa menos que el transferido.
+
+Verificado: sin dependencias sin usar en `package.json`, sin imports muertos (`tsc --noUnusedLocals` limpio en app y specs), build **sin un solo warning**, 44 archivos y 423 pruebas en verde.
+
+Queda anotado, sin tocar: `getAppVersion` y `getDeviceInfo` están expuestos en el `preload` y no los llama nadie. Se conservan porque `getDeviceInfo` (MAC + hostname) es la pieza que necesita multi-caja (#21); si esa función se descarta, hay que quitarlos.
 
 ### Entrada de stock desde la caja (`/pos/entrada-stock`, 2026-08-28)
 
@@ -285,6 +476,9 @@ Lo que **no** falló: la aritmética del cobro cuadra al centavo (incluido el mi
 | B16 | **Libro de control** (`GET /inventory/controlled-ledger`, `Sale.controlledGroups`) | Pantalla `/pos/libro-control` (solo lectura, imprimible): filtros por rango y grupo; renglones con folio, movimiento (venta/anulación/devolución), producto, grupo, cantidad con signo, lotes, receta (médico, cédula, folio, retenida) y paciente, más piezas netas. Nav gateado por `inventory:read`, el mismo permiso del endpoint |
 | B17 | **Desglose de impuestos** (`SaleItem.taxes`, `Sale.taxSummary`) | `shared/utils/taxes.ts` replica el desglose de precios con impuestos incluidos (IEPS sobre base, IVA sobre base + IEPS, residuo a la base) y el prorrateo del descuento de venta. El checkout muestra base / IEPS / IVA / total antes de cobrar, el ticket imprime el desglose y la venta encolada offline lleva su propio `taxSummary` |
 | B18 | **Cédula profesional validada** (7 u 8 dígitos) | Mismo patrón validado en el formulario antes de enviar (`isValidDoctorLicense`) |
+| B19 | **Turno de caja local-first + ajuste asíncrono** (`CashSession`, `CashMovement`) | Abrir/cerrar turno y ver el efectivo esperado en vivo son 100% SQLite (sin red); el push (`POST /cash-sessions`, `/close`) es create-then-close con defensa anti-duplicado (`GET /cash-sessions/current`). El cierre siempre procede: si hay diferencia queda `adjustmentStatus: 'pending'`, revisable después por un admin (nunca bloquea al cajero). A las 24:00 el turno se auto-cierra sin diferencia (`autoClosedByExpiry`), enganchado a `AuthService.endExpiredSession()`. El logout pregunta si se cierra el turno antes de salir |
+| B20 | **Módulo de gastos por turno** (`CashMovement.type: 'expense'`) | Pantalla `/pos/gastos`: monto + categoría (Sueldo, Comida, Renta, Imprevistos, Luz, Insumos, Proveedor, Otros) + descripción obligatoria en Insumos/Proveedor/Otros. Resta del efectivo esperado del turno, igual que un retiro |
+| B21 | **Auditoría admin de cortes y gastos** (`/pos/cortes`, `/pos/gastos-auditoria`, y espejo en `farma-jyv-admin`) | Exclusiva de `admin` (`PermissionArea` `cashSessions`/`expenses` en el POS; segmentos `cortes-caja`/`gastos` en admin-web). Lista todas las cajas (no solo la de este equipo) y aprueba/rechaza el ajuste pendiente — la aprobación vive solo en el backend, el POS solo hace pull del estado |
 
 Cobertura de las reglas replicadas: `tender.spec.ts`, `controlled.spec.ts`, `taxes.spec.ts`, `session-expiry.spec.ts`.
 

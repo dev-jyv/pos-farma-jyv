@@ -1,48 +1,59 @@
-import { provideHttpClient } from '@angular/common/http';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { environment } from '../../../../environments/environment';
 import { BatchService } from './batch.service';
 
 describe('BatchService', () => {
   let service: BatchService;
-  let http: HttpTestingController;
+  let getBatchesByProduct: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    TestBed.configureTestingModule({
-      providers: [provideHttpClient(), provideHttpClientTesting()],
-    });
+    getBatchesByProduct = vi.fn().mockResolvedValue([]);
+    window.electronAPI = {
+      getAppVersion: vi.fn(),
+      getDeviceInfo: vi.fn(),
+      openCashDrawer: vi.fn(),
+      catalog: {
+        search: vi.fn(),
+        getByBarcode: vi.fn(),
+        getBatchesByProduct,
+        recordStockEntry: vi.fn(),
+        upsertMany: vi.fn(),
+        getPendingStockEntries: vi.fn(),
+        markStockEntrySynced: vi.fn(),
+        markStockEntryPushFailed: vi.fn(),
+      },
+      sales: {
+        createLocal: vi.fn(),
+        list: vi.fn(),
+        getPendingPush: vi.fn(),
+        markSynced: vi.fn(),
+        markPushFailed: vi.fn(),
+        voidLocal: vi.fn(),
+        clearPushError: vi.fn(),
+        discard: vi.fn(),
+      },
+      sync: { getStatus: vi.fn(), recordRun: vi.fn() },
+    } as unknown as Window['electronAPI'];
+
+    TestBed.configureTestingModule({});
     service = TestBed.inject(BatchService);
-    http = TestBed.inject(HttpTestingController);
   });
 
-  afterEach(() => http.verify());
+  it('consulta los lotes locales del producto por su id', async () => {
+    const batches = [
+      { id: 'b1', productId: 'p1', lotNumber: 'L1', expiryDate: new Date('2027-01-31'), quantity: 4 },
+    ];
+    getBatchesByProduct.mockResolvedValue(batches);
 
-  it('consulta los lotes del producto', () => {
-    service.listByProduct('p1').subscribe();
+    const result = await new Promise((resolve) => service.listByProduct('p1').subscribe(resolve));
 
-    const request = http.expectOne(
-      (req) => req.url === `${environment.apiUrl}/inventory/batches` && req.params.get('productId') === 'p1',
-    );
-    expect(request.request.method).toBe('GET');
-    request.flush({ data: [] });
+    expect(getBatchesByProduct).toHaveBeenCalledWith('p1');
+    expect(result).toEqual(batches);
   });
 
-  it('normaliza la caducidad a Date sin importar la forma que mande el backend', () => {
-    let batches: Array<{ expiryDate: Date; lotNumber: string }> = [];
-    service.listByProduct('p1').subscribe((result) => (batches = result));
-
-    http.expectOne((req) => req.url.endsWith('/inventory/batches')).flush({
-      data: [
-        { id: 'b1', productId: 'p1', lotNumber: 'L1', expiryDate: '2027-01-31T00:00:00.000Z', quantity: 4 },
-        { id: 'b2', productId: 'p1', lotNumber: 'L2', expiryDate: { _seconds: 1_800_000_000 }, quantity: 2 },
-      ],
-    });
-
-    expect(batches).toHaveLength(2);
-    expect(batches[0].expiryDate.toISOString()).toBe('2027-01-31T00:00:00.000Z');
-    expect(batches[1].expiryDate.getTime()).toBe(1_800_000_000_000);
+  it('sin electronAPI (fuera de Electron) lanza en vez de fallar en silencio', () => {
+    window.electronAPI = undefined;
+    expect(() => service.listByProduct('p1').subscribe()).toThrow();
   });
 });

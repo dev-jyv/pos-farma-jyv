@@ -1,16 +1,13 @@
-<div class="flex h-screen flex-col bg-[var(--pos-bg)]">
-  <!-- `flex-wrap` + `min-h-14`: por debajo del ancho mínimo de Electron (1024px) la
-       barra baja a una segunda línea en vez de empujar el bloque de usuario fuera del
-       viewport y provocar scroll horizontal en toda la app. -->
+<div class="flex h-screen flex-col bg-(--pos-bg)">
   <header
-    class="flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-1 shadow-sm"
+    class="flex h-14 shrink-0 items-center gap-x-3 border-b border-(--pos-border) bg-(--pos-surface) px-4 shadow-sm"
   >
-    <div class="flex items-center gap-2 border-r border-[var(--pos-border)] pr-4">
+    <div class="flex items-center gap-2 border-r border-(--pos-border) pr-4">
       <!-- Isotipo (manos + corazón) recortado del logo; decorativo, el nombre va al lado. -->
       <img src="brand/isotipo.png" alt="" aria-hidden="true" class="h-9 w-9 shrink-0 object-contain" />
-      <div class="leading-tight">
-        <div class="text-sm font-bold text-[var(--pos-ink)]">{{ 'app.name' | translate }}</div>
-        <div class="text-[11px] text-[var(--pos-muted)]">
+      <div class="hidden leading-tight sm:block">
+        <div class="text-sm font-bold text-(--pos-ink)">{{ 'app.name' | translate }}</div>
+        <div class="text-[11px] text-(--pos-muted)">
           Caja
           @if (appVersion) {
             <span class="font-mono"> · {{ appVersion }}</span>
@@ -19,12 +16,13 @@
       </div>
     </div>
 
+    <!-- Solo lo que el cajero usa a cada rato; lo administrativo vive en "Más". -->
     <nav class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-      @for (item of navItems(); track item.path) {
+      @for (item of primaryNavItems(); track item.path) {
         <a
           [routerLink]="item.path"
           routerLinkActive="active"
-          [routerLinkActiveOptions]="{ exact: false }"
+          [routerLinkActiveOptions]="{ exact: item.path === '/pos' }"
           class="pos-nav-btn"
         >
           @if (item.hotkey) {
@@ -34,36 +32,69 @@
           <span>{{ item.labelKey | translate }}</span>
         </a>
       }
+
+      @if (secondaryNavItems().length) {
+        <button
+          type="button"
+          class="pos-nav-btn"
+          [class.active]="isSecondaryActive()"
+          (click)="moreMenu.toggle($event)"
+        >
+          <i class="pi pi-ellipsis-h"></i>
+          <span>{{ 'nav.more' | translate }}</span>
+          <i class="pi pi-angle-down text-xs"></i>
+        </button>
+        <p-menu #moreMenu [model]="secondaryMenuItems()" [popup]="true" appendTo="body" />
+      }
     </nav>
 
-    <!-- El correo y el rol son informativos: se ocultan antes que la barra desborde. -->
-    <div class="ml-auto flex shrink-0 items-center gap-3">
-      @if (roleLabel(); as currentRoleLabel) {
-        <span
-          class="hidden rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide md:inline-block"
-          [class]="
-            isAdmin()
-              ? 'bg-[var(--pos-accent-soft)] text-[var(--pos-accent-ink)]'
-              : 'bg-[var(--pos-primary-soft)] text-[var(--pos-primary-ink)]'
+    <!-- Bloque de usuario: un solo punto de entrada, sin competir por espacio con el nav. -->
+    <div class="ml-auto flex shrink-0 items-center gap-1">
+      @if (isElectron) {
+        <button
+          type="button"
+          (click)="syncNow()"
+          [disabled]="syncing() || !canSyncManually()"
+          class="relative inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-(--pos-ink-soft) transition hover:bg-(--neutral-100) hover:text-(--pos-ink) disabled:opacity-50"
+          [attr.aria-label]="'sync.now' | translate"
+          [pTooltip]="
+            nextManualSyncAt()
+              ? ('sync.cooldown' | translate: { time: formatTime(nextManualSyncAt()!) })
+              : ('sync.now' | translate)
           "
         >
-          {{ currentRoleLabel }}
-        </span>
-      }
-      @if (user(); as currentUser) {
-        <span class="hidden max-w-48 truncate text-sm text-[var(--pos-muted)] lg:inline">
-          {{ currentUser.email }}
-        </span>
+          <i class="pi pi-refresh" [class.pi-spin]="syncing()"></i>
+          <span class="hidden lg:inline">{{ 'sync.now' | translate }}</span>
+          @if (hasPendingSync()) {
+            <!-- Sin texto ni conteo: solo la señal de "hay algo pendiente". -->
+            <span
+              class="absolute top-1 right-1 h-2 w-2 rounded-full bg-(--pos-warn)"
+              [attr.aria-label]="'sync.pending' | translate"
+            ></span>
+          }
+        </button>
       }
 
       <button
         type="button"
-        (click)="logout()"
-        class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-[var(--pos-ink-soft)] transition hover:bg-[var(--neutral-100)] hover:text-[var(--pos-ink)]"
+        (click)="userMenu.toggle($event)"
+        class="flex items-center gap-2 rounded-lg px-2 py-1.5 transition hover:bg-(--neutral-100)"
       >
-        <i class="pi pi-sign-out"></i>
-        <span class="hidden sm:inline">{{ 'auth.logout' | translate }}</span>
+        @if (roleLabel(); as currentRoleLabel) {
+          <span
+            class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
+            [class]="
+              isAdmin()
+                ? 'bg-(--pos-accent-soft) text-(--pos-accent-ink)'
+                : 'bg-(--pos-primary-soft) text-(--pos-primary-ink)'
+            "
+          >
+            {{ currentRoleLabel }}
+          </span>
+        }
+        <i class="pi pi-angle-down text-xs text-(--pos-muted)"></i>
       </button>
+      <p-menu #userMenu [model]="userMenuItems()" [popup]="true" appendTo="body" />
     </div>
   </header>
 
@@ -73,7 +104,7 @@
   @if (degraded()) {
     <div
       class="flex shrink-0 items-center justify-center gap-2 px-4 py-1.5 text-sm font-semibold text-white"
-      [class]="browserOnline() ? 'bg-[var(--pos-warn)]' : 'bg-[var(--pos-danger)]'"
+      [class]="browserOnline() ? 'bg-(--pos-warn)' : 'bg-(--pos-danger)'"
     >
       <i class="pi pi-exclamation-triangle text-xs"></i>
       <span>
@@ -86,3 +117,66 @@
     <router-outlet />
   </main>
 </div>
+
+<p-dialog
+  [visible]="syncing()"
+  [modal]="true"
+  [closable]="false"
+  [draggable]="false"
+  [style]="{ width: '22rem' }"
+  [header]="'sync.modalTitle' | translate"
+>
+  <div class="flex flex-col items-center gap-3 py-4 text-center">
+    <p-progress-spinner styleClass="!h-10 !w-10" strokeWidth="6" />
+    <p class="text-sm text-(--pos-muted)">{{ 'sync.modalBody' | translate }}</p>
+  </div>
+</p-dialog>
+
+<p-dialog
+  [visible]="logoutPromptVisible()"
+  (visibleChange)="$event ? null : dismissLogoutPrompt()"
+  [modal]="true"
+  [draggable]="false"
+  [style]="{ width: '26rem' }"
+  [header]="'cashCut.logoutPromptTitle' | translate"
+>
+  <p class="text-sm text-(--pos-muted)">{{ 'cashCut.logoutPromptBody' | translate }}</p>
+  @if (closingApp()) {
+    <!-- Cerrar la ventana no es cambiar de cajero: la sesión sigue iniciada. -->
+    <p class="mt-2 text-xs text-(--pos-muted)">{{ 'cashCut.closeAppNote' | translate }}</p>
+  }
+  <ng-template #footer>
+    <!-- En columna: son tres caminos distintos, no un sí/no. El de cortar caja
+         va primero por ser el correcto al terminar la jornada. -->
+    <div class="flex w-full flex-col gap-2">
+      <p-button
+        [label]="'cashCut.logoutCloseShift' | translate"
+        icon="pi pi-lock"
+        styleClass="w-full"
+        (onClick)="closeShiftBeforeLogout()"
+      />
+      <p-button
+        [label]="'cashCut.logoutKeepShift' | translate"
+        icon="pi pi-sign-out"
+        severity="secondary"
+        [outlined]="true"
+        styleClass="w-full"
+        (onClick)="logoutLeavingShiftOpen()"
+      />
+      <p-button
+        [label]="'common.cancel' | translate"
+        severity="secondary"
+        [text]="true"
+        styleClass="w-full"
+        (onClick)="dismissLogoutPrompt()"
+      />
+    </div>
+  </ng-template>
+</p-dialog>
+
+<app-cash-session-dialog
+  [visible]="logoutCashSessionDialogVisible()"
+  [session]="openCashSession()"
+  (closed)="dismissLogoutCashSession()"
+  (shiftClosed)="onLogoutShiftClosed()"
+/>

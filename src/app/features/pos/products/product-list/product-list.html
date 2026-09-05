@@ -1,0 +1,87 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <h1 class="text-lg font-bold text-slate-900">{{ 'products.title' | translate }}</h1>
+
+    <div class="relative min-w-48 flex-1 max-w-sm">
+      <label for="product-search" class="sr-only">{{ 'products.searchLabel' | translate }}</label>
+      <i class="pi pi-search pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-slate-400"></i>
+      <input
+        pInputText
+        id="product-search"
+        name="productSearch"
+        type="search"
+        autocomplete="off"
+        class="w-full pl-9!"
+        [ngModel]="search()"
+        (ngModelChange)="onSearchChange($event)"
+        [placeholder]="'products.searchPlaceholder' | translate"
+      />
+    </div>
+
+    @if (pendingCount() > 0) {
+      <span class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">
+        {{ 'products.pendingSync' | translate: { count: pendingCount() } }}
+      </span>
+    }
+
+    <p-button icon="pi pi-plus" [label]="'products.new' | translate" styleClass="ml-auto" (onClick)="create()" />
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+    @if (searching()) {
+      <p class="text-sm text-slate-500">{{ 'products.searching' | translate }}</p>
+    }
+
+    @if (results().length) {
+      <p-table [value]="results()" dataKey="id" styleClass="pos-product-table">
+        <ng-template #header>
+          <tr>
+            <th>{{ 'products.sku' | translate }}</th>
+            <th>{{ 'products.name' | translate }}</th>
+            <th class="text-right">{{ 'products.price' | translate }}</th>
+            <th class="text-right">{{ 'products.stock' | translate }}</th>
+            <th>{{ 'products.status' | translate }}</th>
+            <th class="w-16"></th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-product>
+          <tr class="cursor-pointer transition hover:bg-slate-50" (click)="edit(product)">
+            <td class="font-mono text-sm">{{ product.sku }}</td>
+            <td class="text-sm font-medium text-slate-900">
+              {{ product.name }}
+              @if (product.activeIngredient) {
+                <span class="block text-xs text-slate-500">{{ product.activeIngredient }}</span>
+              }
+            </td>
+            <td class="text-right text-sm tabular-nums">${{ product.salePrice | number: '1.2-2' }}</td>
+            <td class="text-right text-sm tabular-nums">{{ product.stock }}</td>
+            <td>
+              @if (product.isActive === false) {
+                <p-tag severity="danger" [value]="'products.inactive' | translate" />
+              } @else {
+                <p-tag severity="success" [value]="'products.active' | translate" />
+              }
+            </td>
+            <td class="text-right text-slate-300">
+              <i class="pi pi-angle-right"></i>
+            </td>
+          </tr>
+        </ng-template>
+      </p-table>
+    }
+
+    @if (searched() && !results().length && !searching()) {
+      <div class="flex flex-col items-center gap-3 py-16 text-center">
+        <i class="pi pi-inbox text-4xl text-slate-300"></i>
+        <p class="text-sm text-slate-500">{{ 'products.notFound' | translate }}</p>
+      </div>
+    }
+
+    @if (!searched() && !results().length) {
+      <div class="flex flex-col items-center gap-3 py-16 text-center">
+        <i class="pi pi-search text-4xl text-slate-300"></i>
+        <p class="text-sm text-slate-500">{{ 'products.searchHint' | translate }}</p>
+      </div>
+    }
+  </div>
+</div>

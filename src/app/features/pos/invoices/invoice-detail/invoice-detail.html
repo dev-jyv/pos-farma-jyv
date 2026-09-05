@@ -1,0 +1,56 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <p-button icon="pi pi-arrow-left" [text]="true" (onClick)="back()" [ariaLabel]="'invoices.back' | translate" />
+    <h1 class="text-lg font-bold text-slate-900">{{ 'invoices.detailTitle' | translate }}</h1>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-6">
+    @if (loading()) {
+      <div class="flex justify-center py-10">
+        <p-progress-spinner styleClass="!h-8 !w-8" strokeWidth="6" />
+      </div>
+    } @else if (invoice(); as invoice) {
+      <div class="mx-auto max-w-md overflow-hidden rounded-xl border border-slate-200 shadow-sm">
+        <!-- Encabezado: lo que el cajero busca primero, folio y monto en grande. -->
+        <div class="flex items-center justify-between bg-slate-50 px-5 py-4">
+          <div>
+            <p class="font-mono text-sm font-semibold text-slate-500">{{ invoice.invoiceNumber }}</p>
+            <p class="text-2xl font-bold text-slate-900">${{ invoice.totalAmount | number: '1.2-2' }}</p>
+          </div>
+          @if (invoice.hasInvoice) {
+            <p-tag severity="success" [value]="'invoices.withInvoice' | translate" />
+          } @else {
+            <p-tag severity="warn" [value]="'invoices.withoutInvoice' | translate" />
+          }
+        </div>
+
+        <div class="flex flex-col divide-y divide-slate-100 px-5">
+          <div class="flex items-center gap-3 py-3">
+            <i class="pi pi-truck w-5 text-slate-400"></i>
+            <span class="flex-1 text-sm text-slate-500">{{ 'invoices.supplier' | translate }}</span>
+            <span class="text-sm font-medium text-slate-900">{{ invoice.supplierName || '—' }}</span>
+          </div>
+          <div class="flex items-center gap-3 py-3">
+            <i class="pi pi-calendar w-5 text-slate-400"></i>
+            <span class="flex-1 text-sm text-slate-500">{{ 'invoices.date' | translate }}</span>
+            <span class="text-sm font-medium text-slate-900">{{ invoice.invoiceDate | date: 'dd/MM/yyyy' : 'UTC' }}</span>
+          </div>
+        </div>
+
+        @if (invoice.fileUrl) {
+          <div class="px-5 pb-5">
+            <a
+              [href]="invoice.fileUrl"
+              target="_blank"
+              rel="noopener"
+              class="flex items-center justify-center gap-2 rounded-lg border border-(--pos-primary) px-4 py-2.5 text-sm font-semibold text-(--pos-primary-ink) transition hover:bg-(--pos-primary-soft)"
+            >
+              <i class="pi pi-external-link"></i>
+              {{ 'invoices.viewFile' | translate }}
+            </a>
+          </div>
+        }
+      </div>
+    }
+  </div>
+</div>

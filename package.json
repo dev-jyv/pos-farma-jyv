@@ -10,12 +10,17 @@
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "electron:build": "ng build --configuration electron",
+    "test:electron": "npm run prisma:generate && vitest run --config electron/vitest.config.mjs",
+    "test:all": "npm run test -- --watch=false && npm run test:electron",
+    "prisma:generate": "prisma generate --schema=electron/prisma/schema.prisma",
+    "electron:build": "npm run prisma:generate && ng build --configuration electron",
     "electron:start": "npm run electron:build && cross-env ELECTRON_RUN_AS_NODE= electron electron/main.js",
-    "electron:dev": "cross-env ELECTRON_RUN_AS_NODE= NODE_ENV=development electron electron/main.js --dev",
+    "electron:dev": "npm run prisma:generate && cross-env ELECTRON_RUN_AS_NODE= NODE_ENV=development electron electron/main.js --dev",
     "electron:dist": "npm run electron:build && electron-builder",
     "electron:dist:mac": "npm run electron:build && electron-builder --mac",
-    "electron:dist:win": "npm run electron:build && electron-builder --win"
+    "electron:dist:win": "npm run electron:build && electron-builder --win",
+    "postinstall": "prisma generate --schema=electron/prisma/schema.prisma",
+    "db:migrate:dev": "cross-env DATABASE_URL=file:./dev.sqlite prisma migrate dev --schema=electron/prisma/schema.prisma"
   },
   "private": true,
   "packageManager": "npm@11.13.0",
@@ -31,9 +36,15 @@
       "!**/*",
       "electron/**/*",
       "dist/farma-jyv-pos/browser/**/*",
-      "package.json"
+      "package.json",
+      "node_modules/@prisma/client/**/*",
+      "node_modules/.prisma/**/*"
     ],
     "asar": true,
+    "asarUnpack": [
+      "node_modules/@prisma/client/**/*",
+      "node_modules/.prisma/**/*"
+    ],
     "publish": {
       "provider": "generic",
       "url": "https://updates.farmajyv.mx/pos"
@@ -86,6 +97,7 @@
     "@ngx-translate/core": "^18.0.0",
     "@ngx-translate/http-loader": "^18.0.0",
     "@primeuix/themes": "^3.0.0",
+    "@prisma/client": "^6.19.3",
     "electron-updater": "^6.8.9",
     "firebase": "^12.16.0",
     "primeicons": "^8.0.0",
@@ -107,8 +119,14 @@
     "jsdom": "^28.0.0",
     "postcss": "^8.5.25",
     "prettier": "^3.9.6",
+    "prisma": "^6.19.3",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
     "vitest": "^4.0.8"
+  },
+  "allowScripts": {
+    "prisma@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "@prisma/client@6.19.3": true
   }
 }

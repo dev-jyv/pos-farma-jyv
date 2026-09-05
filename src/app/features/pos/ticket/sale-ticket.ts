@@ -1,7 +1,7 @@
 import { CurrencyPipe, DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-import { CashSessionSummary, PaymentMethod, Sale } from '../../../shared/models';
+import { CashSessionSummary, PaymentMethod, Sale, SaleItem, isSaleProductItem } from '../../../shared/models';
 import { CONTROLLED_GROUP_RULES } from '../../../shared/utils/controlled';
 import { environment } from '../../../../environments/environment';
 
@@ -23,6 +23,14 @@ const METHOD_LABELS: Record<PaymentMethod, string> = {
   },
 })
 export class SaleTicket {
+  /**
+   * Identidad de la partida en el ticket impreso: una de servicio no tiene
+   * `productId`, así que se usa el id que corresponda a su tipo.
+   */
+  itemKey(item: SaleItem): string {
+    return (isSaleProductItem(item) ? item.productId : item.serviceId) + item.productName;
+  }
+
   readonly sale = input.required<Sale>();
   readonly cashierLabel = input('');
   readonly preview = input(false);

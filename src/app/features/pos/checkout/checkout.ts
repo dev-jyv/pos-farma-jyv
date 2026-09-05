@@ -45,6 +45,16 @@ import {
   resolveControlledRequirements,
   validatePrescription,
 } from '../../../shared/utils/controlled';
+import {
+  commissionTotalOf,
+  isProductLine,
+  isServiceLine,
+  lineGross,
+  lineName,
+  lineNeedsProvider,
+  lineTaxable,
+  servicesTotalOf,
+} from '../../../shared/utils/cart-line';
 import { previewTaxSummary } from '../../../shared/utils/taxes';
 import { formatCountdown, pointOrderSecondsLeft } from '../../../shared/utils/point-order';
 import { CashDrawerService } from '../services/cash-drawer.service';
@@ -225,7 +235,9 @@ export class Checkout {
    * resueltos con las mismas reglas que aplica el backend antes de registrar la venta.
    */
   readonly controlled = computed(() =>
-    resolveControlledRequirements(this.cart().map((line) => line.product)),
+    // Solo la rama de producto: un servicio nunca es sustancia controlada, así
+    // que una consulta no puede exigir receta ni folio.
+    resolveControlledRequirements(this.cart().filter(isProductLine).map((line) => line.product)),
   );
   readonly needsPrescription = computed(() => this.controlled().requiresPrescription);
   readonly needsFolio = computed(() => this.controlled().requiresFolio);
@@ -236,6 +248,7 @@ export class Checkout {
   /** Partidas controladas, para que el cajero sepa cuál medicamento exige la receta. */
   readonly controlledLines = computed(() =>
     this.cart()
+      .filter(isProductLine)
       .map((line) => ({
         name: line.product.name,
         rule: getControlledRule(line.product.controlledGroup),
@@ -257,12 +270,25 @@ export class Checkout {
    * backend; la venta guardada llevará el desglose que él calcule.
    */
   readonly taxSummary = computed(() =>
+    // `lineTaxable` traduce el `taxMode` del servicio a las banderas fiscales
+    // que `taxes.ts` ya entiende: un ticket mixto desglosa impuestos sin tocar
+    // esa utilidad.
     previewTaxSummary(
-      this.cart().map((line) => ({
-        product: line.product,
-        grossAmount: line.product.salePrice * line.quantity - line.discountAmount,
-      })),
+      this.cart().map((line) => ({ product: lineTaxable(line), grossAmount: lineGross(line) })),
     ),
+  );
+
+  /* ── Servicios del ticket ─────────────────────────────────────────────── */
+
+  readonly serviceLines = computed(() => this.cart().filter(isServiceLine));
+  readonly servicesTotal = computed(() => servicesTotalOf(this.cart()));
+  readonly commissionTotal = computed(() => commissionTotalOf(this.cart()));
+  /**
+   * Servicios que exigen doctor y todavía no lo tienen. Bloquea el cobro: la
+   * comisión no se puede acreditar a nadie después, y el corte la necesita.
+   */
+  readonly servicesMissingProvider = computed(() =>
+    this.cart().filter(lineNeedsProvider).map((line) => lineName(line)),
   );
   readonly deviceOptions = computed(() =>
     this.devices().map((device) => ({

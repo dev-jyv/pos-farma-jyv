@@ -14,7 +14,9 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 - `npm run electron:dev` — lanza Electron contra el dev server (`ELECTRON_DEV_SERVER_URL`, default `http://localhost:4200`)
 - `npm run electron:start` — build + Electron contra el bundle compilado
 - `npm run electron:dist[:mac|:win]` — empaqueta con electron-builder (salida en `/release`)
-- `npm test` / `ng test` — Vitest
+- `npm test` / `ng test` — Vitest sobre `src/` (Angular)
+- `npm run test:electron` — Vitest sobre `electron/test/**` (proceso principal: `electron/db/*.js` contra un Prisma falso en memoria; el builder de Angular no mira esa carpeta)
+- `npm run test:all` — ambas suites
 
 ## Arquitectura
 

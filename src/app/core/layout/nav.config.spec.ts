@@ -53,8 +53,8 @@ const doctor = profileFor('doctor', [
 ]);
 
 describe('NAV_ITEMS', () => {
-  it('el cajero ve venta, historial y la entrada de stock', () => {
-    expect(visibleFor(cashier)).toEqual(['nav.sale', 'nav.history', 'nav.stockEntry']);
+  it('el cajero ve venta, historial, la entrada de stock y gastos', () => {
+    expect(visibleFor(cashier)).toEqual(['nav.sale', 'nav.history', 'nav.stockEntry', 'nav.expenses']);
   });
 
   it('recibir mercancía no le abre el libro de control ni los reportes', () => {
@@ -107,5 +107,71 @@ describe('NAV_ITEMS', () => {
         (item) => !item.permission || hasPermission(null, item.permission.area, item.permission.level),
       ).map((item) => item.labelKey),
     ).toEqual(['nav.sale']);
+  });
+
+  /**
+   * Auditoría de caja: las dos pantallas que ven el dinero de TODAS las cajas
+   * y aprueban ajustes. Son exclusivas de `admin` por diseño; que un rol
+   * intermedio (`manager`) las herede sería una fuga de privilegios, así que
+   * se prueba rol por rol y no solo "el admin las ve".
+   */
+  describe('auditoría de caja y gastos (exclusivas de admin)', () => {
+    const AUDITORIA = ['nav.cashSessionsAudit', 'nav.expensesAudit'];
+
+    it('el administrador las ve', () => {
+      const visible = visibleFor(admin);
+      AUDITORIA.forEach((item) => expect(visible).toContain(item));
+    });
+
+    it.each([
+      ['cashier', cashier],
+      ['manager', manager],
+      ['doctor', doctor],
+    ])('el rol "%s" NO las ve', (_slug, profile) => {
+      const visible = visibleFor(profile);
+      AUDITORIA.forEach((item) => expect(visible).not.toContain(item));
+    });
+
+    it('operar la caja (`pos:write`) no alcanza para auditarla', () => {
+      const soloCaja = profileFor('caja', [{ area: 'pos', level: 'write' }]);
+      const visible = visibleFor(soloCaja);
+      expect(visible).toContain('nav.expenses');
+      AUDITORIA.forEach((item) => expect(visible).not.toContain(item));
+    });
+
+    it('cada auditoría exige su propia área: una no abre la otra', () => {
+      const soloCortes = profileFor('x', [{ area: 'cashSessions', level: 'read' }]);
+      expect(visibleFor(soloCortes)).toContain('nav.cashSessionsAudit');
+      expect(visibleFor(soloCortes)).not.toContain('nav.expensesAudit');
+
+      const soloGastos = profileFor('y', [{ area: 'expenses', level: 'read' }]);
+      expect(visibleFor(soloGastos)).toContain('nav.expensesAudit');
+      expect(visibleFor(soloGastos)).not.toContain('nav.cashSessionsAudit');
+    });
+
+    it('registrar gastos sí es del mostrador: el cajero ve la pantalla de captura', () => {
+      expect(visibleFor(cashier)).toContain('nav.expenses');
+    });
+
+    it('un rol sin `pos:write` no puede ni capturar gastos', () => {
+      expect(visibleFor(doctor)).not.toContain('nav.expenses');
+    });
+
+    /**
+     * Mover el efectivo de la farmacia no es tarea de mostrador: pide
+     * `cashSessions:write`, no el `pos:write` con el que se capturan gastos.
+     */
+    it('el cajero no ve la caja de la farmacia aunque pueda registrar gastos', () => {
+      expect(visibleFor(cashier)).toContain('nav.expenses');
+      expect(visibleFor(cashier)).not.toContain('nav.cashBox');
+    });
+
+    it('leer los cortes no alcanza para mover el efectivo', () => {
+      const soloLectura = profileFor('z', [{ area: 'cashSessions', level: 'read' }]);
+      expect(visibleFor(soloLectura)).not.toContain('nav.cashBox');
+
+      const conEscritura = profileFor('w', [{ area: 'cashSessions', level: 'write' }]);
+      expect(visibleFor(conEscritura)).toContain('nav.cashBox');
+    });
   });
 });

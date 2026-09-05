@@ -8,6 +8,7 @@ const KEY = `pos.current-cart.${UID}`;
 
 function line(): CartLine {
   return {
+    kind: 'product' as const,
     product: { id: 'p1', sku: 'SKU1', name: 'Producto', salePrice: 100, stock: 5 } as Product,
     quantity: 2,
     discountAmount: 10,

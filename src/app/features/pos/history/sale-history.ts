@@ -16,6 +16,7 @@ import { AuthService } from '../../../core/auth/auth.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { PaymentMethod, Sale } from '../../../shared/models';
 import { CashSessionService } from '../services/cash-session.service';
+import { SaleMovement } from '../../../core/electron/window.d';
 import { SaleService } from '../services/sale.service';
 import { SaleTicket } from '../ticket/sale-ticket';
 import { TicketPrintService } from '../ticket/ticket-print.service';
@@ -55,6 +56,8 @@ export class SaleHistory {
   readonly loading = signal(false);
   readonly search = signal('');
   readonly detailSale = signal<Sale | null>(null);
+  /** Bitácora de la venta abierta en el detalle: cobro y anulación, con autor. */
+  readonly detailMovements = signal<SaleMovement[]>([]);
   readonly detailVisible = signal(false);
   /**
    * Motivo del último listado fallido. Se pinta como banda persistente porque un toast
@@ -124,7 +127,7 @@ export class SaleHistory {
         }
       });
 
-    this.cashSessionService.fetchCurrent().subscribe(() => this.reload());
+    this.cashSessionService.refreshCurrent(this.authService.user()?.uid ?? '').subscribe(() => this.reload());
   }
 
   reload(): void {
@@ -142,6 +145,7 @@ export class SaleHistory {
     this.detailTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.detailSale.set(sale);
     this.detailVisible.set(true);
+    this.loadMovements(sale.id);
   }
 
   onDetailHide(): void {
@@ -162,13 +166,16 @@ export class SaleHistory {
     }
     this.voiding.set(sale.id);
     this.saleService
-      .void(sale.id)
+      .void(sale)
       .pipe(finalize(() => this.voiding.set(null)))
       .subscribe({
         next: (voided) => {
           this.sales.update((list) => list.map((item) => (item.id === voided.id ? voided : item)));
           if (this.detailSale()?.id === voided.id) {
             this.detailSale.set(voided);
+            // La anulación acaba de asentar su renglón: el detalle debe mostrarlo
+            // sin obligar a cerrar y volver a abrir.
+            this.loadMovements(sale.id);
           }
           this.notifications.success('Venta anulada.');
         },
@@ -176,6 +183,37 @@ export class SaleHistory {
         error: (error: unknown) =>
           this.notifications.error(getApiErrorMessage(error) || 'No se pudo anular la venta.'),
       });
+  }
+
+  /**
+   * Quién hizo el movimiento, en legible. La bitácora guarda el correo del
+   * momento; si esa venta es vieja y solo tiene el uid, se cae al mismo criterio
+   * del ticket (`cashierLabel`) antes que mostrar un identificador de Firestore.
+   */
+  movementAuthor(movement: SaleMovement): string {
+    if (movement.userLabel) {
+      return movement.userLabel;
+    }
+    const user = this.authService.user();
+    return user && user.uid === movement.userId ? (user.email ?? movement.userId) : movement.userId;
+  }
+
+  /** Quién anuló, en legible, para la fila del listado. */
+  voidedByLabel(sale: Sale): string {
+    const user = this.authService.user();
+    if (user && user.uid === sale.voidedBy) {
+      return user.email ?? sale.voidedBy!;
+    }
+    return sale.voidedBy ?? '';
+  }
+
+  private loadMovements(saleId: string): void {
+    this.detailMovements.set([]);
+    this.saleService.movements(saleId).subscribe({
+      next: (movements) => this.detailMovements.set(movements),
+      // La bitácora es informativa: si falla, el detalle sigue siendo útil.
+      error: () => this.detailMovements.set([]),
+    });
   }
 
   /** `null` = la petición falló; el llamador conserva la lista previa y marca el error. */

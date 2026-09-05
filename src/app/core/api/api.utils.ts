@@ -1,4 +1,4 @@
-import { HttpErrorResponse } from '@angular/common/http';
+import { HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { Timestamp } from 'firebase/firestore';
 
 export interface ApiErrorBody {
@@ -54,6 +54,25 @@ export function getApiErrorMessage(error: unknown): string {
     return error.message;
   }
   return 'Ocurrió un error inesperado.';
+}
+
+/**
+ * Arma los `HttpParams` de un listado descartando lo que no se filtró.
+ *
+ * Los servicios del POS repetían el mismo bloque de `if (query.x) params =
+ * params.set(...)` campo por campo; además de ruido, cada olvido mandaba
+ * `undefined` como texto al backend. Los `false` y los `0` sí viajan: son
+ * filtros legítimos (`activeOnly=false`, `page=0`).
+ */
+export function toHttpParams(query: Record<string, unknown>): HttpParams {
+  let params = new HttpParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+    params = params.set(key, String(value));
+  }
+  return params;
 }
 
 export function unwrapEntity<T>(response: unknown): T {

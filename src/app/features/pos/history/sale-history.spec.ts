@@ -12,6 +12,7 @@ import { CashSession, Sale } from '../../../shared/models';
 import { CashSessionService } from '../services/cash-session.service';
 import { SaleService } from '../services/sale.service';
 import { TicketPrintService } from '../ticket/ticket-print.service';
+import { SaleMovement } from '../../../core/electron/window.d';
 import { SaleHistory } from './sale-history';
 
 function sale(overrides: Partial<Sale> = {}): Sale {
@@ -68,6 +69,7 @@ describe('SaleHistory', () => {
   let notifyError: ReturnType<typeof vi.fn>;
   let notifySuccess: ReturnType<typeof vi.fn>;
   let printSale: ReturnType<typeof vi.fn>;
+  let movements: SaleMovement[];
   let confirmSpy: ReturnType<typeof vi.spyOn>;
 
   async function build(): Promise<void> {
@@ -86,10 +88,11 @@ describe('SaleHistory', () => {
               return list(params);
             },
             void: (id: string) => voidSale(id),
+            movements: () => of(movements),
             pendingSales: signal([]),
           },
         },
-        { provide: CashSessionService, useValue: { current, fetchCurrent: () => of(current()) } },
+        { provide: CashSessionService, useValue: { current, refreshCurrent: () => of(current()) } },
         { provide: AuthService, useValue: { isAdmin, user: signal({ uid: 'u1', email: 'caja@farmajyv.mx' }) } },
         { provide: TicketPrintService, useValue: { printSale } },
       ],
@@ -104,6 +107,7 @@ describe('SaleHistory', () => {
     notifyError = vi.fn();
     notifySuccess = vi.fn();
     printSale = vi.fn();
+    movements = [];
     isAdmin = signal(true);
     current = signal<CashSession | null>(session);
     list = () => of([sale()]);
@@ -214,6 +218,44 @@ describe('SaleHistory', () => {
 
       expect(component.detailVisible()).toBe(true);
       expect(component.detailSale()?.folio).toBe('V-000001');
+    });
+  });
+
+  describe('bitácora', () => {
+    const movement = (overrides: Partial<SaleMovement> = {}): SaleMovement => ({
+      id: 'm1',
+      saleId: 'v1',
+      type: 'sale',
+      userId: 'u1',
+      userLabel: 'caja@farmajyv.mx',
+      reason: null,
+      occurredAt: '2026-09-03T18:00:00.000Z',
+      ...overrides,
+    });
+
+    it('abrir el detalle carga los movimientos de la venta', async () => {
+      movements = [movement(), movement({ id: 'm2', type: 'void', userId: 'u9', userLabel: 'ana@farmajyv.mx' })];
+
+      component.openDetail(component.sales()[0]);
+      await Promise.resolve();
+
+      expect(component.detailMovements()).toHaveLength(2);
+      expect(component.detailMovements()[1].type).toBe('void');
+    });
+
+    it('el autor se muestra por correo, no por uid', () => {
+      expect(component.movementAuthor(movement())).toBe('caja@farmajyv.mx');
+    });
+
+    it('sin correo guardado cae al del cajero de la sesión y, si no, al uid', () => {
+      // Venta vieja, anterior a que la bitácora guardara el correo.
+      expect(component.movementAuthor(movement({ userLabel: null }))).toBe('caja@farmajyv.mx');
+      expect(component.movementAuthor(movement({ userLabel: null, userId: 'otro' }))).toBe('otro');
+    });
+
+    it('la fila del listado dice quién anuló', () => {
+      expect(component.voidedByLabel(sale({ voidedBy: 'u1' }))).toBe('caja@farmajyv.mx');
+      expect(component.voidedByLabel(sale({ voidedBy: 'u9' }))).toBe('u9');
     });
   });
 

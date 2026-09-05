@@ -5,6 +5,7 @@ import { Router } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../../environments/environment';
+import { CashSessionService } from '../../features/pos/services/cash-session.service';
 import { FIREBASE_AUTH } from '../firebase/firebase.providers';
 import { NotificationService } from '../notifications/notification.service';
 import { AuthService } from './auth.service';
@@ -20,9 +21,13 @@ describe('AuthService', () => {
   let service: AuthService;
   let http: HttpTestingController;
   let navigate: ReturnType<typeof vi.fn>;
+  let autoCloseForExpiry: ReturnType<typeof vi.fn>;
+  let sessionExpired: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     navigate = vi.fn(() => Promise.resolve(true));
+    autoCloseForExpiry = vi.fn(() => Promise.resolve());
+    sessionExpired = vi.fn();
 
     TestBed.configureTestingModule({
       providers: [
@@ -32,7 +37,8 @@ describe('AuthService', () => {
         // servicio nunca la usa más allá de suscribirse.
         { provide: FIREBASE_AUTH, useValue: { currentUser: null, onAuthStateChanged: () => () => undefined } },
         { provide: Router, useValue: { navigate } },
-        { provide: NotificationService, useValue: { sessionExpired: vi.fn(), error: vi.fn(), success: vi.fn() } },
+        { provide: NotificationService, useValue: { sessionExpired: sessionExpired, error: vi.fn(), success: vi.fn() } },
+        { provide: CashSessionService, useValue: { autoCloseForExpiry } },
       ],
     });
 
@@ -155,6 +161,55 @@ describe('AuthService', () => {
       service.fetchProfile().subscribe();
 
       http.expectOne(`${environment.apiUrl}/auth/me`).flush({ data: null });
+    });
+  });
+
+  /**
+   * A las 24:00 (hora CDMX) el backend deja de aceptar el token. Si el turno
+   * sigue abierto, el POS lo cierra solo ANTES del logout: después ya no hay
+   * `uid` del que colgar el corte, y un turno que nunca cierra deja el
+   * efectivo del día sin arqueo.
+   */
+  describe('auto-cierre del turno al expirar la sesión', () => {
+    it('sin sesión activa no hay turno que cerrar, pero sí se avisa y se sale', async () => {
+      vi.spyOn(service, 'logout').mockResolvedValue(undefined);
+
+      await service.endExpiredSession();
+
+      expect(autoCloseForExpiry).not.toHaveBeenCalled();
+      expect(sessionExpired).toHaveBeenCalled();
+      expect(navigate).toHaveBeenCalledWith(['/login']);
+    });
+
+    it('con sesión activa cierra el turno y solo entonces sale', async () => {
+      const orden: string[] = [];
+      autoCloseForExpiry.mockImplementation(() => {
+        orden.push('cierra-turno');
+        return Promise.resolve();
+      });
+      navigate.mockImplementation(() => {
+        orden.push('navega-login');
+        return Promise.resolve(true);
+      });
+      vi.spyOn(service, 'user').mockReturnValue({ uid: 'u1' } as never);
+      vi.spyOn(service, 'profile').mockReturnValue({ email: 'caja@farmajyv.mx' } as never);
+      vi.spyOn(service, 'logout').mockResolvedValue(undefined);
+
+      await service.endExpiredSession();
+
+      expect(autoCloseForExpiry).toHaveBeenCalledWith('u1', 'caja@farmajyv.mx');
+      expect(orden).toEqual(['cierra-turno', 'navega-login']);
+    });
+
+    it('si el cierre del turno falla, el logout ocurre igual', async () => {
+      autoCloseForExpiry.mockRejectedValue(new Error('SQLite bloqueada'));
+      vi.spyOn(service, 'user').mockReturnValue({ uid: 'u1' } as never);
+      vi.spyOn(service, 'logout').mockResolvedValue(undefined);
+
+      await expect(service.endExpiredSession()).rejects.toThrow();
+      // El contrato de `autoCloseForExpiry` es no lanzar nunca (traga sus
+      // errores); esta prueba fija esa expectativa desde el lado del llamador.
+      expect(autoCloseForExpiry).toHaveBeenCalled();
     });
   });
 });

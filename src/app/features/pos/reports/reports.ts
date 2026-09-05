@@ -3,12 +3,14 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { TranslatePipe } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { TableModule } from 'primeng/table';
+import { forkJoin } from 'rxjs';
 
 import { environment } from '../../../../environments/environment';
 import { AuthService } from '../../../core/auth/auth.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
-import { PaymentMethod, Sale } from '../../../shared/models';
+import { CashMovement, PaymentMethod, Sale, isSaleProductItem } from '../../../shared/models';
 import { addMoney } from '../../../shared/utils/money';
+import { CashMovementService } from '../services/cash-movement.service';
 import { CashSessionService } from '../services/cash-session.service';
 import { SaleService } from '../services/sale.service';
 
@@ -35,6 +37,15 @@ interface TopProductRow {
   total: number;
 }
 
+/** Fila de la tabla de comisiones por doctor. */
+interface CommissionRow {
+  providerId: string;
+  name: string;
+  count: number;
+  baseAmount: number;
+  commissionAmount: number;
+}
+
 const METHOD_LABELS: Record<PaymentMethod, string> = {
   cash: 'Efectivo',
   card: 'Tarjeta',
@@ -51,11 +62,13 @@ const METHOD_LABELS: Record<PaymentMethod, string> = {
 export class PosReports {
   private readonly saleService = inject(SaleService);
   private readonly cashSessionService = inject(CashSessionService);
+  private readonly cashMovementService = inject(CashMovementService);
   private readonly notifications = inject(NotificationService);
   private readonly auth = inject(AuthService);
 
   readonly scope = signal<ReportScope>('session');
   readonly sales = signal<Sale[]>([]);
+  readonly movements = signal<CashMovement[]>([]);
   readonly loading = signal(false);
   readonly generatedAt = signal(new Date());
 
@@ -78,7 +91,7 @@ export class PosReports {
   readonly cashierEmail = computed(() => this.auth.user()?.email ?? '');
 
   /** Solo para repetir las tarjetas del skeleton mientras carga. */
-  readonly skeletonCards = [0, 1, 2, 3];
+  readonly skeletonCards = [0, 1, 2, 3, 4, 5, 6];
 
   readonly scopeOptions = [
     { labelKey: 'reports.scope.session', value: 'session' as ReportScope },
@@ -113,6 +126,49 @@ export class PosReports {
       const cash = sale.cashAmount ?? (sale.amountReceived ?? 0) - (sale.change ?? 0);
       return addMoney(sum, cash);
     }, 0),
+  );
+
+  /**
+   * Cobrado con tarjeta, con la misma regla que el efectivo: en una venta mixta
+   * solo la parte que pagó la terminal. Sin esto, sumar el total de la venta
+   * contaría también el efectivo y el reporte no cuadraría con el corte.
+   */
+  readonly cardCollected = computed(() =>
+    this.validSales().reduce((sum, sale) => {
+      if (sale.paymentMethod === 'card') {
+        return addMoney(sum, sale.cardAmount ?? sale.total);
+      }
+      if (sale.paymentMethod === 'mixed') {
+        return addMoney(sum, sale.cardAmount ?? 0);
+      }
+      return sum;
+    }, 0),
+  );
+
+  private movementTotal(type: CashMovement['type']): number {
+    return this.movements()
+      .filter((movement) => movement.type === type)
+      .reduce((sum, movement) => addMoney(sum, movement.amount), 0);
+  }
+
+  readonly expenseTotal = computed(() => this.movementTotal('expense'));
+  readonly depositTotal = computed(() => this.movementTotal('deposit'));
+  readonly withdrawalTotal = computed(() => this.movementTotal('withdrawal'));
+  readonly expenseCount = computed(
+    () => this.movements().filter((movement) => movement.type === 'expense').length,
+  );
+  readonly hasMovements = computed(() => this.movements().length > 0);
+
+  /**
+   * Lo que debe quedar en el cajón por estas ventas: el efectivo cobrado menos
+   * lo que salió (gastos y retiros) más lo que entró. Es la misma cuenta del
+   * corte, sin el fondo inicial —que no es venta del día.
+   */
+  readonly cashInDrawer = computed(() =>
+    addMoney(
+      addMoney(this.cashCollected(), this.depositTotal()),
+      -addMoney(this.expenseTotal(), this.withdrawalTotal()),
+    ),
   );
 
   readonly byMethod = computed<MethodRow[]>(() => {
@@ -160,6 +216,39 @@ export class PosReports {
     }));
   });
 
+  /* ── Servicios ────────────────────────────────────────────────────────── */
+
+  /**
+   * Venta de farmacia y de servicios, separadas. Salen de los campos
+   * denormalizados de cada venta, con el default de compatibilidad que hace que
+   * toda venta anterior a los servicios sea 100 % farmacia. `netTotal` sigue
+   * siendo el gran total: no se le cambia el significado.
+   */
+  readonly pharmacyNet = computed(() =>
+    this.validSales().reduce((sum, sale) => addMoney(sum, sale.pharmacyTotal ?? sale.total), 0),
+  );
+  readonly servicesNet = computed(() =>
+    this.validSales().reduce((sum, sale) => addMoney(sum, sale.servicesTotal ?? 0), 0),
+  );
+  readonly servicesCount = computed(
+    () => this.validSales().filter((sale) => (sale.servicesTotal ?? 0) > 0).length,
+  );
+  readonly commissionTotal = computed(() =>
+    this.validSales().reduce((sum, sale) => addMoney(sum, sale.commissionTotal ?? 0), 0),
+  );
+  /** Efectivo atribuible a servicios: el número que el cajero compara en el corte. */
+  readonly servicesCash = computed(() =>
+    this.validSales()
+      .filter((sale) => sale.paymentMethod === 'cash' || sale.paymentMethod === 'mixed')
+      .reduce((sum, sale) => addMoney(sum, sale.servicesCashAmount ?? 0), 0),
+  );
+  readonly hasServiceActivity = computed(() => this.servicesNet() > 0 || this.commissionTotal() > 0);
+
+  readonly topServicesByAmount = computed<TopProductRow[]>(() =>
+    this.aggregateServices().sort((a, b) => b.total - a.total).slice(0, 10),
+  );
+  readonly commissionsByProvider = computed<CommissionRow[]>(() => this.aggregateCommissions());
+
   readonly topByQuantity = computed<TopProductRow[]>(() =>
     this.aggregateProducts().sort((a, b) => b.quantity - a.quantity).slice(0, 10),
   );
@@ -169,7 +258,7 @@ export class PosReports {
 
   constructor() {
     this.loading.set(true);
-    this.cashSessionService.fetchCurrent().subscribe({
+    this.cashSessionService.refreshCurrent(this.auth.user()?.uid ?? '').subscribe({
       next: (session) => {
         this.sessionError.set(false);
         if (!session) {
@@ -197,7 +286,7 @@ export class PosReports {
        * pantalla muerta con el único alcance activo deshabilitado.
        */
       this.loading.set(true);
-      this.cashSessionService.fetchCurrent().subscribe({
+      this.cashSessionService.refreshCurrent(this.auth.user()?.uid ?? '').subscribe({
         next: (fresh) => {
           this.sessionError.set(false);
           if (!fresh) {
@@ -233,9 +322,18 @@ export class PosReports {
         ? { cashSessionId: session.id, includeVoided: true }
         : { from, includeVoided: true };
 
-    this.saleService.listAll(params).subscribe({
-      next: (sales) => {
+    // Mismo alcance para ventas y movimientos: mezclar los gastos del día con
+    // las ventas de un turno daría un "efectivo en cajón" que no cuadra con nada.
+    const movementScope =
+      this.scope() === 'session' && session ? { cashSessionId: session.id } : { from };
+
+    forkJoin({
+      sales: this.saleService.listAll(params),
+      movements: this.cashMovementService.listForScope(movementScope),
+    }).subscribe({
+      next: ({ sales, movements }) => {
         this.sales.set(sales);
+        this.movements.set(movements);
         this.generatedAt.set(new Date());
         this.loaded.set(true);
         this.loading.set(false);
@@ -245,6 +343,7 @@ export class PosReports {
         // El reporte anterior deja de ser válido: no dejarlo en pantalla como si lo fuera.
         this.loaded.set(false);
         this.sales.set([]);
+        this.movements.set([]);
         this.notifications.error('No se pudo cargar el reporte.');
       },
     });
@@ -254,10 +353,18 @@ export class PosReports {
     window.print();
   }
 
+  /**
+   * Top de medicamentos. **Solo la rama de producto**: agrupar ciego por id
+   * metía los servicios en el Top 10 de la farmacia y desplazaba productos
+   * reales. `kind` ausente = venta anterior a los servicios = producto.
+   */
   private aggregateProducts(): TopProductRow[] {
     const rows = new Map<string, TopProductRow>();
     for (const sale of this.validSales()) {
       for (const item of sale.items) {
+        if (!isSaleProductItem(item)) {
+          continue;
+        }
         const row = rows.get(item.productId) ?? {
           productId: item.productId,
           name: item.productName,
@@ -270,5 +377,52 @@ export class PosReports {
       }
     }
     return [...rows.values()];
+  }
+
+  /** Top de servicios, en su propia tabla: no compiten con los medicamentos. */
+  private aggregateServices(): TopProductRow[] {
+    const rows = new Map<string, TopProductRow>();
+    for (const sale of this.validSales()) {
+      for (const item of sale.items) {
+        if (isSaleProductItem(item)) {
+          continue;
+        }
+        const row = rows.get(item.serviceId) ?? {
+          productId: item.serviceId,
+          name: item.productName,
+          quantity: 0,
+          total: 0,
+        };
+        row.quantity += item.quantity;
+        row.total += item.subtotal - item.discountAmount;
+        rows.set(item.serviceId, row);
+      }
+    }
+    return [...rows.values()];
+  }
+
+  /** Comisiones devengadas por doctor: es la tabla con la que se paga. */
+  private aggregateCommissions(): CommissionRow[] {
+    const rows = new Map<string, CommissionRow>();
+    for (const sale of this.validSales()) {
+      for (const item of sale.items) {
+        if (isSaleProductItem(item) || !item.commissionAmount) {
+          continue;
+        }
+        const id = item.providerId ?? 'sin-doctor';
+        const row = rows.get(id) ?? {
+          providerId: id,
+          name: item.providerName ?? 'Sin doctor asignado',
+          count: 0,
+          baseAmount: 0,
+          commissionAmount: 0,
+        };
+        row.count += item.quantity;
+        row.baseAmount += item.subtotal - item.discountAmount;
+        row.commissionAmount += item.commissionAmount;
+        rows.set(id, row);
+      }
+    }
+    return [...rows.values()].sort((a, b) => b.commissionAmount - a.commissionAmount);
   }
 }

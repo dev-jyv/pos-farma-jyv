@@ -6,7 +6,7 @@ import { ButtonModule } from 'primeng/button';
 import { DialogModule } from 'primeng/dialog';
 import { InputTextModule } from 'primeng/inputtext';
 import { TableModule } from 'primeng/table';
-import { debounceTime, distinctUntilChanged, Subject, switchMap } from 'rxjs';
+import { debounceTime, Subject, switchMap } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { environment } from '../../../../environments/environment';
@@ -14,18 +14,38 @@ import { getApiErrorMessage } from '../../../core/api/api.utils';
 import { ScanSoundService } from '../../../core/audio/scan-sound.service';
 import { AuthService } from '../../../core/auth/auth.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
-import { CartLine, HeldSale, Product, ProductBatch, Sale as SaleModel } from '../../../shared/models';
+import {
+  CartLine,
+  CartServiceLine,
+  HeldSale,
+  PharmacyService,
+  ServiceProvider,
+  Product,
+  ProductBatch,
+  Sale as SaleModel,
+  SaleItem,
+  isSaleProductItem,
+} from '../../../shared/models';
+import {
+  isProductLine,
+  lineGross,
+  lineKey,
+  lineMaxQuantity,
+  lineName,
+  lineUnitPrice,
+} from '../../../shared/utils/cart-line';
 import { getControlledRule } from '../../../shared/utils/controlled';
 import { BatchService } from '../services/batch.service';
 import { CartStorageService } from '../services/cart-storage.service';
 import { CashSessionService } from '../services/cash-session.service';
 import { HeldSaleStorageService } from '../services/held-sale-storage.service';
 import { ProductService } from '../services/product.service';
+import { ServiceCatalogService } from '../services/service-catalog.service';
 import { PromoService } from '../services/promo.service';
 import { SaleService } from '../services/sale.service';
 import { Checkout } from '../checkout/checkout';
 import { CashSessionDialog } from '../cash-session/cash-session-dialog';
-import { CashMovementDialog } from '../cash-session/cash-movement-dialog';
+import { PerformerDialog } from './performer-dialog';
 import { TicketPrintService } from '../ticket/ticket-print.service';
 import { SubstitutesDialog } from './substitutes-dialog';
 
@@ -69,11 +89,13 @@ function isTypingTarget(target: EventTarget | null): boolean {
     TableModule,
     Checkout,
     CashSessionDialog,
-    CashMovementDialog,
+    PerformerDialog,
     SubstitutesDialog,
   ],
   templateUrl: './sale.html',
   host: {
+    '(document:keydown.alt.m)': 'onProductsTabHotkey($event)',
+    '(document:keydown.alt.s)': 'onServicesTabHotkey($event)',
     '(document:keydown.f2)': 'focusSearch($event)',
     '(document:keydown.f4)': 'focusLastQty($event)',
     '(document:keydown.f6)': 'holdSaleFromHotkey($event)',
@@ -86,6 +108,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 })
 export class Sale {
   private readonly productService = inject(ProductService);
+  private readonly serviceCatalog = inject(ServiceCatalogService);
   private readonly batchService = inject(BatchService);
   private readonly saleService = inject(SaleService);
   private readonly cashSessionService = inject(CashSessionService);
@@ -108,7 +131,6 @@ export class Sale {
   readonly manualDiscounts = signal<Record<string, number>>({});
   readonly checkoutVisible = signal(false);
   readonly cashSessionDialogVisible = signal(false);
-  readonly cashMovementDialogVisible = signal(false);
   readonly blockedDialogVisible = signal(false);
   readonly pendingDialogVisible = signal(false);
   readonly lastSale = signal<SaleModel | null>(null);
@@ -125,7 +147,7 @@ export class Sale {
   readonly blockedSales = this.saleService.blockedSales;
 
   readonly subtotal = computed(() =>
-    this.cart().reduce((sum, line) => sum + line.product.salePrice * line.quantity, 0),
+    this.cart().reduce((sum, line) => sum + lineUnitPrice(line) * line.quantity, 0),
   );
   readonly discountTotal = computed(() =>
     this.cart().reduce((sum, line) => sum + line.discountAmount, 0),
@@ -134,23 +156,56 @@ export class Sale {
   readonly itemCount = computed(() => this.cart().reduce((sum, line) => sum + line.quantity, 0));
   readonly lastLineId = computed(() => {
     const lines = this.cart();
-    return lines.length ? lines[lines.length - 1].product.id : null;
+    return lines.length ? lineKey(lines[lines.length - 1]) : null;
   });
+
+  /* ── Lectura de una línea desde la plantilla ──────────────────────────── */
+  // Expuestas como propiedades para que `sale.html` no tenga que ramificar por
+  // tipo de partida en cada celda.
+  /** Pestaña activa de la lista de resultados. */
+  readonly catalogTab = signal<'products' | 'services'>('products');
+  readonly serviceSearchTerm = signal('');
+  readonly serviceResults = computed(() =>
+    this.serviceCatalog.search(this.serviceSearchTerm()),
+  );
+  readonly hasServices = this.serviceCatalog.hasServices;
+  /** Servicio esperando a que se elija el doctor. */
+  private readonly pendingService = signal<{
+    service: PharmacyService;
+    quantity: number;
+    fromScanner: boolean;
+    replacingKey?: string;
+  } | null>(null);
+  readonly performerDialogVisible = signal(false);
+  readonly pendingServiceName = computed(() => this.pendingService()?.service.name ?? '');
+  /** Último doctor usado en el turno; se preselecciona en el diálogo. */
+  readonly lastProviderId = signal<string | null>(null);
+
+  readonly keyOf = lineKey;
+  readonly nameOf = lineName;
+  readonly unitPriceOf = lineUnitPrice;
+  readonly maxQuantityOf = lineMaxQuantity;
+  readonly grossOf = lineGross;
+  readonly isProduct = isProductLine;
   /**
-   * `queueId` de la última venta si aún no llegó al servidor. `enqueueOffline` embebe
-   * la llave de la cola en el id (`offline-<queueId>`), así que un id con ese prefijo
-   * significa a la vez "no sincronizada" y "esta es su entrada en la cola".
+   * Id local de la última venta si aún no sincronizó (`pendingPush`). Toda venta nace
+   * local-first, así que esto ya no depende de un prefijo en el id: es directo el
+   * flag que pone `SaleService.create()` al escribir en SQLite.
    */
   readonly lastSaleQueueId = computed(() => {
-    const id = this.lastSale()?.id ?? '';
-    return id.startsWith('offline-') ? id.slice('offline-'.length) : null;
+    const sale = this.lastSale();
+    return sale?.pendingPush ? sale.id : null;
   });
 
   constructor() {
     this.search$
       .pipe(
         debounceTime(500),
-        distinctUntilChanged(),
+        // Sin `distinctUntilChanged()` a propósito: con él, borrar a menos del
+        // mínimo y volver a teclear el MISMO término que antes (p. ej. "para" →
+        // "p" → "para") lo descartaba como duplicado y la búsqueda no volvía a
+        // dispararse — bug real encontrado en pruebas. El catálogo es local
+        // (SQLite vía IPC), así que repetir la consulta no cuesta nada.
         // El término vacío corta la cadena sin salir a la red (`ProductService`
         // lo resuelve con una lista vacía) y sirve para cancelar el pendiente.
         switchMap((term) => this.productService.search(term)),
@@ -158,8 +213,18 @@ export class Sale {
       )
       .subscribe((products) => this.results.set(products));
 
-    this.cashSessionService.fetchCurrent().subscribe(() => {
-      if (!this.cashSessionOpen()) {
+    // Catálogo de servicios y doctores: local, cacheado una vez por turno. Si la
+    // farmacia no tiene servicios, la pestaña ni aparece.
+    this.serviceCatalog.refresh().subscribe();
+
+    const uid = this.authService.user()?.uid ?? '';
+    this.cashSessionService.refreshCurrent(uid).subscribe(() => {
+      // Al cajero se le pide el turno de entrada: sin él no puede vender, y
+      // dejarlo pasar solo retrasa el descubrimiento hasta el primer cobro. El
+      // admin entra sin abrir caja —viene a consultar, mover efectivo o dar
+      // entrada de stock—; si va a vender, la barra le ofrece abrir turno y
+      // `ensureShiftOpen()` lo detiene igual.
+      if (!this.cashSessionOpen() && !this.isAdmin()) {
         this.cashSessionDialogVisible.set(true);
       }
       this.loadHeldSales();
@@ -208,10 +273,13 @@ export class Sale {
     return (
       this.checkoutVisible() ||
       this.cashSessionDialogVisible() ||
-      this.cashMovementDialogVisible() ||
       this.blockedDialogVisible() ||
       this.pendingDialogVisible() ||
-      this.substitutesVisible()
+      this.substitutesVisible() ||
+      // El selector de doctor también cuenta: se abre desde el escáner con el
+      // foco de vuelta en la búsqueda, y sin esto un `Esc` para cancelar la
+      // elección además vaciaba el ticket que se estaba cobrando.
+      this.performerDialogVisible()
     );
   }
 
@@ -327,12 +395,28 @@ export class Sale {
     this.productService.search(raw).subscribe((products) => {
       this.results.set(products);
       const normalized = raw.toLowerCase();
-      const scanned =
-        products.find(
-          (product) =>
-            product.sku?.toLowerCase() === normalized ||
-            product.barcode?.toLowerCase() === normalized,
-        ) ?? (products.length === 1 ? products[0] : null);
+      // Prioridad, en este orden y por una razón en cada paso:
+      // 1) coincidencia EXACTA de sku/código de barras: es lo que dispara el
+      //    escáner y no puede perder nunca contra nada;
+      // 2) coincidencia exacta del código de un servicio: si el cajero teclea
+      //    "CONS-01", quiso la consulta, aunque la búsqueda de medicamentos
+      //    haya devuelto por casualidad un único resultado difuso;
+      // 3) resultado único de la búsqueda de medicamentos.
+      const exacto = products.find(
+        (product) =>
+          product.sku?.toLowerCase() === normalized ||
+          product.barcode?.toLowerCase() === normalized,
+      );
+      if (!exacto) {
+        const service = this.serviceCatalog.findByCode(raw);
+        if (service) {
+          this.addServiceToCart(service, qty, true);
+          this.clearSearch();
+          queueMicrotask(() => this.searchInput()?.nativeElement.focus());
+          return;
+        }
+      }
+      const scanned = exacto ?? (products.length === 1 ? products[0] : null);
 
       if (!scanned) {
         this.sounds.error();
@@ -409,49 +493,178 @@ export class Sale {
       this.removeFromCart(productId);
       return;
     }
-    const line = this.cart().find((item) => item.product.id === productId);
+    const line = this.cart().find((item) => lineKey(item) === productId);
     if (!line) {
       return;
     }
-    if (quantity > line.product.stock) {
+    // Un servicio no tiene existencias que agotar: `lineMaxQuantity` devuelve
+    // `null` y la cantidad no se limita.
+    const max = lineMaxQuantity(line);
+    if (max !== null && quantity > max) {
       this.sounds.error();
       this.notifications.error('Cantidad supera el stock disponible.');
       return;
     }
     this.setCart(
-      this.cart().map((item) => (item.product.id === productId ? { ...item, quantity } : item)),
+      this.cart().map((item) => (lineKey(item) === productId ? { ...item, quantity } : item)),
     );
   }
 
+  /* ── Servicios ────────────────────────────────────────────────────────── */
+
+  /** `Alt+S` no debe abrir una pestaña que no existe si no hay servicios. */
+  onServicesTabHotkey(event: Event): void {
+    // Con un diálogo encima el atajo no es de esta pantalla: cambiar de pestaña
+    // detrás del modal mueve la lista que el cajero va a encontrar al cerrarlo.
+    if (this.dialogOpen || !this.hasServices()) {
+      return;
+    }
+    event.preventDefault();
+    this.catalogTab.set('services');
+  }
+
+  /** `Alt+M` vuelve a medicamentos, con el mismo candado de diálogo abierto. */
+  onProductsTabHotkey(event: Event): void {
+    if (this.dialogOpen) {
+      return;
+    }
+    event.preventDefault();
+    this.catalogTab.set('products');
+  }
+
+  /**
+   * Agrega un servicio al ticket. No pasa por `addToCart`: ese camino valida
+   * stock, pide lotes, aplica FEFO y avisa de caducidad, y ninguna de esas
+   * cuatro cosas existe en un servicio.
+   */
+  addServiceToCart(service: PharmacyService, quantity = 1, fromScanner = false): void {
+    if (!this.ensureShiftOpen()) {
+      return;
+    }
+    // Si exige doctor, se pregunta ANTES de que la partida entre al ticket: la
+    // comisión es parte de la partida y el corte la necesita atribuida.
+    if (service.requiresPerformer) {
+      this.pendingService.set({ service, quantity, fromScanner });
+      this.performerDialogVisible.set(true);
+      return;
+    }
+    this.commitServiceLine(service, null, quantity, fromScanner);
+  }
+
+  onPerformerChosen(provider: ServiceProvider): void {
+    const pendiente = this.pendingService();
+    this.performerDialogVisible.set(false);
+    this.pendingService.set(null);
+    if (!pendiente) {
+      return;
+    }
+    // Se recuerda para el resto del turno: lo normal es que sea el mismo doctor
+    // toda la jornada, y así el diálogo se resuelve con un Enter.
+    this.lastProviderId.set(provider.id);
+    this.commitServiceLine(
+      pendiente.service,
+      provider,
+      pendiente.quantity,
+      pendiente.fromScanner,
+      pendiente.replacingKey,
+    );
+  }
+
+  onPerformerDismissed(): void {
+    this.performerDialogVisible.set(false);
+    this.pendingService.set(null);
+  }
+
+  /** Reabre el selector para cambiar el doctor de una línea ya agregada. */
+  changeLineProvider(line: CartServiceLine): void {
+    this.pendingService.set({
+      service: line.service,
+      quantity: line.quantity,
+      fromScanner: false,
+      replacingKey: lineKey(line),
+    });
+    this.performerDialogVisible.set(true);
+  }
+
+  private commitServiceLine(
+    service: PharmacyService,
+    provider: ServiceProvider | null,
+    quantity: number,
+    fromScanner: boolean,
+    // Se recibe explícito y no se lee de `pendingService`: quien llama ya lo
+    // limpió, y leerlo de ahí dejaba la línea vieja en el ticket (partida
+    // duplicada al cambiar de doctor).
+    replacingKey?: string,
+  ): void {
+    const nueva: CartServiceLine = { kind: 'service', service, provider, quantity, discountAmount: 0 };
+    const reemplaza = replacingKey ?? null;
+    const clave = lineKey(nueva);
+
+    let lineas = this.cart();
+    if (reemplaza) {
+      // Cambiar de doctor cambia la identidad de la línea, así que se sustituye
+      // en su sitio en vez de mutarla.
+      lineas = lineas.filter((line) => lineKey(line) !== reemplaza);
+    }
+    const existente = lineas.find((line) => lineKey(line) === clave);
+    this.setCart(
+      existente
+        ? lineas.map((line) =>
+            lineKey(line) === clave ? { ...line, quantity: line.quantity + quantity } : line,
+          )
+        : [...lineas, nueva],
+    );
+    if (fromScanner) {
+      this.sounds.ok();
+    }
+  }
+
   bumpQuantity(productId: string, delta: number): void {
-    const line = this.cart().find((item) => item.product.id === productId);
+    const line = this.cart().find((item) => lineKey(item) === productId);
     if (!line) {
       return;
     }
     this.updateQuantity(productId, line.quantity + delta);
   }
 
-  updateLineDiscount(productId: string, rawAmount: number): void {
-    const line = this.cart().find((item) => item.product.id === productId);
+  /**
+   * El input de descuento es un binding no controlado (`[value]`, no
+   * `[ngModel]`) a propósito: cuando el valor final que se aplica coincide con
+   * el que ya tenía la línea (p. ej. un `-5` que se clampa de vuelta a `0`, o
+   * un intento >20% que se rechaza), Angular no vuelve a escribir el DOM
+   * porque el valor de `line.discountAmount` no cambió entre renders — el
+   * `<input>` se quedaba mostrando literalmente lo que el cajero tecleó en vez
+   * de lo que en verdad se cobra (bug real, encontrado en pruebas). Por eso
+   * aquí se reescribe `inputEl.value` a mano en cada rama, sin depender de que
+   * el binding detecte un cambio.
+   */
+  updateLineDiscount(productId: string, rawAmount: number, inputEl?: HTMLInputElement): void {
+    const line = this.cart().find((item) => lineKey(item) === productId);
     if (!line) {
       return;
     }
-    const lineTotal = line.product.salePrice * line.quantity;
+    const lineTotal = lineUnitPrice(line) * line.quantity;
     const promo = this.promoService.promoOnlyDiscount(line);
     const totalDiscount = Math.min(Math.max(0, rawAmount), lineTotal);
     const manual = Math.max(0, totalDiscount - promo);
     const percentage = lineTotal === 0 ? 0 : (totalDiscount / lineTotal) * 100;
     if (percentage > 20 && !this.isAdmin()) {
       this.notifications.error('Descuento mayor a 20% requiere autorización de un administrador.');
+      if (inputEl) {
+        inputEl.value = String(line.discountAmount);
+      }
       return;
     }
     this.manualDiscounts.update((map) => ({ ...map, [productId]: manual }));
     this.setCart(this.cart());
+    if (inputEl) {
+      inputEl.value = String(totalDiscount);
+    }
   }
 
   removeFromCart(productId: string): void {
-    const line = this.cart().find((item) => item.product.id === productId);
-    if (line && line.quantity > 5 && !window.confirm(`Quitar ${line.quantity} × ${line.product.name}?`)) {
+    const line = this.cart().find((item) => lineKey(item) === productId);
+    if (line && line.quantity > 5 && !window.confirm(`Quitar ${line.quantity} × ${lineName(line)}?`)) {
       return;
     }
     this.manualDiscounts.update((map) => {
@@ -459,7 +672,7 @@ export class Sale {
       delete next[productId];
       return next;
     });
-    this.setCart(this.cart().filter((item) => item.product.id !== productId));
+    this.setCart(this.cart().filter((item) => lineKey(item) !== productId));
   }
 
   holdSale(): void {
@@ -493,7 +706,7 @@ export class Sale {
     const manuals: Record<string, number> = {};
     for (const line of held.lines) {
       const promo = this.promoService.promoOnlyDiscount(line);
-      manuals[line.product.id] = Math.max(0, line.discountAmount - promo);
+      manuals[lineKey(line)] = Math.max(0, line.discountAmount - promo);
     }
     this.manualDiscounts.set(manuals);
     this.setCart(held.lines);
@@ -521,9 +734,6 @@ export class Sale {
 
   onSaleCompleted(sale: SaleModel): void {
     this.lastSale.set(sale);
-    // El stock que se acaba de descontar no debe volver a pintarse desde la
-    // caché de búsquedas: la siguiente consulta va al servidor.
-    this.productService.invalidate();
     this.cart.set([]);
     this.manualDiscounts.set({});
     this.checkoutVisible.set(false);
@@ -614,7 +824,7 @@ export class Sale {
     if (!sale || this.lastSaleQueueId()) {
       return;
     }
-    this.saleService.void(sale.id).subscribe({
+    this.saleService.void(sale).subscribe({
       next: (voided) => {
         this.lastSale.set(voided);
         this.adjustResultsStock(voided.items, 1);
@@ -626,16 +836,20 @@ export class Sale {
     });
   }
 
-  /** Ajusta el stock visible en la lista de búsqueda sin esperar otra consulta. */
-  private adjustResultsStock(
-    items: Array<{ productId: string; quantity: number }> | undefined,
-    sign: 1 | -1,
-  ): void {
+  /**
+   * Ajusta el stock visible en la lista de búsqueda sin esperar otra consulta.
+   * **Solo partidas de producto**: un servicio no tiene existencias, y recorrerlo
+   * aquí ensuciaría la cuadrícula del catálogo con deltas que no significan nada.
+   */
+  private adjustResultsStock(items: SaleItem[] | undefined, sign: 1 | -1): void {
     if (!items?.length) {
       return;
     }
     const deltas = new Map<string, number>();
     for (const item of items) {
+      if (!isSaleProductItem(item)) {
+        continue;
+      }
       deltas.set(item.productId, (deltas.get(item.productId) ?? 0) + item.quantity * sign);
     }
     this.results.update((list) =>
@@ -688,7 +902,9 @@ export class Sale {
       }
     }
 
-    const existing = this.cart().find((line) => line.product.id === product.id);
+    const existing = this.cart().find(
+      (line) => isProductLine(line) && line.product.id === product.id,
+    );
     const nextQty = (existing?.quantity ?? 0) + addQty;
     if (nextQty > sellableQty || nextQty > product.stock) {
       this.sounds.error();
@@ -696,11 +912,13 @@ export class Sale {
       return;
     }
 
-    const nextLines = existing
+    const nextLines: CartLine[] = existing
       ? this.cart().map((line) =>
-          line.product.id === product.id ? { ...line, quantity: nextQty } : line,
+          isProductLine(line) && line.product.id === product.id
+            ? { ...line, quantity: nextQty }
+            : line,
         )
-      : [...this.cart(), { product, quantity: addQty, discountAmount: 0 }];
+      : [...this.cart(), { kind: 'product', product, quantity: addQty, discountAmount: 0 }];
 
     this.setCart(nextLines);
     if (!existing) {

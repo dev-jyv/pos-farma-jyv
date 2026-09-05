@@ -5,6 +5,14 @@
   <title>FarmaJyvPos</title>
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!--
+    El POS no incrusta plugins ni marcos: negarlos quita de en medio los dos
+    vectores clásicos por los que un XSS se convierte en ejecución de código
+    ajeno dentro de la ventana con acceso al IPC de la caja. `script-src` y
+    `connect-src` faltan a propósito — atarlos requiere pasar antes el arranque
+    real contra Firebase y la API (ver reporte de auditoría).
+  -->
+  <meta http-equiv="Content-Security-Policy" content="object-src 'none'; frame-src 'none'">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
 </head>
 <body>

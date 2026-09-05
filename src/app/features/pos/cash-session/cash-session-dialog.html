@@ -1,9 +1,9 @@
 <p-dialog
   [visible]="visible()"
   [modal]="true"
-  [closable]="mode() !== 'open'"
-  [closeOnEscape]="mode() !== 'open'"
-  [dismissableMask]="mode() !== 'open'"
+  [closable]="canDismiss()"
+  [closeOnEscape]="canDismiss()"
+  [dismissableMask]="canDismiss()"
   [style]="{ width: mode() === 'open' ? '26rem' : '32rem' }"
   [closeAriaLabel]="'Cerrar'"
   (onHide)="cancel()"
@@ -43,42 +43,58 @@
     <p-inputnumber
       inputId="openingAmount"
       [ngModel]="openingAmount()"
-      (ngModelChange)="openingAmount.set($event ?? 0)"
+      (ngModelChange)="setOpeningAmount($event)"
       mode="currency"
       currency="MXN"
       locale="es-MX"
+      [min]="0"
       [minFractionDigits]="2"
       inputStyleClass="!text-xl !font-semibold !tabular-nums"
       styleClass="w-full"
     />
+    @if (cashOnHand() > 0) {
+      <p class="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
+        <i class="pi pi-info-circle"></i>
+        {{ 'cashCut.cashOnHandHint' | translate }}
+        <span class="font-semibold tabular-nums text-slate-700">${{ cashOnHand() | number: '1.2-2' }}</span>
+      </p>
+    }
   } @else {
     @if (summaryLoading()) {
       <p class="py-6 text-center text-sm text-slate-500">{{ 'cashCut.loading' | translate }}</p>
-    } @else if (preview(); as cut) {
+    } @else if (summary(); as sum) {
       <div class="mb-4 space-y-2 rounded-xl bg-slate-50 px-3 py-3 text-sm">
         <div class="flex justify-between text-slate-600">
           <span>{{ 'cashCut.sales' | translate }}</span>
-          <span class="font-semibold tabular-nums text-slate-900">{{ cut.summary.salesCount }}</span>
+          <span class="font-semibold tabular-nums text-slate-900">{{ sum.salesCount }}</span>
         </div>
         <div class="flex justify-between text-slate-600">
           <span>{{ 'cashCut.voided' | translate }}</span>
-          <span class="font-semibold tabular-nums text-slate-900">{{ cut.summary.voidedCount }}</span>
+          <span class="font-semibold tabular-nums text-slate-900">{{ sum.voidedCount }}</span>
+        </div>
+        <!-- Tarjeta en fila propia y prominente, no solo dentro del acordeón de métodos. -->
+        <div class="flex justify-between rounded-lg bg-blue-50 px-2 py-1.5 text-blue-900">
+          <span class="flex items-center gap-1.5 font-medium">
+            <i class="pi pi-credit-card"></i>
+            {{ ('payment.card') | translate }} ({{ sum.byMethod.card.count }})
+          </span>
+          <span class="font-bold tabular-nums">${{ sum.byMethod.card.total | number: '1.2-2' }}</span>
         </div>
         @for (method of methods; track method) {
-          @if (cut.summary.byMethod[method].count > 0) {
+          @if (method !== 'card' && sum.byMethod[method].count > 0) {
             <div class="flex justify-between text-slate-600">
-              <span>{{ ('payment.' + method) | translate }} ({{ cut.summary.byMethod[method].count }})</span>
+              <span>{{ ('payment.' + method) | translate }} ({{ sum.byMethod[method].count }})</span>
               <span class="font-semibold tabular-nums text-slate-900">
-                ${{ cut.summary.byMethod[method].total | number: '1.2-2' }}
+                ${{ sum.byMethod[method].total | number: '1.2-2' }}
               </span>
             </div>
           }
         }
         <div class="flex justify-between border-t border-slate-200 pt-2 font-semibold text-slate-900">
           <span>{{ 'cashCut.grandTotal' | translate }}</span>
-          <span class="tabular-nums">${{ cut.summary.grandTotal | number: '1.2-2' }}</span>
+          <span class="tabular-nums">${{ sum.grandTotal | number: '1.2-2' }}</span>
         </div>
-        @if (cut.summary.movements; as moves) {
+        @if (sum.movements; as moves) {
           @if (moves.deposits.count > 0) {
             <div class="flex justify-between text-slate-600">
               <span>{{ 'cashCut.deposits' | translate }} ({{ moves.deposits.count }})</span>
@@ -100,63 +116,155 @@
         }
       </div>
 
+      <!-- Bloque independiente de servicios: mismo orden de filas que farmacia
+           para que el ojo compare, con acento distinto para que se lea como
+           "otra caja" y no como una sección más. Solo si hubo actividad. -->
+      @if (sum.services; as servicios) {
+        <div class="mb-4 space-y-2 rounded-xl border border-sky-200 bg-sky-50/60 px-3 py-3 text-sm">
+          <div class="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-sky-900">
+            <i class="pi pi-briefcase"></i>
+            {{ 'cashCut.services.title' | translate }}
+          </div>
+          <div class="flex justify-between text-slate-600">
+            <span>{{ 'cashCut.services.count' | translate }}</span>
+            <span class="font-semibold tabular-nums text-slate-900">{{ servicios.count }}</span>
+          </div>
+          @if (servicios.voidedCount > 0) {
+            <div class="flex justify-between text-slate-600">
+              <span>{{ 'cashCut.services.voided' | translate }}</span>
+              <span class="font-semibold tabular-nums text-slate-900">{{ servicios.voidedCount }}</span>
+            </div>
+          }
+          @for (method of methods; track method) {
+            @if (servicios.byMethod[method].count > 0) {
+              <div class="flex justify-between text-slate-600">
+                <span>{{ ('payment.' + method) | translate }} ({{ servicios.byMethod[method].count }})</span>
+                <span class="font-semibold tabular-nums text-slate-900">
+                  ${{ servicios.byMethod[method].total | number: '1.2-2' }}
+                </span>
+              </div>
+            }
+          }
+          <div class="flex justify-between border-t border-sky-200 pt-2 font-semibold text-slate-900">
+            <span>{{ 'cashCut.services.total' | translate }}</span>
+            <span class="tabular-nums">${{ servicios.total | number: '1.2-2' }}</span>
+          </div>
+          @if (servicios.commissionTotal > 0) {
+            <div class="flex justify-between text-slate-600">
+              <span>
+                {{ 'cashCut.services.commissions' | translate }}
+                <!-- Aviso deliberado: si el pago de la comisión sale del cajón,
+                     ya aparece como retiro/gasto abajo. Contarlo dos veces es
+                     el error clásico de este corte. -->
+                <span class="block text-[11px] text-slate-500">
+                  {{ 'cashCut.services.commissionsHint' | translate }}
+                </span>
+              </span>
+              <span class="font-semibold tabular-nums text-slate-900">
+                ${{ servicios.commissionTotal | number: '1.2-2' }}
+              </span>
+            </div>
+          }
+        </div>
+      }
+
       <div class="mb-4 grid grid-cols-2 gap-2 text-sm">
         <div class="rounded-xl bg-slate-50 px-3 py-2">
           <div class="text-xs text-slate-500">{{ 'cashCut.openingFund' | translate }}</div>
           <div class="font-semibold tabular-nums">
-            ${{ (session()?.openingAmount ?? cut.session.openingAmount) | number: '1.2-2' }}
+            ${{ (sessionAtOpen()?.openingAmount ?? 0) | number: '1.2-2' }}
           </div>
         </div>
         <div class="rounded-xl bg-slate-50 px-3 py-2">
-          <div class="text-xs text-slate-500">{{ 'cashCut.expectedCash' | translate }}</div>
+          <div class="text-xs text-slate-500">
+            @if (expectedServicesCash() > 0) {
+              {{ 'cashCut.expectedCashPharmacy' | translate }}
+            } @else {
+              {{ 'cashCut.expectedCash' | translate }}
+            }
+          </div>
           <div class="font-semibold tabular-nums">${{ expectedCash() | number: '1.2-2' }}</div>
         </div>
       </div>
 
-      @if (mode() === 'close') {
-        <label for="countedCash" class="mb-1.5 block text-sm font-medium text-slate-700">{{ 'cashCut.countedCash' | translate }}</label>
-        <p-inputnumber
-          inputId="countedCash"
-          [ngModel]="countedCashAmount()"
-          (ngModelChange)="setCountedCash($event)"
-          mode="currency"
-          currency="MXN"
-          locale="es-MX"
-          [minFractionDigits]="2"
-          inputStyleClass="!text-xl !font-semibold !tabular-nums"
-          styleClass="w-full"
-        />
-        <div
-          class="mt-3 flex items-center justify-between rounded-xl px-3 py-3"
-          [class.bg-emerald-50]="difference() === 0"
-          [class.bg-amber-50]="difference() !== 0"
-        >
-          <span class="text-sm font-medium" [class.text-emerald-800]="difference() === 0" [class.text-amber-800]="difference() !== 0">
-            {{ 'cashCut.difference' | translate }}
-          </span>
-          <span
-            class="text-xl font-bold tabular-nums"
-            [class.text-emerald-700]="difference() === 0"
-            [class.text-amber-700]="difference() !== 0"
-          >
-            ${{ difference() | number: '1.2-2' }}
-          </span>
+      <!-- Con servicios, el cajero cuenta UN solo cajón: se le muestra de dónde
+           sale cada parte y contra qué total se mide su conteo. -->
+      @if (expectedServicesCash() > 0) {
+        <div class="mb-4 grid grid-cols-2 gap-2 text-sm">
+          <div class="rounded-xl bg-sky-50 px-3 py-2">
+            <div class="text-xs text-sky-900">{{ 'cashCut.services.expectedCash' | translate }}</div>
+            <div class="font-semibold tabular-nums">${{ expectedServicesCash() | number: '1.2-2' }}</div>
+          </div>
+          <div class="rounded-xl bg-slate-100 px-3 py-2">
+            <div class="text-xs font-medium text-slate-700">{{ 'cashCut.expectedCashTotal' | translate }}</div>
+            <div class="font-bold tabular-nums">${{ expectedTotalCash() | number: '1.2-2' }}</div>
+          </div>
         </div>
+      }
+
+      @if (mode() === 'close') {
+        @if (!confirmingDifference()) {
+          <label for="countedCash" class="mb-1.5 block text-sm font-medium text-slate-700">{{ 'cashCut.countedCash' | translate }}</label>
+          <p-inputnumber
+            inputId="countedCash"
+            [ngModel]="countedCashAmount()"
+            (ngModelChange)="setCountedCash($event)"
+            mode="currency"
+            currency="MXN"
+            locale="es-MX"
+            [min]="0"
+            [minFractionDigits]="2"
+            inputStyleClass="!text-xl !font-semibold !tabular-nums"
+            styleClass="w-full"
+          />
+          <div
+            class="mt-3 flex items-center justify-between rounded-xl px-3 py-3"
+            [class.bg-emerald-50]="difference() === 0"
+            [class.bg-amber-50]="difference() !== 0"
+          >
+            <span class="text-sm font-medium" [class.text-emerald-800]="difference() === 0" [class.text-amber-800]="difference() !== 0">
+              {{ 'cashCut.difference' | translate }}
+            </span>
+            <span
+              class="text-xl font-bold tabular-nums"
+              [class.text-emerald-700]="difference() === 0"
+              [class.text-amber-700]="difference() !== 0"
+            >
+              ${{ difference() | number: '1.2-2' }}
+            </span>
+          </div>
+        } @else {
+          <!-- Confirmación in-dialog de la diferencia: el cierre nunca queda
+               bloqueado, solo se confirma que quedará como ajuste pendiente
+               de revisión de un administrador. -->
+          <div class="rounded-xl border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+            <p class="font-semibold">{{ 'cashCut.adjustmentTitle' | translate }}</p>
+            <p class="mt-1">
+              {{ 'cashCut.adjustmentBody' | translate: { amount: (difference() | number: '1.2-2') } }}
+            </p>
+          </div>
+        }
       } @else if (closeResult(); as result) {
         <div class="grid grid-cols-2 gap-2 text-sm">
           <div class="rounded-xl bg-slate-50 px-3 py-2">
             <div class="text-xs text-slate-500">{{ 'cashCut.counted' | translate }}</div>
             <div class="font-semibold tabular-nums">
-              ${{ result.session.countedCashAmount | number: '1.2-2' }}
+              ${{ result.countedCashAmount | number: '1.2-2' }}
             </div>
           </div>
           <div class="rounded-xl bg-slate-50 px-3 py-2">
             <div class="text-xs text-slate-500">{{ 'cashCut.difference' | translate }}</div>
             <div class="font-semibold tabular-nums">
-              ${{ result.session.cashDifference | number: '1.2-2' }}
+              ${{ result.cashDifference | number: '1.2-2' }}
             </div>
           </div>
         </div>
+        @if (result.session.hasPendingAdjustment) {
+          <p class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+            <i class="pi pi-clock"></i>
+            {{ 'cashCut.pendingAdjustment' | translate }}
+          </p>
+        }
       }
     }
   }
@@ -164,19 +272,66 @@
   <ng-template #footer>
     <div class="flex w-full gap-2">
       @if (mode() === 'close') {
-        <p-button [label]="'common.cancel' | translate" severity="secondary" styleClass="flex-1" (onClick)="cancel()" />
-        <p-button
-          [label]="'cashCut.close' | translate"
-          styleClass="flex-[1.4]"
-          [loading]="submitting()"
-          [disabled]="!countedTouched()"
-          (onClick)="requestClose()"
-        />
+        @if (!confirmingDifference()) {
+          <p-button
+            data-testid="cut-cancel"
+            [label]="'common.cancel' | translate"
+            severity="secondary"
+            styleClass="flex-1"
+            (onClick)="cancel()"
+          />
+          <p-button
+            data-testid="cut-close"
+            [label]="'cashCut.close' | translate"
+            styleClass="flex-[1.4]"
+            [loading]="submitting()"
+            (onClick)="requestClose()"
+          />
+        } @else {
+          <p-button
+            data-testid="cut-recount"
+            [label]="'cashCut.recount' | translate"
+            severity="secondary"
+            styleClass="flex-1"
+            (onClick)="cancelDifferenceConfirm()"
+          />
+          <p-button
+            data-testid="cut-confirm-adjustment"
+            [label]="'cashCut.confirmAdjustmentClose' | translate"
+            severity="warn"
+            styleClass="flex-[1.4]"
+            [loading]="submitting()"
+            (onClick)="confirmClose()"
+          />
+        }
       } @else if (mode() === 'open') {
-        <p-button [label]="'cashCut.open' | translate" styleClass="w-full" [loading]="submitting()" (onClick)="confirmOpen()" />
+        @if (canDismiss()) {
+          <p-button
+            data-testid="cut-open-later"
+            [label]="'cashCut.openLater' | translate"
+            severity="secondary"
+            [outlined]="true"
+            styleClass="flex-1"
+            (onClick)="cancel()"
+          />
+        }
+        <p-button
+          data-testid="cut-open"
+          [label]="'cashCut.open' | translate"
+          [styleClass]="canDismiss() ? 'flex-1' : 'w-full'"
+          [loading]="submitting()"
+          (onClick)="confirmOpen()"
+        />
       } @else {
-        <p-button [label]="'cashCut.print' | translate" icon="pi pi-print" severity="secondary" styleClass="flex-1" (onClick)="printCut()" />
-        <p-button [label]="'cashCut.done' | translate" styleClass="flex-1" (onClick)="finish()" />
+        <p-button
+          data-testid="cut-print"
+          [label]="'cashCut.print' | translate"
+          icon="pi pi-print"
+          severity="secondary"
+          styleClass="flex-1"
+          (onClick)="printCut()"
+        />
+        <p-button data-testid="cut-done" [label]="'cashCut.done' | translate" styleClass="flex-1" (onClick)="finish()" />
       }
     </div>
   </ng-template>

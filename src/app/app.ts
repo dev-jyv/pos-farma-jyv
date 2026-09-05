@@ -1,6 +1,8 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { ToastModule } from 'primeng/toast';
+
+import { SyncScheduler } from './core/sync/sync-scheduler.service';
 
 @Component({
   selector: 'app-root',
@@ -11,4 +13,10 @@ import { ToastModule } from 'primeng/toast';
     <p-toast position="top-right" />
   `,
 })
-export class App {}
+export class App {
+  private readonly syncScheduler = inject(SyncScheduler);
+
+  constructor() {
+    this.syncScheduler.start();
+  }
+}

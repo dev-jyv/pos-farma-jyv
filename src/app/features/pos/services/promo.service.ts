@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 
-import { CartLine } from '../../../shared/models';
+import { CartLine, CartProductLine } from '../../../shared/models';
+import { isProductLine, lineKey, lineUnitPrice } from '../../../shared/utils/cart-line';
 import { environment } from '../../../../environments/environment';
 
 export type PromoRule =
@@ -21,12 +22,17 @@ export type PromoRule =
 
 @Injectable({ providedIn: 'root' })
 export class PromoService {
-  apply(lines: CartLine[], manualByProductId: Record<string, number> = {}): CartLine[] {
+  /**
+   * `manualByKey` se indexa por `lineKey`, no por id de producto: dos líneas de
+   * servicio del mismo tipo pueden convivir en el ticket (una por doctor) y
+   * necesitan descuentos independientes.
+   */
+  apply(lines: CartLine[], manualByKey: Record<string, number> = {}): CartLine[] {
     const rules = (environment.promos ?? []) as PromoRule[];
     return lines.map((line) => {
       const promoDiscount = this.promoDiscountForLine(line, rules);
-      const manual = Math.max(0, manualByProductId[line.product.id] ?? 0);
-      const lineTotal = line.product.salePrice * line.quantity;
+      const manual = Math.max(0, manualByKey[lineKey(line)] ?? 0);
+      const lineTotal = lineUnitPrice(line) * line.quantity;
       return {
         ...line,
         discountAmount: Math.min(lineTotal, promoDiscount + manual),
@@ -39,6 +45,12 @@ export class PromoService {
   }
 
   private promoDiscountForLine(line: CartLine, rules: PromoRule[]): number {
+    // Las promociones son del catálogo de farmacia. Una regla sin filtros
+    // aplica "a todo" (ver `matches`), y sin este corte una promo 2x1 general
+    // regalaría consultas médicas.
+    if (!isProductLine(line)) {
+      return 0;
+    }
     let best = 0;
     for (const rule of rules) {
       if (!this.matches(line, rule)) {
@@ -60,7 +72,7 @@ export class PromoService {
     return Math.round(best * 100) / 100;
   }
 
-  private matches(line: CartLine, rule: PromoRule): boolean {
+  private matches(line: CartProductLine, rule: PromoRule): boolean {
     const { skus, productIds } = rule;
     if ((!skus || skus.length === 0) && (!productIds || productIds.length === 0)) {
       return true;

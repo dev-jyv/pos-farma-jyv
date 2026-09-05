@@ -55,9 +55,23 @@
       <span>{{ openingAmount() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
     </div>
     <div class="row">
-      <span>Efectivo esperado</span>
+      <!-- Con servicios hay que rotularlo: si no, el Z no cuadra contra el
+           conteo, porque este esperado es solo el de farmacia. -->
+      <span>{{ summary().services ? 'Efectivo esperado (farmacia)' : 'Efectivo esperado' }}</span>
       <span>{{ expectedCashAmount() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
     </div>
+    @if (summary().services; as servicios) {
+      <div class="row">
+        <span>Efectivo esperado (servicios)</span>
+        <span>{{ servicios.cashInDrawer | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+      <div class="row total">
+        <span>Efectivo esperado (total)</span>
+        <span>
+          {{ expectedCashAmount() + servicios.cashInDrawer | currency: 'MXN':'symbol-narrow':'1.2-2' }}
+        </span>
+      </div>
+    }
     <div class="row">
       <span>Efectivo contado</span>
       <span>{{ countedCashAmount() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
@@ -67,4 +81,40 @@
       <span>{{ cashDifference() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
     </div>
   </div>
+
+  <!-- Bloque aparte, sin tocar el orden del de farmacia: el corte impreso es lo
+       que el dueño coteja a mano y reordenarlo confunde. -->
+  @if (summary().services; as servicios) {
+    <div class="ticket-totals">
+      <p class="title">SERVICIOS</p>
+      <div class="row">
+        <span>Servicios</span>
+        <span>{{ servicios.count }}</span>
+      </div>
+      @if (servicios.voidedCount > 0) {
+        <div class="row">
+          <span>Anulados</span>
+          <span>{{ servicios.voidedCount }}</span>
+        </div>
+      }
+      @for (method of methods; track method.key) {
+        @if (servicios.byMethod[method.key].count > 0) {
+          <div class="row">
+            <span>{{ method.label }} ({{ servicios.byMethod[method.key].count }})</span>
+            <span>{{ servicios.byMethod[method.key].total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+          </div>
+        }
+      }
+      <div class="row total">
+        <span>Total servicios</span>
+        <span>{{ servicios.total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+      @if (servicios.commissionTotal > 0) {
+        <div class="row">
+          <span>Comisiones generadas</span>
+          <span>{{ servicios.commissionTotal | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+        </div>
+      }
+    </div>
+  }
 </div>

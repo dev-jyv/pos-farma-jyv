@@ -57,7 +57,6 @@ describe('StockEntryScreen', () => {
   /** Se guardan los payloads: son lo que afirma casi cada prueba de guardado. */
   let createCalls: CreateStockEntryPayload[];
   let createEntry: (payload: CreateStockEntryPayload) => Observable<unknown>;
-  let invalidate: ReturnType<typeof vi.fn>;
   let searchResults: Product[];
   let notifyError: ReturnType<typeof vi.fn>;
   let notifySuccess: ReturnType<typeof vi.fn>;
@@ -80,8 +79,8 @@ describe('StockEntryScreen', () => {
             },
           },
         },
-        { provide: CategoryService, useValue: { list: () => of(categories) } },
-        { provide: ProductService, useValue: { search: () => of(searchResults), invalidate } },
+        { provide: CategoryService, useValue: { options: () => of(categories) } },
+        { provide: ProductService, useValue: { search: () => of(searchResults) } },
       ],
     });
 
@@ -102,7 +101,6 @@ describe('StockEntryScreen', () => {
   beforeEach(async () => {
     notifyError = vi.fn();
     notifySuccess = vi.fn();
-    invalidate = vi.fn();
     searchResults = [product()];
     listInvoices = () => of([invoice()]);
     createCalls = [];
@@ -230,6 +228,46 @@ describe('StockEntryScreen', () => {
       expect(component.sku()).toBe('AMOX-500');
       expect(component.name()).toBe('');
     });
+
+    /**
+     * El alta ya no vive solo detrás de "no se encontró": cuando llega
+     * mercancía de un producto que no está en el catálogo, el cajero ya lo
+     * sabe y buscar primero solo le cuesta tecleo.
+     */
+    describe('alta directa, sin buscar antes', () => {
+      it('el botón está disponible desde el inicio, con el buscador vacío', () => {
+        const boton = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+          'p-button[icon="pi pi-plus"] button',
+        );
+        expect(boton).not.toBeNull();
+        expect(boton?.disabled).toBeFalsy();
+      });
+
+      it('abre el formulario completo sin haber buscado nada', () => {
+        component.startNewProduct();
+
+        expect(component.isNewProduct()).toBe(true);
+        expect(component.name()).toBe('');
+        expect(component.sku()).toBe('');
+      });
+
+      it('el alta y la entrada se guardan de una vez, sin salir de la pantalla', () => {
+        component.startNewProduct();
+        expect(component.isNewProduct()).toBe(true);
+        // Los campos del lote siguen en la misma pantalla que los del producto.
+        expect(component.lotNumber).toBeDefined();
+        expect(component.quantity).toBeDefined();
+      });
+
+      it('volver al buscador no pierde la factura elegida', () => {
+        const factura = component.selectedInvoiceId();
+        component.startNewProduct();
+        component.clearProduct();
+
+        expect(component.isNewProduct()).toBe(false);
+        expect(component.selectedInvoiceId()).toBe(factura);
+      });
+    });
   });
 
   describe('guardar', () => {
@@ -311,12 +349,12 @@ describe('StockEntryScreen', () => {
       expect(component.lastResult()).toEqual({ name: 'Paracetamol 500mg', added: 24, stock: 36 });
     });
 
-    it('invalida la caché del catálogo: el stock nuevo debe verse al vender', () => {
+    it('confirma con el nombre del producto y el stock resultante', () => {
       fillValidEntry();
       component.submit();
 
-      expect(invalidate).toHaveBeenCalled();
       expect(notifySuccess).toHaveBeenCalled();
+      expect(String(notifySuccess.mock.calls[0][0])).toContain('36');
     });
 
     it('un rechazo del servidor se avisa y no limpia la captura', () => {

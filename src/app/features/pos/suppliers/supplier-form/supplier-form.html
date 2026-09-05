@@ -1,0 +1,76 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 items-center gap-3 border-b border-[var(--pos-border)] px-4 py-3">
+    <p-button icon="pi pi-arrow-left" [text]="true" (onClick)="cancel()" [ariaLabel]="'suppliers.cancel' | translate" />
+    <h1 class="text-lg font-bold text-slate-900">
+      {{ (editingId() ? 'suppliers.editTitle' : 'suppliers.newTitle') | translate }}
+    </h1>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-4">
+    @if (loading()) {
+      <div class="flex justify-center py-10">
+        <p-progress-spinner styleClass="!h-8 !w-8" strokeWidth="6" />
+      </div>
+    } @else {
+      <form [formGroup]="form" (ngSubmit)="save()" class="flex max-w-md flex-col gap-4">
+        <div class="flex flex-col gap-1">
+          <label for="supplier-name" class="text-sm font-medium text-slate-700">{{ 'suppliers.name' | translate }}</label>
+          <input pInputText id="supplier-name" formControlName="name" autocomplete="off" maxlength="120" />
+          @if (form.controls.name.invalid && form.controls.name.touched) {
+            <span class="text-xs text-red-600">{{ 'suppliers.nameRequired' | translate }}</span>
+          }
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label for="supplier-contact" class="text-sm font-medium text-slate-700">{{ 'suppliers.contact' | translate }}</label>
+          <input pInputText id="supplier-contact" formControlName="contactName" autocomplete="off" maxlength="120" />
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label for="supplier-email" class="text-sm font-medium text-slate-700">{{ 'suppliers.email' | translate }}</label>
+          <input pInputText id="supplier-email" type="email" formControlName="email" autocomplete="off" />
+          @if (form.controls.email.invalid && form.controls.email.touched) {
+            <span class="text-xs text-red-600">{{ 'suppliers.emailInvalid' | translate }}</span>
+          }
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label for="supplier-phone" class="text-sm font-medium text-slate-700">{{ 'suppliers.phone' | translate }}</label>
+          <input pInputText id="supplier-phone" formControlName="phone" autocomplete="off" />
+          @if (form.controls.phone.invalid && form.controls.phone.touched) {
+            <span class="text-xs text-red-600">{{ 'suppliers.phoneInvalid' | translate }}</span>
+          }
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label for="supplier-address" class="text-sm font-medium text-slate-700">{{ 'suppliers.address' | translate }}</label>
+          <input pInputText id="supplier-address" formControlName="address" autocomplete="off" maxlength="300" />
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label for="supplier-notes" class="text-sm font-medium text-slate-700">{{ 'suppliers.notes' | translate }}</label>
+          <input pInputText id="supplier-notes" formControlName="notes" autocomplete="off" maxlength="500" />
+        </div>
+
+        @if (editingId()) {
+          <div class="flex items-center gap-2">
+            <p-checkbox formControlName="isActive" [binary]="true" inputId="supplier-active" />
+            <label for="supplier-active" class="text-sm text-slate-700">{{ 'suppliers.active' | translate }}</label>
+          </div>
+        }
+
+        <div class="mt-2 flex gap-2">
+          <p-button
+            type="button"
+            [label]="'suppliers.cancel' | translate"
+            severity="secondary"
+            [outlined]="true"
+            styleClass="flex-1"
+            (onClick)="cancel()"
+          />
+          <p-button type="submit" [label]="'suppliers.save' | translate" styleClass="flex-1" [loading]="saving()" />
+        </div>
+      </form>
+    }
+  </div>
+</div>

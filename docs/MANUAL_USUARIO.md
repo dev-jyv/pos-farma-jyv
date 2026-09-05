@@ -302,15 +302,25 @@ Al guardar, la factura **se queda seleccionada**: una factura suele traer varios
 
 ---
 
-## 7. Movimientos de caja (solo administradores)
+## 7. Efectivo de farmacia (solo administradores)
 
-Botón **Movimiento de caja** en la barra de arriba. Sirve para dejar registrado el efectivo que entra o sale sin ser una venta:
+Menú **Más › Efectivo de farmacia**. Sirve para dejar registrado el efectivo que entra o sale sin ser una venta:
 
-- **Depósito / fondo** — se agrega efectivo a la caja.
-- **Retiro** — se saca efectivo (por ejemplo, a la caja fuerte).
-- **Gasto** — se paga algo desde la caja.
+- **Entrada de efectivo** — se agrega efectivo (por ejemplo, se repone el fondo).
+- **Salida de efectivo** — se saca efectivo (por ejemplo, a la caja fuerte o al banco).
 
-Monto y motivo son obligatorios. Todo aparece en el corte al cerrar el turno.
+Monto y motivo son obligatorios: un movimiento sin causa no se puede auditar después.
+
+### Con turno abierto o sin él
+
+La pantalla avisa arriba del formulario cuál de los dos casos aplica:
+
+- **Hay un turno abierto** — el movimiento se aplica a ese turno y **cambia su efectivo esperado**. Es lo correcto: el cajero va a contar físicamente ese mismo dinero, y si el movimiento no se registrara ahí, cerraría con un faltante sin explicación.
+- **No hay turno abierto** — el movimiento queda en la caja de la farmacia y **no entra a ningún corte**.
+
+La pantalla muestra además el **saldo** (entradas menos salidas) y los últimos movimientos con quién los registró. Ese saldo es el de **este equipo**; para ver todas las cajas usa **Auditoría de gastos**.
+
+Los **gastos** (con categoría: sueldo, renta, luz…) siguen capturándose en **Gastos**, que sí exige turno abierto y lo puede usar cualquier cajero.
 
 ---
 

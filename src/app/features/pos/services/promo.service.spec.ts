@@ -15,7 +15,7 @@ function product(overrides: Partial<Product> = {}): Product {
 }
 
 function line(quantity: number, overrides: Partial<Product> = {}): CartLine {
-  return { product: { ...product(), ...overrides }, quantity, discountAmount: 0 };
+  return { kind: 'product', product: { ...product(), ...overrides }, quantity, discountAmount: 0 };
 }
 
 function withPromos<T>(rules: PromoRule[], run: () => T): T {
@@ -37,7 +37,7 @@ describe('PromoService', () => {
 
   it('sin promociones el descuento es solo el manual', () => {
     withPromos([], () => {
-      const [result] = service.apply([line(2)], { p1: 30 });
+      const [result] = service.apply([line(2)], { 'product:p1': 30 });
       expect(result.discountAmount).toBe(30);
     });
   });
@@ -88,14 +88,14 @@ describe('PromoService', () => {
 
   it('el descuento nunca supera el importe de la partida: regalar de más descuadra la caja', () => {
     withPromos([{ type: 'percent', percent: 80, minQty: 1 }], () => {
-      const [result] = service.apply([line(1)], { p1: 500 });
+      const [result] = service.apply([line(1)], { 'product:p1': 500 });
       expect(result.discountAmount).toBe(100);
     });
   });
 
   it('ignora un descuento manual negativo', () => {
     withPromos([], () => {
-      expect(service.apply([line(1)], { p1: -20 })[0].discountAmount).toBe(0);
+      expect(service.apply([line(1)], { 'product:p1': -20 })[0].discountAmount).toBe(0);
     });
   });
 

@@ -1,16 +1,17 @@
 import { Injectable } from '@angular/core';
 
-import { CartLine, HeldSale, Product } from '../../../shared/models';
+import { CartLine, HeldSale } from '../../../shared/models';
+import { normalizeStoredLine } from '../../../shared/utils/cart-line';
 
 interface HeldSaleDto {
   id: string;
   label: string;
   heldAt: string;
-  lines: Array<{
-    product: Product;
-    quantity: number;
-    discountAmount: number;
-  }>;
+  /**
+   * Se guardan crudas. Una venta puesta en pausa ANTES de los servicios no trae
+   * `kind` en sus líneas; `normalizeStoredLine` lo rellena al retomarla.
+   */
+  lines: unknown[];
 }
 
 @Injectable({ providedIn: 'root' })
@@ -36,11 +37,9 @@ export class HeldSaleStorageService {
         id: item.id,
         label: item.label,
         heldAt: new Date(item.heldAt),
-        lines: item.lines.map((line) => ({
-          product: line.product,
-          quantity: line.quantity,
-          discountAmount: line.discountAmount,
-        })) as CartLine[],
+        lines: item.lines
+          .map((line) => normalizeStoredLine(line))
+          .filter((line): line is CartLine => line !== null),
       }));
     } catch {
       localStorage.removeItem(this.key(uid));
@@ -56,11 +55,7 @@ export class HeldSaleStorageService {
       id: item.id,
       label: item.label,
       heldAt: item.heldAt.toISOString(),
-      lines: item.lines.map((line) => ({
-        product: line.product,
-        quantity: line.quantity,
-        discountAmount: line.discountAmount,
-      })),
+      lines: item.lines,
     }));
     localStorage.setItem(this.key(uid), JSON.stringify(payload));
   }

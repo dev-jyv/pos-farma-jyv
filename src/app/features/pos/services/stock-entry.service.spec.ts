@@ -1,7 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
 import { PurchaseInvoice } from '../../../shared/models';
@@ -12,8 +12,36 @@ const BASE = `${environment.apiUrl}/stock-entries`;
 describe('StockEntryService', () => {
   let service: StockEntryService;
   let http: HttpTestingController;
+  let recordStockEntry: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    recordStockEntry = vi.fn().mockResolvedValue({ product: { id: 'p1' }, stock: 0 });
+    window.electronAPI = {
+      getAppVersion: vi.fn(),
+      getDeviceInfo: vi.fn(),
+      openCashDrawer: vi.fn(),
+      catalog: {
+        search: vi.fn(),
+        getByBarcode: vi.fn(),
+        recordStockEntry,
+        upsertMany: vi.fn(),
+        getPendingStockEntries: vi.fn(),
+        markStockEntrySynced: vi.fn(),
+        markStockEntryPushFailed: vi.fn(),
+      },
+      sales: {
+        createLocal: vi.fn(),
+        list: vi.fn(),
+        getPendingPush: vi.fn(),
+        markSynced: vi.fn(),
+        markPushFailed: vi.fn(),
+        voidLocal: vi.fn(),
+        clearPushError: vi.fn(),
+        discard: vi.fn(),
+      },
+      sync: { getStatus: vi.fn(), recordRun: vi.fn() },
+    } as unknown as Window['electronAPI'];
+
     TestBed.configureTestingModule({
       providers: [provideHttpClient(), provideHttpClientTesting()],
     });
@@ -68,38 +96,28 @@ describe('StockEntryService', () => {
   });
 
   describe('registrar la entrada', () => {
-    it('manda la partida contra la factura', () => {
-      service
-        .create({
-          invoiceId: 'inv-1',
-          lotNumber: 'L-1',
-          expiryDate: '2027-01-31',
-          quantity: 24,
-          productId: 'p1',
-        })
-        .subscribe();
-
-      const request = http.expectOne(BASE);
-      expect(request.request.method).toBe('POST');
-      expect(request.request.body).toEqual({
+    it('escribe local de inmediato con el mismo payload que se reenviará', () => {
+      const payload = {
         invoiceId: 'inv-1',
         lotNumber: 'L-1',
         expiryDate: '2027-01-31',
         quantity: 24,
         productId: 'p1',
-      });
-      request.flush({ data: { product: { id: 'p1', name: 'Paracetamol' }, stock: 36 } });
+      };
+      service.create(payload).subscribe();
+
+      expect(recordStockEntry).toHaveBeenCalledWith(payload);
+      http.expectNone(BASE);
     });
 
-    it('devuelve el stock resultante', () => {
+    it('devuelve el stock resultante que reporta el proceso main', () => {
+      recordStockEntry.mockResolvedValue({ product: { id: 'p1' }, stock: 46 });
       let stock = 0;
       service
         .create({ invoiceId: 'inv-1', lotNumber: 'L-1', expiryDate: '2027-01-31', quantity: 10, productId: 'p1' })
         .subscribe((result) => (stock = result.stock));
 
-      http.expectOne(BASE).flush({ data: { product: { id: 'p1' }, stock: 46 } });
-
-      expect(stock).toBe(46);
+      return Promise.resolve().then(() => expect(stock).toBe(46));
     });
   });
 });

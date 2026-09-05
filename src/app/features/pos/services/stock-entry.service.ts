@@ -1,30 +1,13 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable, map } from 'rxjs';
+import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, firstValueFrom, from, map } from 'rxjs';
+import { HttpErrorResponse } from '@angular/common/http';
 
-import { toDate, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
-import { ControlledGroup, Product, PurchaseInvoice } from '../../../shared/models';
+import { getApiErrorMessage, toDate, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
+import { Product, ProductFieldsPayload, PurchaseInvoice } from '../../../shared/models';
 import { environment } from '../../../../environments/environment';
 
-/** Campos del producto tal como los acepta el catálogo del backend. */
-export interface ProductFieldsPayload {
-  name: string;
-  sku: string;
-  categoryId: string;
-  unit: string;
-  salePrice: number;
-  minStock: number;
-  hasIva: boolean;
-  hasIvaZero: boolean;
-  hasIeps: boolean;
-  barcode?: string;
-  activeIngredient?: string;
-  concentration?: string;
-  /** Fracción, no porcentaje: 0.08 es 8 %. La pantalla captura el porcentaje. */
-  iepsRate?: number;
-  controlledGroup?: ControlledGroup;
-  requiresPrescription?: boolean;
-}
+export type { ProductFieldsPayload };
 
 export interface CreateStockEntryPayload {
   invoiceId: string;
@@ -70,15 +53,18 @@ function mapInvoice(dto: InvoiceDto): PurchaseInvoice {
 }
 
 /**
- * Entrada de stock desde la caja (`/stock-entries`). Pega contra el módulo
- * propio del backend y no contra `/inventory/*`: recibir mercancía es una
- * atribución del mostrador, mientras que conteos, salidas y libro de control
- * siguen siendo del panel.
+ * Entrada de stock desde la caja: local-first. `create()` escribe producto y
+ * lote en el SQLite de Electron de inmediato (`electron/db/products.js`,
+ * `recordStockEntry`) y el resultado se ve al instante; el `POST
+ * /stock-entries` real (con `invoiceId`, que sigue viniendo de
+ * `listRecentInvoices` en línea) se manda en el próximo sync (`flushQueue`).
  */
 @Injectable({ providedIn: 'root' })
 export class StockEntryService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = environment.apiUrl;
+
+  private flushing = false;
 
   /** Últimas facturas registradas, de la más reciente a la más vieja. */
   listRecentInvoices(limit = 10): Observable<PurchaseInvoice[]> {
@@ -89,8 +75,73 @@ export class StockEntryService {
   }
 
   create(payload: CreateStockEntryPayload): Observable<StockEntryResult> {
-    return this.http
-      .post<unknown>(`${this.apiUrl}/stock-entries`, payload)
-      .pipe(map((response) => unwrapEntity<StockEntryResult>(response)));
+    return from(this.api().recordStockEntry(payload));
+  }
+
+  /**
+   * Envía a `POST /stock-entries` los altas/lotes locales pendientes, en orden
+   * de captura. Igual que `SaleService.flushQueue`: un 4xx se marca y deja de
+   * reintentarse solo; lo demás (red) se reintenta en el próximo sync.
+   */
+  flushQueue(): void {
+    this.flush$().subscribe();
+  }
+
+  /**
+   * Igual que `flushQueue()`, pero esperable: `SyncScheduler` encadena catálogo
+   * → entradas → ventas, porque una venta que consumió mercancía recién
+   * recibida necesita que su entrada haya subido antes.
+   */
+  flushQueueAsync(): Promise<void> {
+    return firstValueFrom(this.flush$().pipe(defaultIfEmpty(null))).then(() => undefined);
+  }
+
+  private flush$(): Observable<unknown> {
+    if (this.flushing) {
+      return EMPTY;
+    }
+    this.flushing = true;
+    return from(this.api().getPendingStockEntries())
+      .pipe(
+        concatMap((pending) => from(pending)),
+        concatMap((item) =>
+          this.http.post<unknown>(`${this.apiUrl}/stock-entries`, item.payload).pipe(
+            concatMap((response) => {
+              const result = unwrapEntity<StockEntryResult>(response);
+              return from(this.api().markStockEntrySynced(item.id, result.product?.id ?? null));
+            }),
+            catchError((error: unknown) => {
+              if (this.isPermanentFailure(error)) {
+                return from(this.api().markStockEntryPushFailed(item.id, getApiErrorMessage(error)));
+              }
+              return EMPTY;
+            }),
+          ),
+        ),
+        finalize(() => {
+          this.flushing = false;
+        }),
+      );
+  }
+
+  private isPermanentFailure(error: unknown): boolean {
+    if (!(error instanceof HttpErrorResponse)) {
+      return false;
+    }
+    return (
+      error.status >= 400 &&
+      error.status < 500 &&
+      error.status !== 401 &&
+      error.status !== 408 &&
+      error.status !== 429
+    );
+  }
+
+  private api() {
+    const api = window.electronAPI;
+    if (!api) {
+      throw new Error('electronAPI no disponible: el alta de stock requiere correr dentro de Electron.');
+    }
+    return api.catalog;
   }
 }

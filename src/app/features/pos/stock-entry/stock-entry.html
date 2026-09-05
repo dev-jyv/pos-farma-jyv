@@ -75,17 +75,30 @@
             <label for="stock-entry-search" class="mb-1 block text-sm font-medium text-slate-700">
               {{ 'stockEntry.search' | translate }}
             </label>
-            <input
-              pInputText
-              id="stock-entry-search"
-              name="stockEntrySearch"
-              type="search"
-              autocomplete="off"
-              class="w-full"
-              [ngModel]="searchTerm()"
-              (ngModelChange)="onSearchChange($event)"
-              [placeholder]="'stockEntry.searchPlaceholder' | translate"
-            />
+            <!-- El alta no se esconde detrás de "no se encontró": cuando llega
+                 mercancía de un producto que no está en el catálogo, el cajero
+                 ya lo sabe y buscar primero solo le cuesta tecleo. -->
+            <div class="flex flex-wrap items-start gap-2">
+              <input
+                pInputText
+                id="stock-entry-search"
+                name="stockEntrySearch"
+                type="search"
+                autocomplete="off"
+                class="min-w-[14rem] flex-1"
+                [ngModel]="searchTerm()"
+                (ngModelChange)="onSearchChange($event)"
+                [placeholder]="'stockEntry.searchPlaceholder' | translate"
+              />
+              <p-button
+                type="button"
+                icon="pi pi-plus"
+                severity="secondary"
+                [outlined]="true"
+                [label]="'stockEntry.newProduct' | translate"
+                (onClick)="startNewProduct()"
+              />
+            </div>
 
             @if (searching()) {
               <p class="mt-2 text-sm text-slate-500">{{ 'stockEntry.searching' | translate }}</p>
@@ -257,13 +270,18 @@
               </div>
 
               <div class="flex flex-col gap-1">
-                <span id="stock-entry-unit-label" class="text-sm font-medium text-slate-700">
+                <label for="stock-entry-unit" class="text-sm font-medium text-slate-700">
                   {{ 'stockEntry.unit' | translate }}
-                </span>
+                </label>
+                <!-- Selector puro (no editable): la unidad es catálogo cerrado. Texto
+                     libre partía el mismo empaque en variantes ("caja"/"Caja"/"cja")
+                     que luego no cuadran al contar inventario. -->
                 <p-select
-                  ariaLabelledBy="stock-entry-unit-label"
-                  [options]="unitOptions"
-                  [editable]="true"
+                  inputId="stock-entry-unit"
+                  name="stockEntryUnit"
+                  [options]="unitOptions()"
+                  optionLabel="label"
+                  optionValue="value"
                   [ngModel]="unit()"
                   (ngModelChange)="unit.set($event ?? '')"
                   styleClass="w-full"

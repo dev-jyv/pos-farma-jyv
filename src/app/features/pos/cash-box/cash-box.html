@@ -1,0 +1,210 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <p-button icon="pi pi-arrow-left" [text]="true" (onClick)="back()" [ariaLabel]="'cashBox.back' | translate" />
+    <h1 class="text-lg font-bold text-slate-900">{{ 'cashBox.title' | translate }}</h1>
+  </div>
+
+  @if (loadError(); as error) {
+    <div
+      data-testid="cash-box-error"
+      class="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800"
+      role="alert"
+    >
+      {{ error }}
+      <button type="button" data-testid="cash-box-retry" class="ml-2 font-semibold underline" (click)="load()">
+        {{ 'cashBox.retry' | translate }}
+      </button>
+    </div>
+  }
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-4">
+    <div class="flex flex-col gap-6 lg:flex-row lg:items-start">
+      <form (ngSubmit)="save()" class="flex w-full max-w-md flex-col gap-4">
+        <div class="rounded-md border border-(--pos-border) bg-slate-50 px-3 py-2">
+          <div class="text-xs font-medium uppercase tracking-wide text-slate-500">
+            {{ 'cashBox.balance' | translate }}
+          </div>
+          <div class="text-2xl font-bold tabular-nums text-slate-900">
+            ${{ balance().amount | number: '1.2-2' }}
+          </div>
+          <div class="mt-1 text-xs text-slate-500">
+            @if (balance().lastClosedAt; as closedAt) {
+              {{ 'cashBox.countedAtLastClose' | translate }}
+              ${{ balance().countedAtLastClose ?? 0 | number: '1.2-2' }}
+              ({{ closedAt | date: 'dd/MM HH:mm' }})
+              ·
+              {{ 'cashBox.sinceLastClose' | translate }}
+              {{ balance().movementsSinceClose >= 0 ? '+' : '−' }}${{
+                (balance().movementsSinceClose < 0 ? -balance().movementsSinceClose : balance().movementsSinceClose)
+                  | number: '1.2-2'
+              }}
+            } @else {
+              {{ 'cashBox.noPreviousCut' | translate }}
+            }
+          </div>
+        </div>
+
+        <div
+          class="rounded-md px-3 py-2 text-sm"
+          [class]="
+            cashSessionOpen()
+              ? 'border border-sky-200 bg-sky-50 text-sky-900'
+              : 'border border-slate-200 bg-slate-50 text-slate-700'
+          "
+        >
+          @if (cashSessionOpen()) {
+            {{ 'cashBox.appliesToShift' | translate }}
+          } @else {
+            {{ 'cashBox.noShift' | translate }}
+          }
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <span id="cash-box-type-label" class="text-sm font-medium text-slate-700">
+            {{ 'cashBox.type' | translate }}
+          </span>
+          <p-select
+            ariaLabelledBy="cash-box-type-label"
+            name="cashBoxType"
+            [options]="typeOptions()"
+            optionLabel="label"
+            optionValue="value"
+            [ngModel]="type()"
+            (ngModelChange)="type.set($event)"
+            styleClass="w-full"
+          />
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label for="cash-box-amount" class="text-sm font-medium text-slate-700">
+            {{ 'cashBox.amount' | translate }}
+          </label>
+          <p-inputnumber
+            inputId="cash-box-amount"
+            name="cashBoxAmount"
+            mode="currency"
+            currency="MXN"
+            locale="es-MX"
+            [min]="0"
+            [ngModel]="amount()"
+            (ngModelChange)="amount.set($event)"
+            styleClass="w-full"
+            inputStyleClass="w-full text-right"
+          />
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label for="cash-box-reason" class="text-sm font-medium text-slate-700">
+            {{ 'cashBox.reason' | translate }}
+          </label>
+          <input
+            pInputText
+            id="cash-box-reason"
+            name="cashBoxReason"
+            class="w-full"
+            maxlength="200"
+            [ngModel]="reason()"
+            (ngModelChange)="reason.set($event ?? '')"
+            [placeholder]="'cashBox.reasonPlaceholder' | translate"
+          />
+        </div>
+
+        @if (blockers().length > 0) {
+          <!-- `blockers()` trae llaves de i18n: el aviso sigue el idioma de la app. -->
+          <ul
+            data-testid="cash-box-blockers"
+            class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+            role="alert"
+          >
+            @for (blocker of blockers(); track blocker) {
+              <li>{{ blocker | translate }}</li>
+            }
+          </ul>
+        }
+
+        <div class="mt-2 flex gap-2">
+          <p-button
+            type="button"
+            data-testid="cash-box-cancel"
+            [label]="'cashBox.cancel' | translate"
+            severity="secondary"
+            [outlined]="true"
+            styleClass="flex-1"
+            (onClick)="back()"
+          />
+          <p-button
+            type="submit"
+            data-testid="cash-box-save"
+            [label]="'cashBox.save' | translate"
+            styleClass="flex-1"
+            [loading]="saving()"
+            [disabled]="!canSubmit()"
+          />
+        </div>
+      </form>
+
+      <div class="min-w-0 flex-1">
+        <h2 class="mb-2 text-sm font-semibold text-slate-700">{{ 'cashBox.history' | translate }}</h2>
+        <!-- `lazy`: cada página se consulta a SQLite; la tabla nunca tiene el
+             historial completo en memoria. -->
+        <p-table
+          [value]="movements()"
+          [loading]="loading()"
+          styleClass="p-datatable-sm"
+          [scrollable]="true"
+          [lazy]="true"
+          [paginator]="true"
+          [rows]="pageSize"
+          [first]="first()"
+          [totalRecords]="total()"
+          [showCurrentPageReport]="true"
+          currentPageReportTemplate="{first}–{last} de {totalRecords}"
+          (onPage)="onPageChange($event)"
+        >
+          <ng-template #header>
+            <tr>
+              <th>{{ 'cashBox.colDate' | translate }}</th>
+              <th>{{ 'cashBox.colType' | translate }}</th>
+              <th class="text-right">{{ 'cashBox.colAmount' | translate }}</th>
+              <th>{{ 'cashBox.colReason' | translate }}</th>
+              <th>{{ 'cashBox.colAuthor' | translate }}</th>
+            </tr>
+          </ng-template>
+          <ng-template #body let-movement>
+            <tr>
+              <td class="tabular-nums text-sm text-slate-600">{{ movement.createdAt | date: 'dd/MM HH:mm' }}</td>
+              <td class="text-sm">
+                @switch (movement.type) {
+                  @case ('deposit') {
+                    <span class="text-emerald-700">{{ 'cashBox.typeDeposit' | translate }}</span>
+                  }
+                  @case ('withdrawal') {
+                    <span class="text-red-700">{{ 'cashBox.typeWithdrawal' | translate }}</span>
+                  }
+                  @default {
+                    <span class="text-slate-600">{{ 'cashBox.typeExpense' | translate }}</span>
+                  }
+                }
+                @if (!movement.cashSessionId) {
+                  <span class="ml-1 text-xs text-slate-400">{{ 'cashBox.withoutShift' | translate }}</span>
+                }
+              </td>
+              <td class="text-right tabular-nums text-sm">
+                ${{ movement.amount | number: '1.2-2' }}
+              </td>
+              <td class="text-sm text-slate-700">{{ movement.reason }}</td>
+              <td class="text-sm text-slate-500">{{ movement.createdByLabel ?? movement.createdBy }}</td>
+            </tr>
+          </ng-template>
+          <ng-template #emptymessage>
+            <tr>
+              <td colspan="5" class="py-6 text-center text-sm text-slate-500">
+                {{ 'cashBox.empty' | translate }}
+              </td>
+            </tr>
+          </ng-template>
+        </p-table>
+      </div>
+    </div>
+  </div>
+</div>

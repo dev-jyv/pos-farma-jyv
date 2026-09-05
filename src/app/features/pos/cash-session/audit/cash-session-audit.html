@@ -1,0 +1,199 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <h1 class="text-lg font-bold text-slate-900">{{ 'cashCut.audit.title' | translate }}</h1>
+    <div class="ml-auto flex items-center gap-2">
+      <!-- El filtro necesita nombre accesible propio: sin él, el lector de
+           pantalla anuncia solo el valor y el admin que llega con Tab no sabe
+           qué está a punto de cambiar. -->
+      <span id="cash-audit-status-label" class="sr-only">
+        {{ 'cashCut.audit.status' | translate }}
+      </span>
+      <p-select
+        ariaLabelledBy="cash-audit-status-label"
+        [options]="statusOptions()"
+        optionLabel="label"
+        optionValue="value"
+        [ngModel]="statusFilter()"
+        (ngModelChange)="onStatusChange($event)"
+        styleClass="w-48"
+      />
+      <p-button
+        icon="pi pi-refresh"
+        [text]="true"
+        (onClick)="reload()"
+        [loading]="loading()"
+        [ariaLabel]="'cashCut.audit.refresh' | translate"
+      />
+    </div>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+    @if (loadError(); as error) {
+      <div class="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+        {{ error }}
+      </div>
+    }
+
+    @if (initialLoading()) {
+      <!-- Carga inicial: sin esto la tabla aparecía vacía un instante y se leía
+           como "no hay cortes" en vez de "todavía estoy cargando". -->
+      <div class="flex flex-col items-center gap-3 py-16 text-sm text-slate-500" role="status">
+        <p-progress-spinner styleClass="!h-10 !w-10" strokeWidth="6" />
+        <span>{{ 'cashCut.audit.loading' | translate }}</span>
+      </div>
+    }
+
+    <!-- `lazy`: cada página se pide al servidor. Ya no hay tope oculto ni aviso
+         de truncado; el `meta` dice cuántos cortes hay de verdad. -->
+    <p-table
+      [hidden]="initialLoading()"
+      [value]="sessions()"
+      dataKey="id"
+      [loading]="loading()"
+      [scrollable]="true"
+      scrollHeight="flex"
+      [lazy]="true"
+      [paginator]="true"
+      [rows]="pageSize"
+      [first]="first()"
+      [totalRecords]="total()"
+      [showCurrentPageReport]="true"
+      currentPageReportTemplate="{first}–{last} de {totalRecords}"
+      (onPage)="onPageChange($event)"
+    >
+      <ng-template #header>
+        <tr>
+          <th>{{ 'cashCut.audit.openedBy' | translate }}</th>
+          <th>{{ 'cashCut.audit.openedAt' | translate }}</th>
+          <th>{{ 'cashCut.audit.closedAt' | translate }}</th>
+          <th class="text-right">{{ 'cashCut.expectedCash' | translate }}</th>
+          <th class="text-right">{{ 'cashCut.countedCash' | translate }}</th>
+          <th class="text-right">{{ 'cashCut.difference' | translate }}</th>
+          <th>{{ 'cashCut.audit.status' | translate }}</th>
+          <th class="w-32"></th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-session>
+        <tr>
+          <td class="text-sm">
+            <span class="block truncate font-medium text-slate-800">
+              {{ session.openedByLabel || session.openedBy }}
+            </span>
+            @if (session.closedByLabel && session.closedByLabel !== session.openedByLabel) {
+              <span class="block truncate text-xs text-slate-500">
+                {{ 'cashCut.audit.closedBy' | translate }}: {{ session.closedByLabel }}
+              </span>
+            }
+          </td>
+          <td class="tabular-nums text-sm text-slate-600">
+            {{ session.openedAt | date: 'dd/MM/yy HH:mm' }}
+          </td>
+          <td class="tabular-nums text-sm text-slate-600">
+            {{ session.closedAt ? (session.closedAt | date: 'dd/MM/yy HH:mm') : '—' }}
+          </td>
+          <td class="text-right text-sm tabular-nums">${{ session.expectedCashAmount ?? 0 | number: '1.2-2' }}</td>
+          <td class="text-right text-sm tabular-nums">${{ session.countedCashAmount ?? 0 | number: '1.2-2' }}</td>
+          <td class="text-right text-sm font-semibold tabular-nums">
+            ${{ session.cashDifference ?? 0 | number: '1.2-2' }}
+          </td>
+          <td>
+            @if (session.autoClosedByExpiry) {
+              <p-tag severity="secondary" [value]="'cashCut.audit.autoClosed' | translate" />
+            } @else if (session.adjustmentStatus === 'pending') {
+              <p-tag severity="warn" [value]="'cashCut.audit.pending' | translate" />
+            } @else if (session.adjustmentStatus === 'approved') {
+              <p-tag severity="success" [value]="'cashCut.audit.approved' | translate" />
+            } @else if (session.adjustmentStatus === 'rejected') {
+              <p-tag severity="danger" [value]="'cashCut.audit.rejected' | translate" />
+            } @else if (hasDifference(session)) {
+              <!-- Diferencia real sin estado de ajuste: son cortes cerrados antes
+                   de que existiera la revisión. Decir "sin diferencia" sobre un
+                   faltante de $455 es afirmar lo contrario de lo que pasó. -->
+              <p-tag severity="warn" [value]="'cashCut.audit.unreviewed' | translate" />
+            } @else {
+              <p-tag severity="secondary" [value]="'cashCut.audit.noAdjustment' | translate" />
+            }
+          </td>
+          <td>
+            @if (session.adjustmentStatus === 'pending') {
+              <p-button
+                size="small"
+                [label]="'cashCut.audit.review' | translate"
+                (onClick)="openReview(session)"
+              />
+            }
+          </td>
+        </tr>
+      </ng-template>
+      <ng-template #emptymessage>
+        <tr>
+          <td colspan="8" class="!py-16 text-center text-sm text-slate-500">
+            {{ 'cashCut.audit.empty' | translate }}
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+  </div>
+</div>
+
+<p-dialog
+  [visible]="!!reviewing()"
+  (visibleChange)="$event ? null : closeReview()"
+  [modal]="true"
+  [style]="{ width: '24rem' }"
+  [header]="'cashCut.audit.reviewTitle' | translate"
+>
+  @if (reviewing(); as session) {
+    <div class="flex flex-col gap-3 text-sm">
+      <p>
+        {{ 'cashCut.audit.reviewBody' | translate }}
+        <strong>${{ session.cashDifference | number: '1.2-2' }}</strong>
+      </p>
+      <div class="flex flex-col gap-1">
+        <label for="review-note" class="text-sm font-medium text-slate-700">
+          {{ 'cashCut.audit.reviewNote' | translate }}
+        </label>
+        <input
+          pInputText
+          id="review-note"
+          name="reviewNote"
+          class="w-full"
+          maxlength="300"
+          [ngModel]="reviewNote()"
+          (ngModelChange)="reviewNote.set($event ?? '')"
+        />
+      </div>
+      @if (!canDecide()) {
+        <p
+          data-testid="review-not-synced"
+          class="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900"
+          role="alert"
+        >
+          {{ 'cashCut.audit.notSynced' | translate }}
+        </p>
+      }
+    </div>
+  }
+  <ng-template #footer>
+    <div class="flex w-full gap-2">
+      <p-button
+        data-testid="review-reject"
+        [label]="'cashCut.audit.reject' | translate"
+        severity="danger"
+        [outlined]="true"
+        styleClass="flex-1"
+        [disabled]="!canDecide()"
+        [loading]="reviewSaving()"
+        (onClick)="decide('rejected')"
+      />
+      <p-button
+        data-testid="review-approve"
+        [label]="'cashCut.audit.approve' | translate"
+        styleClass="flex-1"
+        [disabled]="!canDecide()"
+        [loading]="reviewSaving()"
+        (onClick)="decide('approved')"
+      />
+    </div>
+  </ng-template>
+</p-dialog>

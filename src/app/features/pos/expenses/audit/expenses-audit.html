@@ -1,0 +1,99 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <h1 class="text-lg font-bold text-slate-900">{{ 'expenses.audit.title' | translate }}</h1>
+    <div class="ml-auto flex items-center gap-2">
+      <!-- Nombre accesible del filtro: sin él el lector anuncia solo el valor. -->
+      <span id="expenses-audit-category-label" class="sr-only">
+        {{ 'expenses.category' | translate }}
+      </span>
+      <p-select
+        ariaLabelledBy="expenses-audit-category-label"
+        [options]="categoryOptions()"
+        optionLabel="label"
+        optionValue="value"
+        [ngModel]="categoryFilter()"
+        (ngModelChange)="onCategoryChange($event)"
+        styleClass="w-48"
+      />
+      <p-button
+        icon="pi pi-refresh"
+        [text]="true"
+        (onClick)="reload()"
+        [loading]="loading()"
+        [ariaLabel]="'expenses.audit.refresh' | translate"
+      />
+    </div>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+    @if (loadError(); as error) {
+      <div class="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+        {{ error }}
+      </div>
+    }
+
+    @if (initialLoading()) {
+      <!-- Carga inicial: sin esto la tabla aparecía vacía un instante y se leía
+           como "no hay gastos" en vez de "todavía estoy cargando". -->
+      <div
+        data-testid="expenses-audit-loading"
+        class="flex flex-col items-center gap-3 py-16 text-sm text-slate-500"
+        role="status"
+      >
+        <span>{{ 'expenses.audit.loading' | translate }}</span>
+      </div>
+    }
+
+    <!-- `lazy`: cada página se pide al servidor; el `meta` da el total real. -->
+    <p-table
+      [hidden]="initialLoading()"
+      [value]="movements()"
+      dataKey="id"
+      [loading]="loading()"
+      [scrollable]="true"
+      scrollHeight="flex"
+      [lazy]="true"
+      [paginator]="true"
+      [rows]="pageSize"
+      [first]="first()"
+      [totalRecords]="total()"
+      [showCurrentPageReport]="true"
+      currentPageReportTemplate="{first}–{last} de {totalRecords}"
+      (onPage)="onPageChange($event)"
+    >
+      <ng-template #header>
+        <tr>
+          <th>{{ 'expenses.audit.date' | translate }}</th>
+          <th>{{ 'expenses.category' | translate }}</th>
+          <th>{{ 'expenses.reason' | translate }}</th>
+          <th>{{ 'expenses.description' | translate }}</th>
+          <th>{{ 'expenses.audit.createdBy' | translate }}</th>
+          <th class="text-right">{{ 'expenses.amount' | translate }}</th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-movement>
+        <tr>
+          <td class="tabular-nums text-sm text-slate-600">{{ movement.createdAt | date: 'dd/MM HH:mm' }}</td>
+          <td class="text-sm">
+            @if (categoryKey(movement.category); as key) {
+              {{ key | translate }}
+            } @else {
+              {{ movement.category }}
+            }
+          </td>
+          <td class="text-sm">{{ movement.reason }}</td>
+          <td class="text-sm text-slate-600">{{ movement.description || '—' }}</td>
+          <td class="text-sm">{{ movement.createdBy }}</td>
+          <td class="text-right text-sm font-semibold tabular-nums">${{ movement.amount | number: '1.2-2' }}</td>
+        </tr>
+      </ng-template>
+      <ng-template #emptymessage>
+        <tr>
+          <td colspan="6" class="!py-16 text-center text-sm text-slate-500">
+            {{ 'expenses.audit.empty' | translate }}
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+  </div>
+</div>

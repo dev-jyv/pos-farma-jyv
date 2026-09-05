@@ -1,37 +1,21 @@
-import { HttpClient } from '@angular/common/http';
-import { Injectable, inject } from '@angular/core';
-import { Observable, map } from 'rxjs';
+import { Injectable } from '@angular/core';
+import { Observable, from } from 'rxjs';
 
-import { toDate, unwrapList } from '../../../core/api/api.utils';
 import { ProductBatch } from '../../../shared/models';
-import { environment } from '../../../../environments/environment';
 
-interface BatchDto {
-  id: string;
-  productId: string;
-  lotNumber: string;
-  expiryDate: unknown;
-  quantity: number;
-}
-
+/**
+ * Lotes local-first: viven en el SQLite del proceso main (`electron/db/products.js`,
+ * sincronizados junto con el catálogo). Sin esto, agregar al carrito tenía que
+ * pegarle a `GET /inventory/batches` con el id del producto — que además ya no
+ * era válido offline (el id local no existe en el backend).
+ */
 @Injectable({ providedIn: 'root' })
 export class BatchService {
-  private readonly http = inject(HttpClient);
-  private readonly apiUrl = environment.apiUrl;
-
   listByProduct(productId: string): Observable<ProductBatch[]> {
-    return this.http
-      .get<unknown>(`${this.apiUrl}/inventory/batches`, { params: { productId } })
-      .pipe(
-        map((response) =>
-          unwrapList<BatchDto>(response).map((dto) => ({
-            id: dto.id,
-            productId: dto.productId,
-            lotNumber: dto.lotNumber,
-            expiryDate: toDate(dto.expiryDate),
-            quantity: dto.quantity,
-          })),
-        ),
-      );
+    const api = window.electronAPI;
+    if (!api) {
+      throw new Error('electronAPI no disponible: los lotes requieren correr dentro de Electron.');
+    }
+    return from(api.catalog.getBatchesByProduct(productId));
   }
 }

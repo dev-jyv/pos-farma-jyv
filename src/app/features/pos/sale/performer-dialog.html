@@ -1,0 +1,56 @@
+<p-dialog
+  [visible]="visible()"
+  (visibleChange)="$event ? null : dismiss()"
+  [modal]="true"
+  [draggable]="false"
+  [style]="{ width: '24rem' }"
+  [header]="'sale.services.choosePerformer' | translate"
+>
+  <p class="mb-3 text-sm text-slate-600">{{ serviceName() }}</p>
+
+  @if (ordered().length) {
+    <!-- Numerada: el mostrador se opera con teclado, 1–9 elige y cierra. -->
+    <ul class="flex flex-col gap-1">
+      @for (provider of ordered(); track provider.id; let i = $index) {
+        <li>
+          <button
+            type="button"
+            data-testid="performer-option"
+            [attr.aria-label]="provider.name"
+            class="flex w-full items-center gap-3 rounded-lg border border-slate-200 px-3 py-2 text-left transition hover:bg-emerald-50"
+            [class.border-emerald-400]="i === 0"
+            [class.bg-emerald-50]="i === 0"
+            (click)="choose(provider)"
+          >
+            @if (i < 9) {
+              <span class="pos-kbd shrink-0">{{ i + 1 }}</span>
+            }
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-sm font-medium text-slate-900">{{ provider.name }}</span>
+              @if (provider.license) {
+                <span class="block truncate text-xs text-slate-500">Céd. {{ provider.license }}</span>
+              }
+            </span>
+            @if (i === 0) {
+              <span class="pos-kbd shrink-0">Enter</span>
+            }
+          </button>
+        </li>
+      }
+    </ul>
+  } @else {
+    <p class="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">
+      {{ 'sale.services.noPerformers' | translate }}
+    </p>
+  }
+
+  <ng-template #footer>
+    <p-button
+      [label]="'common.cancel' | translate"
+      severity="secondary"
+      [text]="true"
+      styleClass="w-full"
+      (onClick)="dismiss()"
+    />
+  </ng-template>
+</p-dialog>

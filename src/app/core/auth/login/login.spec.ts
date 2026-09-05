@@ -5,6 +5,7 @@ import { Observable, of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { NotificationService } from '../../notifications/notification.service';
+import { SyncScheduler } from '../../sync/sync-scheduler.service';
 import { AuthService } from '../auth.service';
 import { Login } from './login';
 
@@ -37,6 +38,12 @@ describe('Login', () => {
             fetchRole: () => fetchRole(),
             getLoginErrorMessage: () => 'auth.login.error',
           },
+        },
+        {
+          // Evita construir la cadena real SyncScheduler -> SaleService -> HttpClient;
+          // estas pruebas no ejercitan el sync, solo el formulario de login.
+          provide: SyncScheduler,
+          useValue: { syncNow: vi.fn().mockResolvedValue({ ok: true, pulled: 0 }) },
         },
       ],
     });
@@ -77,6 +84,19 @@ describe('Login', () => {
     expect(logout).toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
     expect(notifyError).toHaveBeenCalled();
+  });
+
+  it('un doble clic no dispara dos logins', async () => {
+    let resolveLogin!: () => void;
+    login = vi.fn(() => new Promise<void>((resolve) => (resolveLogin = resolve)));
+    component.form.setValue({ email: 'caja@farmajyv.mx', password: 'secreto' });
+
+    const first = component.onSubmit();
+    const second = component.onSubmit();
+    resolveLogin();
+    await Promise.all([first, second]);
+
+    expect(login).toHaveBeenCalledTimes(1);
   });
 
   it('credenciales inválidas se avisan y liberan el botón', async () => {

@@ -1,0 +1,286 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <p-button icon="pi pi-arrow-left" [text]="true" (onClick)="cancel()" [ariaLabel]="'products.cancel' | translate" />
+    <h1 class="text-lg font-bold text-slate-900">
+      {{ (isEditing() ? 'products.editTitle' : 'products.newTitle') | translate }}
+    </h1>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-4">
+    @if (loading()) {
+      <div class="flex justify-center py-10">
+        <p-progress-spinner styleClass="!h-8 !w-8" strokeWidth="6" />
+      </div>
+    } @else {
+      <form (ngSubmit)="save()" class="flex max-w-2xl flex-col gap-4">
+        <div class="grid gap-3 md:grid-cols-2">
+          <div class="flex flex-col gap-1 md:col-span-2">
+            <label for="product-name" class="text-sm font-medium text-slate-700">
+              {{ 'products.name' | translate }}
+            </label>
+            <input
+              pInputText
+              id="product-name"
+              name="productName"
+              class="w-full"
+              maxlength="120"
+              [ngModel]="name()"
+              (ngModelChange)="name.set($event ?? '')"
+            />
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <label for="product-sku" class="text-sm font-medium text-slate-700">
+              {{ 'products.sku' | translate }}
+            </label>
+            <input
+              pInputText
+              id="product-sku"
+              name="productSku"
+              class="w-full"
+              maxlength="40"
+              [ngModel]="sku()"
+              (ngModelChange)="sku.set($event ?? '')"
+            />
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <label for="product-barcode" class="text-sm font-medium text-slate-700">
+              {{ 'products.barcode' | translate }}
+            </label>
+            <input
+              pInputText
+              id="product-barcode"
+              name="productBarcode"
+              inputmode="numeric"
+              class="w-full"
+              [ngModel]="barcode()"
+              (ngModelChange)="barcode.set($event ?? '')"
+              [placeholder]="'products.barcodePlaceholder' | translate"
+            />
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <label for="product-ingredient" class="text-sm font-medium text-slate-700">
+              {{ 'products.activeIngredient' | translate }}
+            </label>
+            <input
+              pInputText
+              id="product-ingredient"
+              name="productIngredient"
+              class="w-full"
+              maxlength="120"
+              [ngModel]="activeIngredient()"
+              (ngModelChange)="activeIngredient.set($event ?? '')"
+            />
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <label for="product-concentration" class="text-sm font-medium text-slate-700">
+              {{ 'products.concentration' | translate }}
+            </label>
+            <input
+              pInputText
+              id="product-concentration"
+              name="productConcentration"
+              class="w-full"
+              [ngModel]="concentration()"
+              (ngModelChange)="concentration.set($event ?? '')"
+              [placeholder]="'products.concentrationPlaceholder' | translate"
+            />
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <span id="product-category-label" class="text-sm font-medium text-slate-700">
+              {{ 'products.category' | translate }}
+            </span>
+            <p-select
+              ariaLabelledBy="product-category-label"
+              name="productCategory"
+              [options]="categoryOptions()"
+              optionLabel="name"
+              optionValue="id"
+              [filter]="true"
+              filterBy="name"
+              [ngModel]="categoryId()"
+              (ngModelChange)="categoryId.set($event)"
+              [placeholder]="'products.categoryPlaceholder' | translate"
+              styleClass="w-full"
+            />
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <label for="product-unit" class="text-sm font-medium text-slate-700">
+              {{ 'products.unit' | translate }}
+            </label>
+            <!-- Selector puro: la unidad es catálogo cerrado (ver `shared/utils/units.ts`). -->
+            <p-select
+              inputId="product-unit"
+              name="productUnit"
+              [options]="unitOptions()"
+              optionLabel="label"
+              optionValue="value"
+              [ngModel]="unit()"
+              (ngModelChange)="unit.set($event ?? '')"
+              styleClass="w-full"
+            />
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <label for="product-price" class="text-sm font-medium text-slate-700">
+              {{ 'products.salePrice' | translate }}
+            </label>
+            <p-inputnumber
+              inputId="product-price"
+              name="productSalePrice"
+              mode="currency"
+              currency="MXN"
+              locale="es-MX"
+              [min]="0"
+              [ngModel]="salePrice()"
+              (ngModelChange)="salePrice.set($event)"
+              styleClass="w-full"
+              inputStyleClass="w-full text-right"
+            />
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <label for="product-min-stock" class="text-sm font-medium text-slate-700">
+              {{ 'products.minStock' | translate }}
+            </label>
+            <p-inputnumber
+              inputId="product-min-stock"
+              name="productMinStock"
+              [min]="0"
+              [ngModel]="minStock()"
+              (ngModelChange)="minStock.set($event)"
+              styleClass="w-full"
+              inputStyleClass="w-full text-right"
+            />
+          </div>
+
+          <div class="flex flex-col gap-1 md:col-span-2">
+            <span id="product-controlled-label" class="text-sm font-medium text-slate-700">
+              {{ 'products.controlledGroup' | translate }}
+            </span>
+            <p-select
+              ariaLabelledBy="product-controlled-label"
+              name="productControlledGroup"
+              [options]="controlledOptions"
+              optionLabel="label"
+              optionValue="value"
+              [ngModel]="controlledGroup()"
+              (ngModelChange)="controlledGroup.set($event)"
+              styleClass="w-full"
+            />
+          </div>
+
+          <div class="flex flex-wrap items-center gap-4 md:col-span-2">
+            <label class="flex items-center gap-2 text-sm text-slate-700">
+              <p-checkbox
+                [binary]="true"
+                [ngModel]="hasIva()"
+                (ngModelChange)="hasIva.set($event)"
+                name="productHasIva"
+                inputId="product-has-iva"
+              />
+              <span>{{ 'products.hasIva' | translate }}</span>
+            </label>
+
+            <label class="flex items-center gap-2 text-sm text-slate-700">
+              <p-checkbox
+                [binary]="true"
+                [ngModel]="hasIvaZero()"
+                (ngModelChange)="hasIvaZero.set($event)"
+                name="productHasIvaZero"
+                inputId="product-has-iva-zero"
+              />
+              <span>{{ 'products.hasIvaZero' | translate }}</span>
+            </label>
+
+            <label class="flex items-center gap-2 text-sm text-slate-700">
+              <p-checkbox
+                [binary]="true"
+                [ngModel]="hasIeps()"
+                (ngModelChange)="hasIeps.set($event)"
+                name="productHasIeps"
+                inputId="product-has-ieps"
+              />
+              <span>{{ 'products.hasIeps' | translate }}</span>
+            </label>
+
+            @if (hasIeps()) {
+              <div class="flex items-center gap-2">
+                <label for="product-ieps" class="text-sm text-slate-700">
+                  {{ 'products.iepsRate' | translate }}
+                </label>
+                <p-inputnumber
+                  inputId="product-ieps"
+                  name="productIepsRate"
+                  suffix=" %"
+                  [min]="0"
+                  [max]="160"
+                  [minFractionDigits]="0"
+                  [maxFractionDigits]="2"
+                  [ngModel]="iepsPercent()"
+                  (ngModelChange)="iepsPercent.set($event)"
+                  inputStyleClass="w-24 text-right"
+                />
+              </div>
+            }
+
+            <label class="flex items-center gap-2 text-sm text-slate-700">
+              <p-checkbox
+                [binary]="true"
+                [ngModel]="requiresPrescription()"
+                (ngModelChange)="requiresPrescription.set($event)"
+                name="productRequiresPrescription"
+                inputId="product-requires-prescription"
+              />
+              <span>{{ 'products.requiresPrescription' | translate }}</span>
+            </label>
+
+            @if (isEditing()) {
+              <label class="flex items-center gap-2 text-sm text-slate-700">
+                <p-checkbox
+                  [binary]="true"
+                  [ngModel]="isActive()"
+                  (ngModelChange)="isActive.set($event)"
+                  name="productIsActive"
+                  inputId="product-is-active"
+                />
+                <span>{{ 'products.active' | translate }}</span>
+              </label>
+            }
+          </div>
+        </div>
+
+        @if (blockers().length > 0) {
+          <ul class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            @for (reason of blockers(); track reason) {
+              <li>{{ reason }}</li>
+            }
+          </ul>
+        }
+
+        <div class="mt-2 flex gap-2">
+          <p-button
+            type="button"
+            [label]="'products.cancel' | translate"
+            severity="secondary"
+            [outlined]="true"
+            styleClass="flex-1"
+            (onClick)="cancel()"
+          />
+          <p-button
+            type="submit"
+            [label]="'products.save' | translate"
+            styleClass="flex-1"
+            [loading]="saving()"
+            [disabled]="!canSubmit()"
+          />
+        </div>
+      </form>
+    }
+  </div>
+</div>

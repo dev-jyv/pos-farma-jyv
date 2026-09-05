@@ -18,7 +18,7 @@ Documento generado a partir del código en `main` (commit `f2ccc96`). Versión d
 | Impresión | `window.print()` sobre componentes montados al vuelo; cajón por ESC/POS vía IPC |
 | Pago tarjeta | Mercado Pago Point (órdenes + polling) a través del backend |
 | Tamaño | ~8.000 líneas (`src` + `electron`), 60 archivos fuente |
-| Pruebas | Vitest sobre jsdom, 43 archivos, 424 casos — todos pasan (`npm test`) |
+| Pruebas | Vitest sobre jsdom, 44 archivos, 423 casos — todos pasan (`npm test`) |
 
 ### Alcance funcional implementado
 
@@ -94,7 +94,9 @@ npm run electron:dist[:mac|:win]   # electron-builder → /release
 npm test                  # Vitest
 ```
 
-Presupuesto de bundle inicial: warning 700 kB, error 1.5 MB.
+Presupuesto de bundle inicial: aviso 1.2 MB, error 1.6 MB. Hoy son 1.12 MB en crudo y **258 kB transferidos**; el aviso estaba en 700 kB y saltaba en cada build, lo que tapaba regresiones reales. En una app de escritorio que carga desde disco, el crudo importa menos que el transferido.
+
+`allowedCommonJsDependencies` declara `qrcode` y `dijkstrajs`: son CommonJS y avisan de bailout de optimización. Se acepta a sabiendas porque el QR se importa de forma diferida (`import('qrcode')` dentro del cobro directo) y queda en su propio chunk.
 
 ---
 
@@ -421,7 +423,22 @@ Badge ámbar = pendientes de sync. Badge rojo = rechazadas.
 
 `CashSessionDialog` tiene tres modos derivados: `open` (sin sesión; no cerrable con Esc ni clic afuera — sin turno no se vende), `close` (resumen + captura del efectivo contado + diferencia en vivo), `result` (turno cerrado, imprimir corte). El efectivo esperado sale de `expectedCashAmount` del backend con fallback a `summary.cashInDrawer`; el contado se precarga con el esperado.
 
-Movimientos de caja (`deposit` / `withdrawal` / `expense`, con monto y motivo obligatorios) solo se ofrecen a `admin` — el botón y el propio componente están gateados en la plantilla.
+Movimientos de caja (`deposit` / `withdrawal` / `expense`, con monto y motivo obligatorios) se capturan desde dos pantallas propias, no desde la venta: **Gastos** (`/pos/gastos`, `pos:write`, `type` fijo en `expense`) y **Efectivo de farmacia** (`/pos/efectivo`, ver abajo).
+
+### Efectivo de farmacia (`/pos/efectivo`)
+
+Entrada o salida de efectivo sin venta de por medio, tras `permissionGuard('cashSessions', 'write')` — área ya exclusiva de `admin`, y no el `pos:write` de los gastos: mover el efectivo de la farmacia no es tarea de mostrador. Antes esto era un diálogo dentro de la venta, protegido solo por un `@if (isAdmin())` de la plantilla y sin guard de ruta.
+
+**`cashSessionId` es opcional en toda la cadena** (`CashMovement` local y remoto, migración `20260906000000_cash_movements_standalone` que reconstruye la tabla porque SQLite no afloja un `NOT NULL` con `ALTER`). El comportamiento es híbrido a propósito:
+
+- **Con turno abierto** el movimiento se cuelga de ese turno y baja o sube su efectivo esperado. Es lo que evita que el cajero cuente un dinero que ya no está y cierre con un faltante sin explicación.
+- **Sin turno** queda con `cashSessionId: null` y fuera de todo corte — `buildSummary` (local y backend) consulta los movimientos filtrando por sesión, así que los sueltos se excluyen solos.
+
+Local-first como el resto: `CashMovementService.create()` escribe en SQLite y el push ocurre en `SyncScheduler`. `pushOne` elige destino según el origen: `POST /cash-sessions/:remoteId/movements` para los del turno, `POST /cash-sessions/movements` para los de la farmacia. Los de la farmacia **no** esperan a que ningún turno sincronice.
+
+La pantalla muestra el saldo local (`getBalance`, entradas − salidas − gastos) y los últimos 20 movimientos con autor. Ese saldo es el de **ese equipo**; la vista global sigue siendo `/pos/gastos-auditoria`.
+
+El backend audita cada uno (`cashMovement.created`, entidad `cashMovement`) — a diferencia de `addMovement`, que no auditaba: sacar efectivo sin ticket que lo respalde es justo lo que la bitácora existe para rastrear. Los gastos siguen exigiendo turno, porque su desglose por categoría solo tiene sentido dentro de un corte.
 
 ---
 
@@ -475,7 +492,8 @@ Auto-update con `electron-updater` (`autoDownload = true`, instala al cerrar), s
 | POST | `/cash-sessions` | abrir turno |
 | GET | `/cash-sessions/:id/summary` | resumen previo al corte |
 | POST | `/cash-sessions/:id/close` | cerrar turno |
-| GET/POST | `/cash-sessions/:id/movements` | entradas y salidas de efectivo |
+| GET/POST | `/cash-sessions/:id/movements` | entradas, salidas y gastos de un turno |
+| POST | `/cash-sessions/movements` | efectivo de farmacia, con turno o sin él (`cashSessions:write`) |
 | GET | `/payments/mercadopago/devices` | terminales Point |
 | PATCH | `/payments/mercadopago/devices/operating-mode` | activar PDV |
 | POST | `/payments/mercadopago/orders` | enviar cobro a la terminal |
@@ -512,6 +530,12 @@ Consecuencia práctica: antes de dar por bueno cualquier comportamiento contra l
 Standalone por defecto (sin `standalone: true`), `ChangeDetectionStrategy.OnPush` en todo componente, signals para estado y `computed` para derivados (nunca mutación directa), `input()`/`output()` en lugar de decoradores, objeto `host` en lugar de `@HostBinding`/`@HostListener`, control de flujo nativo `@if`/`@for`/`@switch`, bindings `class`/`style` en lugar de `ngClass`/`ngStyle`, `inject()` sobre constructor, servicios `providedIn: 'root'`, plantillas y estilos externos junto al `.ts`.
 
 `@ngx-translate` v18: `TranslatePipe`/`TranslateDirective` standalone, **no** `TranslateModule`. PrimeNG `p-table`: `#header`/`#body`, no `pTemplate`.
+
+### 16.1 Utilidades compartidas de API
+
+`core/api/api.utils.ts` es el único lugar donde se interpreta la forma de las respuestas del backend: `unwrapEntity`, `unwrapList`, `unwrapListWithMeta` (con `ApiListMeta`), `toDate`, `getApiErrorMessage` y `toHttpParams`.
+
+Regla: **ningún servicio lee `response.data` a pelo ni arma sus `HttpParams` a mano.** Los servicios de administración (categorías, proveedores, facturas) lo hacían y además declaraban su propio `PageMeta`, copia de `ApiListMeta`, importándolo unos de otros; se unificó. `toHttpParams` descarta `undefined`, `null` y cadena vacía, pero deja pasar `false` y `0`, que son filtros legítimos (`activeOnly=false`).
 
 ### 16.1 Identidad visual y tokens de color
 

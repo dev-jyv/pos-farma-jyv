@@ -1,0 +1,132 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-[var(--pos-border)] px-4 py-3">
+    <h1 class="text-lg font-bold text-slate-900">{{ 'suppliers.title' | translate }}</h1>
+
+    <div class="relative ml-auto min-w-[14rem] flex-1 max-w-md">
+      <label for="supplier-search" class="sr-only">{{ 'suppliers.searchLabel' | translate }}</label>
+      <i class="pi pi-search pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-slate-400"></i>
+      <input
+        pInputText
+        id="supplier-search"
+        name="supplierSearch"
+        type="search"
+        autocomplete="off"
+        class="w-full !pl-9"
+        [ngModel]="search()"
+        (ngModelChange)="onSearch($event)"
+        [placeholder]="'suppliers.search' | translate"
+      />
+    </div>
+    <p-button
+      icon="pi pi-refresh"
+      [text]="true"
+      (onClick)="reload()"
+      [loading]="loading()"
+      [ariaLabel]="'suppliers.refresh' | translate"
+      [pTooltip]="'suppliers.refresh' | translate"
+    />
+    <p-button icon="pi pi-plus" [label]="'suppliers.new' | translate" (onClick)="create()" />
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+    <p-table
+      [value]="suppliers()"
+      dataKey="id"
+      styleClass="pos-product-table"
+      [loading]="loading()"
+      [scrollable]="true"
+      scrollHeight="flex"
+      [lazy]="true"
+      (onLazyLoad)="onLazyLoad($event)"
+      [paginator]="true"
+      [rows]="rows"
+      [totalRecords]="totalRecords()"
+    >
+      <ng-template #header>
+        <tr>
+          <th>{{ 'suppliers.name' | translate }}</th>
+          <th>{{ 'suppliers.contact' | translate }}</th>
+          <th>{{ 'suppliers.phone' | translate }}</th>
+          <th>{{ 'suppliers.status' | translate }}</th>
+          <th class="w-24"></th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-supplier>
+        <tr>
+          <td class="text-sm font-semibold">{{ supplier.name }}</td>
+          <td class="text-sm text-slate-600">{{ supplier.contactName || '—' }}</td>
+          <td class="text-sm tabular-nums text-slate-600">{{ supplier.phone || '—' }}</td>
+          <td>
+            @if (supplier.isActive) {
+              <p-tag severity="success" [value]="'suppliers.active' | translate" />
+            } @else {
+              <p-tag severity="danger" [value]="'suppliers.inactive' | translate" />
+            }
+          </td>
+          <td>
+            <div class="flex justify-end gap-1">
+              <p-button
+                icon="pi pi-pencil"
+                [rounded]="true"
+                [text]="true"
+                (onClick)="edit(supplier)"
+                [ariaLabel]="'suppliers.edit' | translate"
+                [pTooltip]="'suppliers.edit' | translate"
+              />
+              @if (supplier.isActive) {
+                <p-button
+                  icon="pi pi-ban"
+                  severity="danger"
+                  [rounded]="true"
+                  [text]="true"
+                  (onClick)="askDeactivate(supplier)"
+                  [ariaLabel]="'suppliers.deactivate' | translate"
+                  [pTooltip]="'suppliers.deactivate' | translate"
+                />
+              }
+            </div>
+          </td>
+        </tr>
+      </ng-template>
+      <ng-template #emptymessage>
+        <tr>
+          <td colspan="5" class="!py-16 text-center text-sm text-slate-500">
+            {{ 'suppliers.empty' | translate }}
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+  </div>
+</div>
+
+<p-dialog
+  [visible]="!!deactivateTarget()"
+  (visibleChange)="!$event && cancelDeactivate()"
+  [modal]="true"
+  [style]="{ width: '22rem' }"
+  [header]="'suppliers.deactivateTitle' | translate"
+>
+  @if (deactivateTarget(); as supplier) {
+    <p class="text-sm text-slate-600">
+      {{ 'suppliers.deactivateConfirm' | translate }} <strong>{{ supplier.name }}</strong>?
+    </p>
+  }
+  <ng-template #footer>
+    <div class="flex w-full gap-2">
+      <p-button
+        [label]="'suppliers.cancel' | translate"
+        severity="secondary"
+        [outlined]="true"
+        styleClass="flex-1"
+        (onClick)="cancelDeactivate()"
+      />
+      <p-button
+        [label]="'suppliers.deactivate' | translate"
+        severity="danger"
+        styleClass="flex-1"
+        [loading]="deactivating()"
+        (onClick)="confirmDeactivate()"
+      />
+    </div>
+  </ng-template>
+</p-dialog>

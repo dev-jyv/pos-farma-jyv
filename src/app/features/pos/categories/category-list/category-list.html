@@ -1,0 +1,134 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-[var(--pos-border)] px-4 py-3">
+    <h1 class="text-lg font-bold text-slate-900">{{ 'categories.title' | translate }}</h1>
+
+    <div class="relative ml-auto min-w-[14rem] flex-1 max-w-md">
+      <label for="category-search" class="sr-only">{{ 'categories.searchLabel' | translate }}</label>
+      <i class="pi pi-search pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-slate-400"></i>
+      <input
+        pInputText
+        id="category-search"
+        name="categorySearch"
+        type="search"
+        autocomplete="off"
+        class="w-full !pl-9"
+        [ngModel]="search()"
+        (ngModelChange)="onSearch($event)"
+        [placeholder]="'categories.search' | translate"
+      />
+    </div>
+    <p-button
+      icon="pi pi-refresh"
+      [text]="true"
+      (onClick)="reload()"
+      [loading]="loading()"
+      [ariaLabel]="'categories.refresh' | translate"
+      [pTooltip]="'categories.refresh' | translate"
+    />
+    <p-button
+      icon="pi pi-plus"
+      [label]="'categories.new' | translate"
+      (onClick)="create()"
+    />
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+    <p-table
+      [value]="categories()"
+      dataKey="id"
+      styleClass="pos-product-table"
+      [loading]="loading()"
+      [scrollable]="true"
+      scrollHeight="flex"
+      [lazy]="true"
+      (onLazyLoad)="onLazyLoad($event)"
+      [paginator]="true"
+      [rows]="rows"
+      [totalRecords]="totalRecords()"
+    >
+      <ng-template #header>
+        <tr>
+          <th>{{ 'categories.name' | translate }}</th>
+          <th>{{ 'categories.description' | translate }}</th>
+          <th>{{ 'categories.status' | translate }}</th>
+          <th class="w-24"></th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-category>
+        <tr>
+          <td class="text-sm font-semibold">{{ category.name }}</td>
+          <td class="text-sm text-slate-600">{{ category.description || '—' }}</td>
+          <td>
+            @if (category.isActive) {
+              <p-tag severity="success" [value]="'categories.active' | translate" />
+            } @else {
+              <p-tag severity="danger" [value]="'categories.inactive' | translate" />
+            }
+          </td>
+          <td>
+            <div class="flex justify-end gap-1">
+              <p-button
+                icon="pi pi-pencil"
+                [rounded]="true"
+                [text]="true"
+                (onClick)="edit(category)"
+                [ariaLabel]="'categories.edit' | translate"
+                [pTooltip]="'categories.edit' | translate"
+              />
+              @if (category.isActive) {
+                <p-button
+                  icon="pi pi-ban"
+                  severity="danger"
+                  [rounded]="true"
+                  [text]="true"
+                  (onClick)="askDeactivate(category)"
+                  [ariaLabel]="'categories.deactivate' | translate"
+                  [pTooltip]="'categories.deactivate' | translate"
+                />
+              }
+            </div>
+          </td>
+        </tr>
+      </ng-template>
+      <ng-template #emptymessage>
+        <tr>
+          <td colspan="4" class="!py-16 text-center text-sm text-slate-500">
+            {{ 'categories.empty' | translate }}
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+  </div>
+</div>
+
+<p-dialog
+  [visible]="!!deactivateTarget()"
+  (visibleChange)="!$event && cancelDeactivate()"
+  [modal]="true"
+  [style]="{ width: '22rem' }"
+  [header]="'categories.deactivateTitle' | translate"
+>
+  @if (deactivateTarget(); as category) {
+    <p class="text-sm text-slate-600">
+      {{ 'categories.deactivateConfirm' | translate }} <strong>{{ category.name }}</strong>?
+    </p>
+  }
+  <ng-template #footer>
+    <div class="flex w-full gap-2">
+      <p-button
+        [label]="'categories.cancel' | translate"
+        severity="secondary"
+        [outlined]="true"
+        styleClass="flex-1"
+        (onClick)="cancelDeactivate()"
+      />
+      <p-button
+        [label]="'categories.deactivate' | translate"
+        severity="danger"
+        styleClass="flex-1"
+        [loading]="deactivating()"
+        (onClick)="confirmDeactivate()"
+      />
+    </div>
+  </ng-template>
+</p-dialog>

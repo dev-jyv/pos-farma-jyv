@@ -13,6 +13,7 @@ import { Observable, catchError, finalize, map, of, shareReplay, switchMap, tap 
 
 import { FIREBASE_AUTH } from '../firebase/firebase.providers';
 import { unwrapEntity } from '../api/api.utils';
+import { CashSessionService } from '../../features/pos/services/cash-session.service';
 import { NotificationService } from '../notifications/notification.service';
 import { getSessionExpiryMs, isSessionExpired } from '../../shared/utils/session-expiry';
 import {
@@ -42,6 +43,12 @@ export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
   private readonly notifications = inject(NotificationService);
+  /**
+   * A propósito, `CashSessionService` NO inyecta `AuthService` de vuelta (lo
+   * necesita `endExpiredSession()` para el auto-cierre a las 24h) — Angular no
+   * resuelve un ciclo entre dos `providedIn: 'root'` que se inyectan mutuamente.
+   */
+  private readonly cashSessionService = inject(CashSessionService);
   private readonly apiUrl = environment.apiUrl;
   private profileRequest$: Observable<StaffProfile | null> | null = null;
   /** Último perfil resuelto, con el `uid` al que pertenece y cuándo se resolvió. */
@@ -104,9 +111,20 @@ export class AuthService {
     return hasPermission(this.profile(), area, level);
   }
 
-  /** Cierra la sesión avisando el motivo; el ticket queda en `localStorage`. */
+  /**
+   * Cierra la sesión avisando el motivo; el ticket queda en `localStorage`.
+   * Antes de cerrar sesión, si el turno de caja sigue abierto, se cierra solo
+   * (aceptando el corte esperado sin diferencia — nunca queda ajuste
+   * pendiente): a las 24:00 no hay cajero presente para contar el efectivo.
+   * `uid`/email se leen ANTES de `logout()`, porque después ya no hay sesión
+   * de la que sacarlos.
+   */
   async endExpiredSession(detail?: string): Promise<void> {
     this.clearExpiryTimer();
+    const uid = this.user()?.uid;
+    if (uid) {
+      await this.cashSessionService.autoCloseForExpiry(uid, this.profile()?.email ?? undefined);
+    }
     this.notifications.sessionExpired(detail);
     await this.logout();
     await this.router.navigate(['/login']);
