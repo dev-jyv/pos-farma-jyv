@@ -7,7 +7,7 @@ import { ButtonModule } from 'primeng/button';
 import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
 import { SelectModule } from 'primeng/select';
-import { switchMap } from 'rxjs';
+import { Observable, map, of, switchMap } from 'rxjs';
 
 import { getApiErrorMessage } from '../../../../core/api/api.utils';
 import { NotificationService } from '../../../../core/notifications/notification.service';
@@ -140,26 +140,38 @@ export class InvoiceForm implements OnDestroy {
       this.form.markAllAsTouched();
       return;
     }
-    const file = this.selectedFile();
-    if (!file) {
-      this.fileError.set('Debes subir el comprobante (PDF o imagen).');
+    /**
+     * El comprobante es opcional, pero un comprobante **rechazado** no es lo
+     * mismo que no adjuntar ninguno: `setFile` deja el error y no guarda el
+     * archivo, así que guardar aquí registraría la factura sin adjunto justo
+     * cuando el usuario creía haber subido uno.
+     */
+    if (this.fileError()) {
       return;
     }
-
     this.saving.set(true);
     const values = this.form.getRawValue();
+    const file = this.selectedFile();
 
-    this.uploadsService
-      .upload(file)
+    /**
+     * El comprobante es opcional: la factura se registra aunque el archivo
+     * llegue después. Sin archivo no se llama a `uploads` — una subida vacía
+     * sería un viaje de red y un objeto huérfano en el Storage.
+     */
+    const fileUrl$: Observable<string | undefined> = file
+      ? this.uploadsService.upload(file).pipe(map((upload) => upload.storagePath))
+      : of(undefined);
+
+    fileUrl$
       .pipe(
-        switchMap((upload) =>
+        switchMap((fileUrl) =>
           this.invoicesService.create({
             supplierId: values.supplierId,
             invoiceNumber: values.invoiceNumber.trim(),
             invoiceDate: values.invoiceDate,
             totalAmount: values.totalAmount,
             hasInvoice: values.hasInvoice,
-            fileUrl: upload.storagePath,
+            fileUrl,
           }),
         ),
         // Sin esto, cancelar/navegar fuera mientras el POST sigue en vuelo y

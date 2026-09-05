@@ -29,7 +29,8 @@ export interface CreateInvoicePayload {
   invoiceDate: string;
   totalAmount: number;
   hasInvoice: boolean;
-  fileUrl: string;
+  /** Opcional: la factura se registra aunque el comprobante llegue después. */
+  fileUrl?: string;
 }
 
 interface InvoiceDto {
