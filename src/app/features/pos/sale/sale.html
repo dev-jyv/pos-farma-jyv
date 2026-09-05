@@ -509,11 +509,26 @@
 
   <ul class="space-y-2">
     @for (item of pendingSales(); track item.queueId) {
-      <li class="flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2">
+      <li class="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2">
         <span class="text-sm text-slate-700">{{ item.folioHint }}</span>
-        <span class="text-sm font-semibold tabular-nums text-slate-900">
-          ${{ item.total | number: '1.2-2' }}
-        </span>
+        <div class="flex shrink-0 items-center gap-2">
+          <span class="text-sm font-semibold tabular-nums text-slate-900">
+            ${{ item.total | number: '1.2-2' }}
+          </span>
+          @if (isAdmin()) {
+            <!-- Solo admin: esta venta subiría sola, así que descartarla es tirar
+                 una venta buena, no resolver un rechazo. -->
+            <p-button
+              icon="pi pi-trash"
+              severity="danger"
+              [text]="true"
+              size="small"
+              [ariaLabel]="'Descartar venta pendiente de ' + (item.total | number: '1.2-2')"
+              pTooltip="Descartar"
+              (onClick)="discardPendingSale(item)"
+            />
+          }
+        </div>
       </li>
     } @empty {
       <li class="rounded-xl bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">

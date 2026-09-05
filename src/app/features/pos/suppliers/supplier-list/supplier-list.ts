@@ -9,6 +9,7 @@ import { TableModule, TableLazyLoadEvent } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 import { TooltipModule } from 'primeng/tooltip';
 import { Subject, debounceTime, distinctUntilChanged } from 'rxjs';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { NotificationService } from '../../../../core/notifications/notification.service';
 import { Supplier } from '../../../../shared/models';
@@ -29,7 +30,15 @@ export class SupplierList {
   readonly loading = signal(false);
   readonly search = signal('');
   readonly totalRecords = signal(0);
-  readonly rows = 10;
+  /**
+   * 50 por página, igual que categorías y facturas: con 10 la lista quedaba
+   * repartida en páginas de una pantalla escasa y encontrar un proveedor
+   * obligaba a paginar. El tope de la API es 100 (`parsePagination`).
+   */
+  readonly rows = 50;
+  readonly rowsPerPageOptions = [50, 100];
+  /** Tamaño de página vigente: cambia si el usuario elige otro en el paginador. */
+  private pageSize = this.rows;
 
   readonly deactivateTarget = signal<Supplier | null>(null);
   readonly deactivating = signal(false);
@@ -38,7 +47,12 @@ export class SupplierList {
   private page = 1;
 
   constructor() {
-    this.search$.pipe(debounceTime(400), distinctUntilChanged()).subscribe(() => {
+    // `search$` es un Subject: nunca completa, así que sin `takeUntilDestroyed`
+    // la suscripción sobrevivía al componente. Cada visita a la pantalla dejaba
+    // una viva, y al teclear todas disparaban su propio `fetch()` contra la API.
+    this.search$
+      .pipe(debounceTime(400), distinctUntilChanged(), takeUntilDestroyed())
+      .subscribe(() => {
       this.page = 1;
       this.fetch();
     });
@@ -47,8 +61,10 @@ export class SupplierList {
 
   onLazyLoad(event: TableLazyLoadEvent): void {
     const first = event.first ?? 0;
-    const rows = event.rows ?? this.rows;
-    this.page = Math.floor(first / rows) + 1;
+    // El tamaño lo manda la tabla: si no se guarda, cambiar "por página" pedía
+    // otra vez 50 al servidor y el paginador mostraba un total que no cuadraba.
+    this.pageSize = event.rows ?? this.rows;
+    this.page = Math.floor(first / this.pageSize) + 1;
     this.fetch();
   }
 
@@ -60,7 +76,7 @@ export class SupplierList {
   private fetch(): void {
     this.loading.set(true);
     this.suppliersService
-      .list({ search: this.search() || undefined, activeOnly: false, page: this.page, limit: this.rows })
+      .list({ search: this.search() || undefined, activeOnly: false, page: this.page, limit: this.pageSize })
       .subscribe({
         next: ({ items, meta }) => {
           this.suppliers.set(items);

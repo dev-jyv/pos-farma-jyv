@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Router } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { TranslateService, provideTranslateService } from '@ngx-translate/core';
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
@@ -65,6 +65,8 @@ describe('ExpenseForm', () => {
   let notifyError: Mock;
   let notifySuccess: Mock;
   let navigate: Mock;
+  /** Valor de `?corregir=<id>`; por defecto ausente. */
+  let corregirParam: string | null;
   let refreshCurrent: Mock;
 
   async function build(session: CashSession | null = TURNO): Promise<void> {
@@ -77,6 +79,12 @@ describe('ExpenseForm', () => {
         MessageService,
         { provide: NotificationService, useValue: { error: notifyError, success: notifySuccess } },
         { provide: Router, useValue: { navigate } },
+        // La pantalla lee `?corregir=<id>` para abrir ya cargado un gasto que el
+        // servidor rechazó, desde el aviso de la barra.
+        {
+          provide: ActivatedRoute,
+          useValue: { snapshot: { queryParamMap: { get: () => corregirParam } } },
+        },
         { provide: AuthService, useValue: { user: () => ({ uid: 'u1' }), profile: () => ({ email: 'cajero@test.com' }) } },
         {
           provide: CashSessionService,
@@ -109,6 +117,7 @@ describe('ExpenseForm', () => {
     notifyError = vi.fn();
     notifySuccess = vi.fn();
     navigate = vi.fn().mockResolvedValue(true);
+    corregirParam = null;
     create = vi.fn((): Observable<CashMovement> => of({ id: 'm1' } as CashMovement));
     updateExpense = vi.fn((): Observable<CashMovement> => of({ id: 'm1' } as CashMovement));
     listForSession = vi.fn(() => of([] as CashMovement[]));

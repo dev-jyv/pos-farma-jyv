@@ -33,7 +33,7 @@
     }
 
     @if (results().length) {
-      <p-table [value]="results()" dataKey="id" styleClass="pos-product-table">
+      <p-table [value]="results()" dataKey="id" styleClass="pos-product-table" [loading]="searching()">
         <ng-template #header>
           <tr>
             <th>{{ 'products.sku' | translate }}</th>

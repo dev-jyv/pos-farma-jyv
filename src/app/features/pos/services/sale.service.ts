@@ -1,9 +1,12 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
 import {
+  EMPTY,
   Observable,
   catchError,
+  defaultIfEmpty,
   finalize,
+  firstValueFrom,
   forkJoin,
   from,
   map,
@@ -44,6 +47,7 @@ import {
 import { previewTaxSummary } from '../../../shared/utils/taxes';
 import { resolveTender } from '../../../shared/utils/tender';
 import { environment } from '../../../../environments/environment';
+import { pushOwnerFilter } from '../../../core/sync/push-owner';
 
 export interface CreateSalePayload {
   /**
@@ -58,7 +62,14 @@ export interface CreateSalePayload {
    * anterior del POS) el backend lo trata como producto.
    */
   items: Array<
-    | { kind: 'product'; productId: string; quantity: number; discountAmount: number }
+    | {
+        kind: 'product';
+        productId: string;
+        quantity: number;
+        discountAmount: number;
+        /** Precio cobrado por unidad; el backend lo respeta sobre el de catálogo. */
+        unitPrice: number;
+      }
     | {
         kind: 'service';
         serviceId: string;
@@ -265,6 +276,11 @@ export class SaleService {
               productId: line.product.remoteId ?? line.product.id,
               quantity: line.quantity,
               discountAmount: line.discountAmount,
+              // Precio **cobrado**, no el que tenga el catálogo al sincronizar.
+              // Una venta sin conexión que subía después de un cambio de precio
+              // se rechazaba con "el monto recibido es menor al total": el
+              // servidor la tarifaba de nuevo con el precio nuevo.
+              unitPrice: lineUnitPrice(line),
             }
           : {
               // El catálogo de servicios es solo-pull: su `id` ya es el remoto,
@@ -450,11 +466,24 @@ export class SaleService {
    * no se marca nada y se reintenta en el próximo sync.
    */
   flushQueue(): void {
+    this.flush$().subscribe();
+  }
+
+  /**
+   * Igual que `flushQueue()`, pero esperable. El sincronizador la necesita para
+   * subir las ventas **antes** de cerrar el turno: si el cierre gana la carrera,
+   * el backend rechaza la venta con "el turno de caja ya está cerrado".
+   */
+  flushQueueAsync(): Promise<void> {
+    return firstValueFrom(this.flush$().pipe(defaultIfEmpty(null))).then(() => undefined);
+  }
+
+  private flush$(): Observable<unknown> {
     if (this.flushing) {
-      return;
+      return EMPTY;
     }
     this.flushing = true;
-    from(this.api().sales.getPendingPush())
+    return from(this.api().sales.getPendingPush(pushOwnerFilter(this.auth)))
       .pipe(
         // Un fallo del propio IPC (p. ej. SQLite bloqueada) no debe tumbar la
         // suscripción sin dejar rastro: se degrada a "nada pendiente" en este
@@ -485,15 +514,15 @@ export class SaleService {
               catchError(() => of(null)),
             );
         }),
+        tap(() => {
+          this.pushVoidedSales();
+          this.reconcileRemoteVoids();
+        }),
         finalize(() => {
           this.flushing = false;
           this.refreshPending();
         }),
-      )
-      .subscribe(() => {
-        this.pushVoidedSales();
-        this.reconcileRemoteVoids();
-      });
+      );
   }
 
   /**
@@ -640,7 +669,7 @@ export class SaleService {
       // instancia igual con solo abrir el shell aunque el cajero nunca cobre.
       return;
     }
-    from(api.sales.getPendingPush()).subscribe((pending) => {
+    from(api.sales.getPendingPush(pushOwnerFilter(this.auth))).subscribe((pending) => {
       const notBlocked = pending.filter((item) => !item.pushError);
       const blocked = pending.filter((item) => item.pushError);
       const hint = (sale: { items: unknown[]; total: number }) =>

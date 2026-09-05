@@ -10,6 +10,7 @@ import { TableModule, TableLazyLoadEvent } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 import { TooltipModule } from 'primeng/tooltip';
 import { Subject, debounceTime, distinctUntilChanged } from 'rxjs';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { NotificationService } from '../../../../core/notifications/notification.service';
 import { PurchaseInvoice, Supplier } from '../../../../shared/models';
@@ -59,7 +60,12 @@ export class InvoiceList {
   private page = 1;
 
   constructor() {
-    this.search$.pipe(debounceTime(400), distinctUntilChanged()).subscribe(() => {
+    // `search$` es un Subject: nunca completa, así que sin `takeUntilDestroyed`
+    // la suscripción sobrevivía al componente. Cada visita a la pantalla dejaba
+    // una viva, y al teclear todas disparaban su propio `fetch()` contra la API.
+    this.search$
+      .pipe(debounceTime(400), distinctUntilChanged(), takeUntilDestroyed())
+      .subscribe(() => {
       this.page = 1;
       this.fetch();
     });

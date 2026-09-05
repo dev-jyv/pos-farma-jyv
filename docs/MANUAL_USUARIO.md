@@ -318,7 +318,9 @@ La pantalla avisa arriba del formulario cuál de los dos casos aplica:
 - **Hay un turno abierto** — el movimiento se aplica a ese turno y **cambia su efectivo esperado**. Es lo correcto: el cajero va a contar físicamente ese mismo dinero, y si el movimiento no se registrara ahí, cerraría con un faltante sin explicación.
 - **No hay turno abierto** — el movimiento queda en la caja de la farmacia y **no entra a ningún corte**.
 
-La pantalla muestra además el **saldo** (entradas menos salidas) y los últimos movimientos con quién los registró. Ese saldo es el de **este equipo**; para ver todas las cajas usa **Auditoría de gastos**.
+La pantalla muestra además el **saldo en caja** y los últimos movimientos con quién los registró. El saldo es **lo que se contó en el último corte, más o menos lo que se movió desde entonces** — el mismo monto que se precarga como fondo al abrir el siguiente turno, así que siempre coinciden. Debajo del número se ve de dónde sale ("Contado en el último corte $700.00 · movimientos desde entonces −$200.00").
+
+Ese historial es el de **este equipo**; para ver todas las cajas usa **Auditoría de gastos**.
 
 Los **gastos** (con categoría: sueldo, renta, luz…) siguen capturándose en **Gastos**, que sí exige turno abierto y lo puede usar cualquier cajero.
 

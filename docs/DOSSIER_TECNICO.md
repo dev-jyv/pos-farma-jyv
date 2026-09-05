@@ -436,7 +436,9 @@ Entrada o salida de efectivo sin venta de por medio, tras `permissionGuard('cash
 
 Local-first como el resto: `CashMovementService.create()` escribe en SQLite y el push ocurre en `SyncScheduler`. `pushOne` elige destino según el origen: `POST /cash-sessions/:remoteId/movements` para los del turno, `POST /cash-sessions/movements` para los de la farmacia. Los de la farmacia **no** esperan a que ningún turno sincronice.
 
-La pantalla muestra el saldo local (`getBalance`, entradas − salidas − gastos) y los últimos 20 movimientos con autor. Ese saldo es el de **ese equipo**; la vista global sigue siendo `/pos/gastos-auditoria`.
+El saldo sale de `CashSessionService.cashOnHandDetail()` (IPC `cashSessions:getCashOnHand`): **lo contado en el último corte, más o menos los movimientos sin turno posteriores** — el mismo número con el que se precarga el fondo al abrir el siguiente turno, así que caja y apertura no pueden discrepar. Deliberadamente **no** es la suma de todos los movimientos: los de un turno ya entraron al conteo de su corte, y restarlos otra vez los contaba dos veces (con un solo gasto de $100 la pantalla llegó a mostrar −$100 con la caja llena). A diferencia de `cashOnHand()`, propaga el error: aquí un cero por fallo de lectura se lee como "no hay efectivo".
+
+Debajo, los últimos movimientos paginados contra SQLite (`listPageLocal`, 50 por página). Ese historial es el de **ese equipo**; la vista global sigue siendo `/pos/gastos-auditoria`.
 
 El backend audita cada uno (`cashMovement.created`, entidad `cashMovement`) — a diferencia de `addMovement`, que no auditaba: sacar efectivo sin ticket que lo respalde es justo lo que la bitácora existe para rastrear. Los gastos siguen exigiendo turno, porque su desglose por categoría solo tiene sentido dentro de un corte.
 

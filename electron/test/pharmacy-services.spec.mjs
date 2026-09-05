@@ -57,9 +57,47 @@ describe('pull del catálogo de servicios', () => {
   });
 
   it('ignora documentos sin id en vez de romper el pull completo', async () => {
-    await upsertServices(prisma, [servicioRemoto(), { name: 'basura sin id' }]);
+    const resultado = await upsertServices(prisma, [servicioRemoto(), { name: 'basura sin id' }]);
 
     expect(await listServices(prisma)).toHaveLength(1);
+    // Cuenta lo aplicado, no lo que llegó: antes devolvía `remotes.length` e
+    // informaba de un servicio que nunca se guardó.
+    expect(resultado).toEqual({ count: 1 });
+  });
+
+  /**
+   * El lote va en una sola transacción: un fallo a media tanda no puede dejar el
+   * catálogo mezclando servicios nuevos con precios viejos.
+   */
+  it('el lote entero se aplica en una transacción', async () => {
+    const transacciones = [];
+    const original = prisma.$transaction;
+    prisma.$transaction = (operaciones) => {
+      transacciones.push(operaciones.length);
+      return original(operaciones);
+    };
+
+    await upsertServices(prisma, [
+      servicioRemoto({ id: 'sv-a' }),
+      servicioRemoto({ id: 'sv-b' }),
+      servicioRemoto({ id: 'sv-c' }),
+    ]);
+
+    // Una transacción con las tres operaciones, no tres commits sueltos.
+    expect(transacciones).toEqual([3]);
+    expect(await listServices(prisma)).toHaveLength(3);
+  });
+
+  it('un lote vacío no abre transacción', async () => {
+    let abiertas = 0;
+    const original = prisma.$transaction;
+    prisma.$transaction = (operaciones) => {
+      abiertas += 1;
+      return original(operaciones);
+    };
+
+    expect(await upsertServices(prisma, [])).toEqual({ count: 0 });
+    expect(abiertas).toBe(0);
   });
 
   it('aplica defaults sanos a un documento incompleto', async () => {
@@ -73,6 +111,49 @@ describe('pull del catálogo de servicios', () => {
       requiresPerformer: false,
       price: 0,
     });
+  });
+});
+
+/**
+ * El backend serializa `Timestamp` de Firestore como `{_seconds,_nanoseconds}`.
+ * `new Date(objeto)` con esa forma da `Invalid Date`, y Prisma rechaza el upsert
+ * completo: el pull del catálogo se caía entero por una fecha (error real).
+ */
+describe('fechas que llegan del backend', () => {
+  it('acepta `updatedAt` como Timestamp de Firestore', async () => {
+    await upsertServices(prisma, [
+      servicioRemoto({ updatedAt: { _seconds: 1_757_000_000, _nanoseconds: 0 } }),
+    ]);
+
+    const [guardado] = await listServices(prisma);
+    expect(guardado.id).toBe('sv-1');
+    const fila = prisma.pharmacyService.rows[0];
+    expect(fila.updatedAt).toBeInstanceOf(Date);
+    expect(Number.isNaN(fila.updatedAt.getTime())).toBe(false);
+  });
+
+  it('una fecha ilegible no tira el pull: se guarda con la de este equipo', async () => {
+    await upsertServices(prisma, [servicioRemoto({ updatedAt: 'no es fecha' })]);
+
+    const fila = prisma.pharmacyService.rows[0];
+    expect(Number.isNaN(fila.updatedAt.getTime())).toBe(false);
+  });
+
+  it('lo mismo para los prestadores', async () => {
+    await upsertProviders(prisma, [
+      {
+        id: 'pr-1',
+        name: 'Karen Gemero',
+        license: '12345678',
+        defaultCommissionRate: 5,
+        isActive: true,
+        updatedAt: { _seconds: 1_757_000_000, _nanoseconds: 0 },
+      },
+    ]);
+
+    const [guardado] = await listProviders(prisma);
+    expect(guardado.name).toBe('Karen Gemero');
+    expect(Number.isNaN(prisma.serviceProvider.rows[0].updatedAt.getTime())).toBe(false);
   });
 });
 

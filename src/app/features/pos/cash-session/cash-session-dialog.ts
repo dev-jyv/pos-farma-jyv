@@ -22,6 +22,7 @@ import { NotificationService } from '../../../core/notifications/notification.se
 import { CashSession, CashSessionSummary, PaymentMethod } from '../../../shared/models';
 import { CashSessionService } from '../services/cash-session.service';
 import { TicketPrintService } from '../ticket/ticket-print.service';
+import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
 
 /**
  * Turno de caja — local-first: abrir/cerrar y ver el efectivo esperado no
@@ -42,6 +43,7 @@ export class CashSessionDialog {
   private readonly notifications = inject(NotificationService);
   private readonly ticketPrint = inject(TicketPrintService);
   private readonly translate = inject(TranslateService);
+  private readonly syncScheduler = inject(SyncScheduler);
 
   readonly visible = input(false);
   readonly session = input<CashSession | null>(null);
@@ -195,17 +197,25 @@ export class CashSessionDialog {
   }
 
   /**
-   * Un cajón no puede tener menos de $0.00. El `p-inputnumber` deja teclear el
-   * signo, y un conteo en negativo inventaba una diferencia del doble del
-   * esperado y la mandaba al ajuste pendiente como si faltara ese dinero.
+   * El conteo **puede ser negativo**. No es solo "billetes contados a mano":
+   * arrastra el fondo heredado, que ya puede venir en rojo, y la caja acaba en
+   * números rojos si se gastó de más o si un movimiento se registró mal. Antes
+   * se recortaba a cero, y eso no saldaba nada: falseaba el cierre y escondía
+   * el faltante justo en el documento que existe para dejarlo asentado.
    */
   setCountedCash(value: number | null): void {
-    this.countedCashAmount.set(Math.max(0, value ?? 0));
+    this.countedCashAmount.set(value ?? 0);
   }
 
-  /** Mismo motivo: un fondo inicial negativo desalinea el corte desde la apertura. */
+  /**
+   * El fondo **puede ser negativo**: hereda el efectivo del corte anterior, y
+   * ese saldo queda en rojo si se retiró más de lo que había en el cajón.
+   * Recortarlo a cero no hacía aparecer el dinero — solo abría el turno con un
+   * fondo falso, y el faltante reaparecía en el arqueo del cierre siguiente sin
+   * que nadie pudiera explicarlo.
+   */
   setOpeningAmount(value: number | null): void {
-    this.openingAmount.set(Math.max(0, value ?? 0));
+    this.openingAmount.set(value ?? 0);
   }
 
   /**
@@ -247,6 +257,10 @@ export class CashSessionDialog {
       .subscribe({
         next: (closed) => {
           this.submitting.set(false);
+          // El corte no se queda en el equipo: se sube en cuanto existe, para
+          // cualquier rol. Va aquí y no en `finish()` porque el cajero puede
+          // quedarse en la pantalla del corte imprimiéndolo.
+          this.syncScheduler.syncAfterShiftClose();
           const expected = closed.expectedCashAmount ?? this.expectedCash();
           const counted = closed.countedCashAmount ?? this.countedCashAmount();
           this.closeResult.set({

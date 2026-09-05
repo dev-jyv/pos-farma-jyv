@@ -225,6 +225,8 @@ Sacar o meter efectivo sin venta solo se podía desde un botón escondido en la 
 
 18 pruebas nuevas (pantalla, ruta de push sin turno, saldo, el gasto que sigue exigiendo turno, el permiso que el cajero no tiene, y el schema en el backend). 587 en el POS, 87 en la capa local y 6 en el backend, todo en verde. Migración probada contra una copia de la base real: `NOT NULL` fuera, llaves íntegras, movimientos conservados.
 
+**Corrección del saldo (2026-09-05).** La tarjeta sumaba *todos* los movimientos del histórico, así que un gasto de un turno **ya cerrado** —cuyo importe ya estaba dentro del `countedCashAmount` de ese corte— se restaba dos veces: con un solo gasto de $100 la pantalla mostraba −$100 con la caja llena. Ahora el saldo sale de `getCashOnHand` (lo contado en el último corte ± los movimientos sin turno posteriores), que es el mismo número con el que se precarga el fondo al abrir turno: caja y apertura ya no pueden discrepar. Se eliminó `getBalance` de la base local, el IPC, los tipos y el servicio, para que exista una sola definición de saldo.
+
 ### Bitácora de movimientos de venta (2026-09-04)
 
 La anulación se guardaba como **estado** (`voidedAt`/`voidedBy` en la venta) pero no como **historia**: el historial mostraba la etiqueta "Anulada" sin decir quién ni cuándo, y en local no había ningún registro por movimiento. Ahora cada movimiento queda asentado en las dos bases.

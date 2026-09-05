@@ -336,7 +336,58 @@ async function prepararCola(prisma, rows) {
   return { payloads, remoteByAnyId: await buildRemoteIdMap(prisma, ids) };
 }
 
-async function getPendingPush(prisma) {
+/**
+ * Lo que el servidor **rechazó**. Se separa de la cola normal porque no se
+ * reintenta solo: alguien tiene que leer el motivo y decidir. Sin esta consulta
+ * los rechazos quedaban invisibles —ni pendientes ni avisados— y una venta ya
+ * cobrada podía llevar días sin llegar al servidor.
+ */
+async function listBlocked(prisma) {
+  const rows = await prisma.sale.findMany({
+    where: { pushError: { not: null } },
+    orderBy: { createdAt: 'asc' },
+  });
+  return rows.map((row) => ({
+    kind: 'sale',
+    id: row.id,
+    label: row.folio ?? row.id,
+    detail: `$${Number(row.total ?? 0).toFixed(2)}`,
+    occurredAt: row.createdAt,
+    reason: row.pushError,
+  }));
+}
+
+/**
+ * Traduce el turno del payload al id que conoce el servidor.
+ *
+ * La venta se guarda con el id **local** del turno (SQLite), porque al cobrar el
+ * turno puede no haber sincronizado todavía. Sin esta traducción el backend
+ * buscaba ese uuid, no lo encontraba y respondía "Turno de caja no encontrado":
+ * le pasaba a **toda** venta de un turno abierto sin conexión. Es la misma
+ * traducción que ya se hacía con los productos, que faltaba aquí.
+ *
+ * Devuelve `null` si el turno aún no sube: la venta espera al siguiente ciclo en
+ * vez de viajar con un id condenado.
+ */
+async function resolvePayloadCashSession(prisma, payload) {
+  const localId = payload?.cashSessionId;
+  if (!localId) {
+    return payload;
+  }
+  const session = await prisma.cashSession.findUnique({ where: { id: localId } });
+  // Sin fila local, el id ya es remoto (venta de un turno que nació en el
+  // servidor): se manda tal cual.
+  if (!session) {
+    return payload;
+  }
+  if (!session.remoteId) {
+    return null;
+  }
+  return { ...payload, cashSessionId: session.remoteId };
+}
+
+/** `ownerUid`: solo las ventas de ese cajero (ver `ownerFilter` en cash-sessions). */
+async function getPendingPush(prisma, { ownerUid } = {}) {
   const rows = await prisma.sale.findMany({
     // Una venta anulada que nunca llegó a existir en el servidor va por otro
     // camino (`getPendingVoided`: se crea y se anula, para que quede el rastro
@@ -346,6 +397,7 @@ async function getPendingPush(prisma) {
       pendingPush: true,
       pushError: null,
       NOT: { remoteId: null, voidedAt: { not: null } },
+      ...(ownerUid ? { cashierId: ownerUid } : {}),
     },
     include: { items: true },
     orderBy: { createdAt: 'asc' },
@@ -355,7 +407,8 @@ async function getPendingPush(prisma) {
 
   const pending = [];
   for (const [indice, row] of rows.entries()) {
-    const payload = await resolvePayloadProductIds(prisma, payloads[indice], remoteByAnyId);
+    const conProductos = await resolvePayloadProductIds(prisma, payloads[indice], remoteByAnyId);
+    const payload = conProductos && (await resolvePayloadCashSession(prisma, conProductos));
     if (!payload) {
       // Su producto aún no sube; entra en el push siguiente... pero no para
       // siempre. Antes esto era un `continue` sin memoria: una venta cuyo
@@ -369,7 +422,8 @@ async function getPendingPush(prisma) {
             ? {
                 payloadResolveAttempts: attempts,
                 pushError:
-                  'Un producto de esta venta nunca sincronizó. Revísala: ' +
+                  'Esta venta espera a que su turno o alguno de sus productos ' +
+                  'sincronice, y ya lleva demasiados intentos. Revísala: ' +
                   'reintenta cuando el catálogo esté al día o descártala.',
               }
             : { payloadResolveAttempts: attempts },
@@ -401,7 +455,11 @@ async function getPendingVoided(prisma) {
 
   const pending = [];
   for (const [indice, row] of rows.entries()) {
-    const payload = await resolvePayloadProductIds(prisma, payloads[indice], remoteByAnyId);
+    const conProductos = await resolvePayloadProductIds(prisma, payloads[indice], remoteByAnyId);
+    // Misma traducción de turno que en `getPendingPush`: esta ruta también manda
+    // la venta al servidor (la crea y la anula), así que sin esto viajaba con el
+    // id local del turno y moría igual con "Turno de caja no encontrado".
+    const payload = conProductos && (await resolvePayloadCashSession(prisma, conProductos));
     if (!payload) {
       continue;
     }
@@ -535,6 +593,7 @@ module.exports = {
   list,
   voidLocal,
   getPendingPush,
+  listBlocked,
   getPendingVoided,
   markSynced,
   markPushFailed,

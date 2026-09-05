@@ -125,7 +125,7 @@
                 [ariaLabel]="('history.viewDetail' | translate) + ' ' + sale.folio"
                 [pTooltip]="'history.viewDetail' | translate"
               />
-              @if (isAdmin() && !sale.voidedAt) {
+              @if (canVoid() && !sale.voidedAt) {
                 <p-button
                   icon="pi pi-ban"
                   severity="danger"

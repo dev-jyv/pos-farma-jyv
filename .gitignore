@@ -49,3 +49,7 @@ Thumbs.db
 
 # Artefactos de auditoría con Playwright MCP
 /.playwright-mcp/
+/dist-updates
+
+# Caché de despliegue de Firebase Hosting (feed de actualizaciones)
+/.firebase/

@@ -392,6 +392,214 @@ describe('jornada completa contra SQLite real', () => {
     expect((await cashSessions.getCashOnHand(prisma)).amount).toBe(800);
   });
 
+  /**
+   * La caja **puede quedar en rojo**: se gastó de más, o un movimiento se
+   * registró mal. Antes el conteo se recortaba a cero, y eso no saldaba nada —
+   * falseaba el cierre y escondía el faltante justo en el documento que existe
+   * para asentarlo. El rojo tiene que sobrevivir al cierre y heredarse al turno
+   * siguiente, o el descuadre reaparece sin dueño.
+   */
+  it('un gasto mayor al efectivo deja la caja en rojo, y el rojo se hereda', async () => {
+    await unProducto({ stock: 20 });
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 100 });
+
+    await ventas.createLocal(prisma, {
+      ...ventaPayload([partidaProducto()]),
+      cashSessionId: turno.id,
+    });
+
+    // Se paga al proveedor más de lo que hay en el cajón: 300 sobre 200.
+    await cashMovements.addMovement(prisma, turno.id, {
+      type: 'expense',
+      amount: 300,
+      reason: 'Proveedor',
+      category: 'supplier',
+      description: 'Pago parcial de la factura',
+      createdBy: CAJERO,
+    });
+
+    // 100 de fondo + 100 de la venta − 300 del gasto.
+    const vivo = await cashSessions.getLiveSummary(prisma, turno.id);
+    expect(vivo.expectedCashAmount).toBe(-100);
+
+    const cerrado = await cashSessions.closeLocal(prisma, turno.id, {
+      countedCashAmount: -100,
+      closedBy: CAJERO,
+    });
+    expect(cerrado.countedCashAmount).toBe(-100);
+    // El rojo estaba justificado por el gasto: no hay diferencia que ajustar.
+    expect(cerrado.cashDifference).toBe(0);
+    expect(cerrado.hasPendingAdjustment).toBe(false);
+
+    // Y el turno siguiente arranca reconociendo el faltante, no en cero.
+    expect((await cashSessions.getCashOnHand(prisma)).amount).toBe(-100);
+  });
+
+  it('el turno siguiente abre con el fondo en rojo y vuelve a cuadrar al vender', async () => {
+    await unProducto({ stock: 20 });
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: -100 });
+
+    await ventas.createLocal(prisma, {
+      ...ventaPayload([partidaProducto()]),
+      cashSessionId: turno.id,
+    });
+
+    // −100 heredados + 100 cobrados: la caja vuelve a cero, no a 100.
+    const vivo = await cashSessions.getLiveSummary(prisma, turno.id);
+    expect(vivo.expectedCashAmount).toBe(0);
+
+    const cerrado = await cashSessions.closeLocal(prisma, turno.id, {
+      countedCashAmount: 0,
+      closedBy: CAJERO,
+    });
+    expect(cerrado.cashDifference).toBe(0);
+  });
+
+  it('un error de registro que deja la caja en rojo sí levanta ajuste pendiente', async () => {
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 500 });
+
+    // El cajón está vacío pero nadie registró en qué se fue: eso no es un rojo
+    // explicado, es un faltante, y tiene que llegarle a un admin.
+    const cerrado = await cashSessions.closeLocal(prisma, turno.id, {
+      countedCashAmount: -50,
+      closedBy: CAJERO,
+    });
+    expect(cerrado.cashDifference).toBe(-550);
+    expect(cerrado.hasPendingAdjustment).toBe(true);
+  });
+
+  /**
+   * Recibir mercancía es trabajo de mostrador (`stockEntry:write`). Lo que
+   * importa del recorrido: lo recibido se puede vender enseguida, sin esperar a
+   * que la entrada suba al servidor.
+   */
+  it('el cajero recibe mercancía y la vende en el mismo turno', async () => {
+    const producto = await unProducto({ stock: 0 });
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+
+    const entrada = await productos.recordStockEntry(prisma, {
+      productId: producto.id,
+      lotNumber: 'L-2026-A',
+      expiryDate: '2027-06-30',
+      quantity: 12,
+      invoiceId: 'inv-1',
+    });
+    expect(entrada.stock).toBe(12);
+
+    // La entrada queda en cola: se vende contra stock local, sin red de por medio.
+    expect(await productos.getPendingStockEntries(prisma)).toHaveLength(1);
+
+    await ventas.createLocal(prisma, {
+      ...ventaPayload([partidaProducto(producto.id)]),
+      cashSessionId: turno.id,
+    });
+
+    expect((await prisma.product.findUnique({ where: { id: producto.id } })).totalStock).toBe(10);
+  });
+
+  it('recibir un producto que aún no existe lo da de alta y lo deja vendible', async () => {
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+
+    const entrada = await productos.recordStockEntry(prisma, {
+      product: { sku: 'SKU-NUEVO', name: 'Producto nuevo', salePrice: 80 },
+      lotNumber: 'L-1',
+      expiryDate: '2027-01-31',
+      quantity: 5,
+      invoiceId: 'inv-2',
+    });
+
+    expect(entrada.stock).toBe(5);
+    /**
+     * Sube **con su entrada de stock**, no por la cola de catálogo: el producto
+     * y la mercancía viajan en el mismo `POST /stock-entries`. Si además
+     * apareciera en la cola de catálogo se daría de alta dos veces.
+     */
+    expect(await productos.getPendingStockEntries(prisma)).toHaveLength(1);
+    expect(await productos.getPendingCatalogPush(prisma)).toHaveLength(0);
+
+    const encontrado = await productos.search(prisma, 'Producto nuevo');
+    expect(encontrado).toHaveLength(1);
+
+    await ventas.createLocal(prisma, {
+      ...ventaPayload([
+        partidaProducto(entrada.product.id, { unitPrice: 80, quantity: 1, subtotal: 80 }),
+      ]),
+      cashSessionId: turno.id,
+    });
+
+    expect((await prisma.product.findUnique({ where: { id: entrada.product.id } })).totalStock).toBe(4);
+  });
+
+  /**
+   * FEFO: el mostrador despacha primero lo que caduca antes. El orden lo
+   * resuelve la consulta de lotes, y de ahí sale el lote que la venta asienta —
+   * si viniera al revés, la caducidad del ticket sería la equivocada y el lote
+   * viejo se quedaría en el anaquel hasta vencerse.
+   */
+  it('al vender, los lotes salen por caducidad más próxima', async () => {
+    const producto = await unProducto({ stock: 0 });
+
+    // Se reciben desordenados a propósito: el que caduca antes llega después.
+    await productos.recordStockEntry(prisma, {
+      productId: producto.id,
+      lotNumber: 'L-LEJANO',
+      expiryDate: '2028-01-31',
+      quantity: 5,
+      invoiceId: 'inv-1',
+    });
+    await productos.recordStockEntry(prisma, {
+      productId: producto.id,
+      lotNumber: 'L-PROXIMO',
+      expiryDate: '2026-11-30',
+      quantity: 3,
+      invoiceId: 'inv-2',
+    });
+
+    const lotes = await productos.getBatchesByProduct(prisma, producto.id);
+    expect(lotes.map((lote) => lote.lotNumber)).toEqual(['L-PROXIMO', 'L-LEJANO']);
+    expect((await prisma.product.findUnique({ where: { id: producto.id } })).totalStock).toBe(8);
+  });
+
+  /**
+   * Lo que el cajero se lleva puesto al irse. `countPending` en el renderer suma
+   * estas mismas colas: si una quedara fuera, salir con un corte o una entrada
+   * sin subir no avisaría nada.
+   */
+  it('al terminar el turno, cada cosa sin subir sigue en su cola', async () => {
+    const producto = await unProducto({ stock: 10, remoteId: 'REMOTO-1' });
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 100 });
+
+    await ventas.createLocal(prisma, {
+      ...ventaPayload([partidaProducto(producto.id)]),
+      cashSessionId: turno.id,
+    });
+    await cashMovements.addMovement(prisma, turno.id, {
+      type: 'expense',
+      amount: 20,
+      reason: 'Comida',
+      category: 'food',
+      createdBy: CAJERO,
+    });
+    await productos.recordStockEntry(prisma, {
+      productId: producto.id,
+      lotNumber: 'L-9',
+      expiryDate: '2027-05-31',
+      quantity: 4,
+      invoiceId: 'inv-3',
+    });
+    await cashSessions.closeLocal(prisma, turno.id, { countedCashAmount: 180, closedBy: CAJERO });
+
+    // El turno todavía no subió, así que su movimiento espera con él.
+    expect(await cashSessions.getPendingPush(prisma)).toHaveLength(1);
+    expect(await productos.getPendingStockEntries(prisma)).toHaveLength(1);
+    expect(await ventas.getPendingPush(prisma)).toHaveLength(1);
+
+    // Con el alta del turno ya sincronizada, el movimiento y el cierre se sueltan.
+    await cashSessions.markCreateSynced(prisma, turno.id, 'REMOTO-TURNO');
+    expect(await cashMovements.getPendingPush(prisma)).toHaveLength(1);
+    expect(await cashSessions.getPendingClosePush(prisma)).toHaveLength(1);
+  });
+
   it('un gasto sin turno se rechaza: no tendría corte donde aparecer', async () => {
     await expect(
       cashMovements.addMovement(prisma, null, {
@@ -457,7 +665,7 @@ describe('sincronización: la cola contra el backend', () => {
     }
 
     const [fila] = await prisma.sale.findMany();
-    expect(fila.pushError).toMatch(/nunca sincronizó/i);
+    expect(fila.pushError).toMatch(/espera a que su turno o alguno de sus productos sincronice/i);
   });
 
   it('el cierre de un turno no se puede subir antes que su alta', async () => {

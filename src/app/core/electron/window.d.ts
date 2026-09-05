@@ -159,6 +159,21 @@ export interface LocalCashMovementInput {
  * es `null` en los de la caja de la farmacia, que no cuelgan de ningún turno y
  * suben por `POST /cash-sessions/movements`.
  */
+/**
+ * Registro que el servidor **rechazó** al sincronizar. No se reintenta solo:
+ * alguien tiene que leer el motivo y decidir, así que la caja debe mostrarlo.
+ */
+export interface BlockedSyncRecord {
+  kind: 'sale' | 'cashMovement' | 'cashSession';
+  id: string;
+  /** Folio, motivo del gasto o tipo de operación: con qué lo reconoce el cajero. */
+  label: string;
+  /** Importe o dato de apoyo. */
+  detail: string;
+  occurredAt: string | Date;
+  reason: string;
+}
+
 export interface PendingCashMovement extends CashMovement {
   cashSessionRemoteId: string | null;
   /**
@@ -224,7 +239,9 @@ declare global {
       sales: {
         createLocal: (sale: LocalSaleInput) => Promise<Sale>;
         list: (filters?: ListSalesLocalFilters) => Promise<Sale[]>;
-        getPendingPush: () => Promise<PendingSale[]>;
+        /** `ownerUid`: solo lo del cajero indicado. Sin él (admin) sube todo. */
+        getPendingPush: (filters?: { ownerUid?: string }) => Promise<PendingSale[]>;
+        listBlocked: () => Promise<BlockedSyncRecord[]>;
         /**
          * Anuladas que nunca llegaron al servidor: se crean y se anulan allá,
          * para que el movimiento quede completo.
@@ -278,8 +295,15 @@ declare global {
          */
         getCashOnHand: () => Promise<CashOnHand>;
         closeLocal: (sessionId: string, input: LocalCashSessionCloseInput) => Promise<CashSession>;
-        getPendingPush: () => Promise<PendingCashSession[]>;
-        getPendingClosePush: () => Promise<PendingCashSessionClose[]>;
+        getPendingPush: (filters?: { ownerUid?: string }) => Promise<PendingCashSession[]>;
+        listBlocked: () => Promise<BlockedSyncRecord[]>;
+        getPendingClosePush: (
+          /**
+           * `sinHijosPendientes`: excluye turnos con ventas o gastos aún en cola,
+           * para no cerrarlos antes que sus propios movimientos.
+           */
+          filters?: { ownerUid?: string; sinHijosPendientes?: boolean },
+        ) => Promise<PendingCashSessionClose[]>;
         /**
          * `conflict: true` si ese `remoteId` ya es de otro turno local (el
          * turno anterior sigue abierto en el backend): no se adopta, se marca
@@ -353,7 +377,10 @@ declare global {
           type?: CashMovementType;
           category?: ExpenseCategory;
         }) => Promise<number>;
-        getPendingPush: () => Promise<PendingCashMovement[]>;
+        getPendingPush: (filters?: { ownerUid?: string }) => Promise<PendingCashMovement[]>;
+        listBlocked: () => Promise<BlockedSyncRecord[]>;
+        /** Borra un movimiento rechazado que nunca existió en el servidor. */
+        discard: (id: string) => Promise<void>;
         markSynced: (localId: string, remoteId?: string | null) => Promise<void>;
         markPushFailed: (localId: string, message: string) => Promise<void>;
         clearPushError: (localId: string) => Promise<void>;

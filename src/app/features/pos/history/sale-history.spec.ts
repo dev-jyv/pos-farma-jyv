@@ -66,6 +66,8 @@ describe('SaleHistory', () => {
   let voidSale: (id: string) => Observable<Sale>;
   let current: ReturnType<typeof signal<CashSession | null>>;
   let isAdmin: ReturnType<typeof signal<boolean>>;
+  /** `sales:write`: lo tiene el cajero. */
+  let puedeVender: ReturnType<typeof signal<boolean>>;
   let notifyError: ReturnType<typeof vi.fn>;
   let notifySuccess: ReturnType<typeof vi.fn>;
   let printSale: ReturnType<typeof vi.fn>;
@@ -93,7 +95,16 @@ describe('SaleHistory', () => {
           },
         },
         { provide: CashSessionService, useValue: { current, refreshCurrent: () => of(current()) } },
-        { provide: AuthService, useValue: { isAdmin, user: signal({ uid: 'u1', email: 'caja@farmajyv.mx' }) } },
+        {
+          provide: AuthService,
+          // `can('sales','write')` es lo que ahora habilita anular: es rutina de
+          // mostrador, no atribución de admin.
+          useValue: {
+            isAdmin,
+            can: (area: string, level: string) => area === 'sales' && level === 'write' && puedeVender(),
+            user: signal({ uid: 'u1', email: 'caja@farmajyv.mx' }),
+          },
+        },
         { provide: TicketPrintService, useValue: { printSale } },
       ],
     });
@@ -109,6 +120,7 @@ describe('SaleHistory', () => {
     printSale = vi.fn();
     movements = [];
     isAdmin = signal(true);
+    puedeVender = signal(true);
     current = signal<CashSession | null>(session);
     list = () => of([sale()]);
     voidSale = () => of(sale({ voidedAt: new Date('2026-08-08T16:00:00') }));
@@ -172,8 +184,22 @@ describe('SaleHistory', () => {
       expect(voidSpy).not.toHaveBeenCalled();
     });
 
-    it('un rol no admin no puede anular', () => {
+    it('el cajero SÍ puede anular: es rutina de mostrador, no atribución de admin', () => {
+      // Equivocarse de producto o que el cliente se arrepienta pasa con la fila
+      // enfrente. Exigir un admin empujaba a dejar la venta mal registrada.
       isAdmin.set(false);
+      puedeVender.set(true);
+      const voidSpy = vi.fn(() => of(sale()));
+      voidSale = voidSpy;
+
+      component.voidSale(component.sales()[0]);
+
+      expect(voidSpy).toHaveBeenCalled();
+    });
+
+    it('un rol sin `sales:write` no puede anular', () => {
+      isAdmin.set(false);
+      puedeVender.set(false);
       const voidSpy = vi.fn(() => of(sale()));
       voidSale = voidSpy;
 

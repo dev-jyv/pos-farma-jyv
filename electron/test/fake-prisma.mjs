@@ -148,6 +148,10 @@ function createModel(db, name, defaults) {
       const found = sortRows(model.rows.filter((row) => matchesWhere(row, where, db)), orderBy)[0];
       return found ? { ...found } : null;
     },
+    /** Lo usa `getPendingClosePush` para saber si al turno le quedan hijos en cola. */
+    async count({ where } = {}) {
+      return model.rows.filter((row) => matchesWhere(row, where, db)).length;
+    },
     async findUnique({ where, include }) {
       const found = model.rows.find((row) => row.id === where.id);
       return found ? model.attachIncludes({ ...found }, include) : null;

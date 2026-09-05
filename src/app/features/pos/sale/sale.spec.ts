@@ -960,4 +960,35 @@ describe('Sale', () => {
       });
     });
   });
+  describe('descartar una venta pendiente', () => {
+    it('solo lo hace un administrador', () => {
+      isAdmin.set(false);
+
+      component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
+
+      expect(saleServiceMock.discardBlockedSale).not.toHaveBeenCalled();
+    });
+
+    it('pide confirmación antes de borrar: puede ser una venta ya cobrada', () => {
+      isAdmin.set(true);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+      component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
+
+      expect(confirm).toHaveBeenCalled();
+      expect(saleServiceMock.discardBlockedSale).not.toHaveBeenCalled();
+      confirm.mockRestore();
+    });
+
+    it('confirmada, la descarta por el id local', () => {
+      isAdmin.set(true);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
+
+      expect(saleServiceMock.discardBlockedSale).toHaveBeenCalledWith('v1');
+      confirm.mockRestore();
+    });
+  });
+
 });

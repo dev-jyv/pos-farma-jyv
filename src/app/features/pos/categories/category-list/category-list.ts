@@ -9,6 +9,7 @@ import { TableModule, TableLazyLoadEvent } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 import { TooltipModule } from 'primeng/tooltip';
 import { Subject, debounceTime, distinctUntilChanged } from 'rxjs';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { NotificationService } from '../../../../core/notifications/notification.service';
 import { Category } from '../../../../shared/models';
@@ -44,6 +45,9 @@ export class CategoryList {
    * es 100 (`parsePagination`), así que 50 cabe con margen.
    */
   readonly rows = 50;
+  readonly rowsPerPageOptions = [50, 100];
+  /** Tamaño de página vigente: cambia si el usuario elige otro en el paginador. */
+  private pageSize = this.rows;
 
   readonly deactivateTarget = signal<Category | null>(null);
   readonly deactivating = signal(false);
@@ -52,7 +56,12 @@ export class CategoryList {
   private page = 1;
 
   constructor() {
-    this.search$.pipe(debounceTime(400), distinctUntilChanged()).subscribe(() => {
+    // `search$` es un Subject: nunca completa, así que sin `takeUntilDestroyed`
+    // la suscripción sobrevivía al componente. Cada visita a la pantalla dejaba
+    // una viva, y al teclear todas disparaban su propio `fetch()` contra la API.
+    this.search$
+      .pipe(debounceTime(400), distinctUntilChanged(), takeUntilDestroyed())
+      .subscribe(() => {
       this.page = 1;
       this.fetch();
     });
@@ -61,8 +70,10 @@ export class CategoryList {
 
   onLazyLoad(event: TableLazyLoadEvent): void {
     const first = event.first ?? 0;
-    const rows = event.rows ?? this.rows;
-    this.page = Math.floor(first / rows) + 1;
+    // El tamaño lo manda la tabla: si no se guarda, cambiar "por página" pedía
+    // otra vez 50 al servidor y el paginador mostraba un total que no cuadraba.
+    this.pageSize = event.rows ?? this.rows;
+    this.page = Math.floor(first / this.pageSize) + 1;
     this.fetch();
   }
 
@@ -74,7 +85,7 @@ export class CategoryList {
   private fetch(): void {
     this.loading.set(true);
     this.categoriesService
-      .list({ search: this.search() || undefined, activeOnly: false, page: this.page, limit: this.rows })
+      .list({ search: this.search() || undefined, activeOnly: false, page: this.page, limit: this.pageSize })
       .subscribe({
         next: ({ items, meta }) => {
           this.categories.set(items);

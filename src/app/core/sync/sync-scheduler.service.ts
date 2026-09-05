@@ -10,12 +10,14 @@ import { ProductCatalogService } from '../../features/pos/services/product-catal
 import { SaleService } from '../../features/pos/services/sale.service';
 import { StockEntryService } from '../../features/pos/services/stock-entry.service';
 import { environment } from '../../../environments/environment';
+import { AuthService } from '../auth/auth.service';
+import { pushOwnerFilter } from './push-owner';
 
 /**
  * Cuánto espera el cajero entre dos sincronizaciones manuales. El admin no pasa
  * por aquí.
  */
-const MANUAL_SYNC_COOLDOWN_MS = 60 * 60 * 1000;
+const MANUAL_SYNC_COOLDOWN_MS = 15 * 60 * 1000;
 
 /** Llave por usuario: dos cajeros en el mismo equipo no comparten el cupo. */
 const manualSyncKey = (uid: string): string => `pos.last-manual-sync.${uid || 'anon'}`;
@@ -81,6 +83,7 @@ export class SyncScheduler {
   private readonly cashSessionService = inject(CashSessionService);
   private readonly cashMovementService = inject(CashMovementService);
   private readonly apiHealth = inject(ApiHealthService);
+  private readonly auth = inject(AuthService);
   private readonly apiUrl = environment.apiUrl;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -129,8 +132,71 @@ export class SyncScheduler {
   }
 
   /**
+   * Corrida al cerrar el turno de caja, para **cualquier** rol.
+   *
+   * Un corte recién hecho es justo lo que no debe quedarse en el equipo: es el
+   * dinero contado del día y el turno que el backend necesita cerrado para
+   * aceptar el siguiente. Se dispara aquí y no al cerrar el modal porque el
+   * cajero puede quedarse imprimiendo el corte (o irse sin cerrarlo).
+   *
+   * **No pasa por el límite entre sincronizaciones manuales**: ese tope existe
+   * para el botón "Sincronizar" del mostrador, no para un evento del negocio que
+   * ocurre una vez por turno.
+   */
+  syncAfterShiftClose(): void {
+    // Sin `electronAPI` no hay colas locales que subir (la app corre en el
+    // navegador, todo va contra el backend en tiempo real).
+    if (!window.electronAPI) {
+      return;
+    }
+    this.runNow();
+  }
+
+  /**
+   * Todo lo que sigue en cola local, no solo las ventas: turnos y sus cierres,
+   * productos del catálogo, entradas de stock y movimientos de caja. Se lee de
+   * las colas (IPC) y no de los contadores en memoria porque varios de esos
+   * servicios no publican ninguno, y salir creyendo que "solo faltaban ventas"
+   * dejaba un corte o una entrada de mercancía sin subir.
+   *
+   * Cada cola falla por su cuenta: si una consulta revienta, cuenta 0 en vez de
+   * tumbar el conteo entero — el objetivo es avisar, no bloquear la salida.
+   */
+  async countPending(): Promise<number> {
+    const api = window.electronAPI;
+    if (!api) {
+      return 0;
+    }
+    const queues = await Promise.allSettled([
+      api.sales.getPendingPush(),
+      api.sales.getPendingVoided(),
+      api.catalog.getPendingCatalogPush(),
+      api.catalog.getPendingStockEntries(),
+      api.cashMovements.getPendingPush(),
+      api.cashSessions.getPendingPush(),
+      api.cashSessions.getPendingClosePush(),
+    ]);
+    return queues.reduce(
+      (total, queue) => total + (queue.status === 'fulfilled' ? queue.value.length : 0),
+      0,
+    );
+  }
+
+  /**
+   * Empuje **esperable**, para el camino de salida: `syncNow()` dispara el push
+   * sin esperarlo (`void this.pushPending()`) porque su trabajo visible es traer
+   * el catálogo. Al cerrar sesión o la app no hay después: hay que esperar.
+   */
+  async flushPendingNow(): Promise<void> {
+    if (!window.electronAPI) {
+      return;
+    }
+    await this.pushPending();
+  }
+
+  /**
    * Empuja en **orden**, no en paralelo: turno de caja → catálogo → entradas
-   * de stock → gastos/movimientos → ventas.
+   * de stock → gastos/movimientos → ventas → cierres de turno.
    *
    * El turno va primero porque tanto los movimientos de caja (gastos, depósitos,
    * retiros) como las ventas necesitan que su `CashSession` ya tenga `remoteId`
@@ -143,11 +209,19 @@ export class SyncScheduler {
    * y quedaba rechazada.
    */
   private async pushPending(): Promise<void> {
-    await this.cashSessionService.flushQueueAsync();
+    // Cada cajero sube lo suyo: el backend rechaza el turno de otro con 403 y
+    // el POS lo mostraba como un "rechazado" que ese cajero no podía resolver.
+    const owner = pushOwnerFilter(this.auth);
+    await this.cashSessionService.flushQueueAsync(owner);
     await this.productCatalogService.flushQueueAsync();
     await this.stockEntryService.flushQueueAsync();
-    await this.cashMovementService.flushQueueAsync();
-    this.saleService.flushQueue();
+    await this.cashMovementService.flushQueueAsync(owner);
+    await this.saleService.flushQueueAsync();
+    // Los cierres, al final: un turno cerrado no acepta movimientos ni ventas, así
+    // que cerrarlo antes que sus hijos los condenaba a "el turno de caja ya está
+    // cerrado". Los cierres de turnos **viejos** ya subieron en el primer paso,
+    // que es lo que libera el hueco del cajero para el alta de hoy.
+    await this.cashSessionService.flushClosesAsync(owner);
   }
 
   /**
@@ -159,7 +233,7 @@ export class SyncScheduler {
    */
   /**
    * Sincronización manual con la regla de uso: el cajero puede forzarla **una vez
-   * por hora**, el admin sin límite.
+   * cada 15 minutos**, el admin sin límite.
    *
    * El tope no es capricho: el pull trae el catálogo completo y el push recorre
    * toda la cola, así que un botón sin freno en el mostrador se convierte en

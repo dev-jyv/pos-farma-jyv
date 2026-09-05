@@ -205,6 +205,62 @@ describe('totales denormalizados', () => {
   });
 });
 
+describe('traducción del turno al empujar', () => {
+  it('espera si el turno todavía no tiene id en el servidor', async () => {
+    await producto('p1', { remoteId: 'P-REMOTO' });
+    await prisma.cashSession.create({ data: { id: 'cs-local', openedBy: CAJERO, remoteId: null } });
+    await createLocal(prisma, venta([partidaProducto('p1')], {
+      cashSessionId: 'cs-local',
+      payload: { items: [partidaProducto('p1')], cashSessionId: 'cs-local' },
+    }));
+
+    // Mandarla ahora sería condenarla: el backend no conoce ese uuid local.
+    expect(await getPendingPush(prisma)).toHaveLength(0);
+  });
+
+  it('manda el id remoto del turno, no el local', async () => {
+    await producto('p1', { remoteId: 'P-REMOTO' });
+    await prisma.cashSession.create({
+      data: { id: 'cs-local', openedBy: CAJERO, remoteId: 'REMOTO-1' },
+    });
+    await createLocal(prisma, venta([partidaProducto('p1')], {
+      cashSessionId: 'cs-local',
+      payload: { items: [partidaProducto('p1')], cashSessionId: 'cs-local' },
+    }));
+
+    const [pendiente] = await getPendingPush(prisma);
+    // Antes viajaba 'cs-local' y el backend respondía "Turno de caja no encontrado".
+    expect(pendiente.payload.cashSessionId).toBe('REMOTO-1');
+  });
+
+  it('deja pasar tal cual un id que ya es remoto (turno nacido en el servidor)', async () => {
+    await producto('p1', { remoteId: 'P-REMOTO' });
+    await createLocal(prisma, venta([partidaProducto('p1')], {
+      cashSessionId: 'YA-REMOTO',
+      payload: { items: [partidaProducto('p1')], cashSessionId: 'YA-REMOTO' },
+    }));
+
+    const [pendiente] = await getPendingPush(prisma);
+    expect(pendiente.payload.cashSessionId).toBe('YA-REMOTO');
+  });
+
+  it('la ruta de anuladas también manda el id remoto del turno', async () => {
+    await producto('p1', { remoteId: 'P-REMOTO' });
+    await prisma.cashSession.create({
+      data: { id: 'cs-local', openedBy: CAJERO, remoteId: 'REMOTO-1' },
+    });
+    const creada = await createLocal(prisma, venta([partidaProducto('p1')], {
+      cashSessionId: 'cs-local',
+      payload: { items: [partidaProducto('p1')], cashSessionId: 'cs-local' },
+    }));
+    // Anulada antes de sincronizar: sube por `getPendingVoided`, no por la cola normal.
+    await voidLocal(prisma, creada.id, CAJERO);
+
+    const [pendiente] = await sales.getPendingVoided(prisma);
+    expect(pendiente.payload.cashSessionId).toBe('REMOTO-1');
+  });
+});
+
 describe('cola de push', () => {
   it('una venta de solo servicios se puede subir aunque no haya productos que traducir', async () => {
     await createLocal(prisma, venta([partidaServicio()]));
@@ -247,7 +303,7 @@ describe('cola de push', () => {
       await getPendingPush(prisma);
     }
 
-    expect(prisma.sale.rows[0].pushError).toMatch(/nunca sincronizó/i);
+    expect(prisma.sale.rows[0].pushError).toMatch(/espera a que su turno o alguno de sus productos sincronice/i);
     expect(prisma.sale.rows[0].payloadResolveAttempts).toBe(6);
   });
 

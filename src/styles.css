@@ -267,6 +267,48 @@ select option {
   box-shadow: 0 0 0 3px rgb(76 168 32 / 0.2) !important;
 }
 
+/*
+ * Ninguna tabla empuja la pantalla.
+ *
+ * Con el reparto automático del navegador, una sola celda de texto libre estira
+ * la tabla tanto como haga falta: una descripción sin espacios ("DDDD…") no
+ * tiene dónde romper, y la caja acababa con scroll horizontal y las columnas de
+ * la derecha fuera de vista. `fixed` reparte el ancho disponible y respeta los
+ * anchos que cada tabla ya declara en sus `th` (`w-28`, `w-20`…); el resto de
+ * columnas se contrae para caber.
+ *
+ * `anywhere` es lo que permite partir una palabra interminable dentro de su
+ * celda. Se prefiere a truncar con puntos suspensivos: en una farmacia el texto
+ * recortado suele ser el motivo de un gasto o el lote de un medicamento, y
+ * esconderlo es peor que una fila alta.
+ */
+.p-datatable table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.p-datatable .p-datatable-tbody > tr > td,
+.p-datatable .p-datatable-thead > tr > th {
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Carga de una tabla. PrimeNG tapa el cuerpo con una máscara y un spinner, pero
+ * por defecto es gris sobre gris: en el monitor de una caja, con luz de tienda,
+ * no se distingue de una tabla vacía. Se le da el verde de la marca y un velo
+ * más opaco, para que "cargando" no se confunda con "no hay nada".
+ */
+.p-datatable-mask.p-overlay-mask {
+  background: rgb(255 255 255 / 0.72);
+  backdrop-filter: blur(1px);
+}
+
+.p-datatable-loading-icon {
+  color: var(--pos-primary);
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
 .pos-product-table .p-datatable-tbody > tr {
   cursor: pointer;
 }

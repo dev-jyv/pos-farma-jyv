@@ -69,6 +69,16 @@ export class SaleHistory {
   readonly voiding = signal<string | null>(null);
 
   readonly isAdmin = this.authService.isAdmin;
+  /**
+   * Anular es rutina de mostrador: el cajero se equivoca de producto o el
+   * cliente se arrepiente, y eso pasa con la fila enfrente. Basta `sales:write`,
+   * el mismo permiso con el que cobra — el backend valida igual. Lo que protege
+   * la operación no es negarla, sino que quede firmada (`voidedBy`, `voidedAt`).
+   *
+   * Una venta de un turno ya cerrado sí sigue siendo de admin: ahí se toca un
+   * arqueo firmado. El servidor lo rechaza y el mensaje lo explica.
+   */
+  readonly canVoid = computed(() => this.authService.can('sales', 'write'));
   readonly cashSession = this.cashSessionService.current;
 
   /**
@@ -158,7 +168,7 @@ export class SaleHistory {
   }
 
   voidSale(sale: Sale): void {
-    if (sale.voidedAt || !this.isAdmin() || this.voiding()) {
+    if (sale.voidedAt || !this.canVoid() || this.voiding()) {
       return;
     }
     if (!window.confirm(`¿Anular la venta ${sale.folio}?`)) {

@@ -318,21 +318,62 @@ async function getCashOnHand(prisma) {
 }
 
 /** Turnos cuya alta (`POST /cash-sessions`) todavía no subió. */
-async function getPendingPush(prisma) {
+/**
+ * `ownerUid` acota la cola a lo que ese cajero puede subir. El backend solo
+ * acepta el turno de quien lo abrió (o de un admin): si el cajero B sincroniza
+ * el turno del cajero A, responde 403 y el POS se lo muestra a B como un
+ * "rechazado" que B no puede resolver. Cada quien sube lo suyo; lo de A sube
+ * cuando A entra. Sin `ownerUid` (admin) se sube todo.
+ */
+function ownerFilter(ownerUid) {
+  return ownerUid ? { openedBy: ownerUid } : {};
+}
+
+async function getPendingPush(prisma, { ownerUid } = {}) {
   const rows = await prisma.cashSession.findMany({
-    where: { pendingPush: true, pushError: null },
+    where: { pendingPush: true, pushError: null, ...ownerFilter(ownerUid) },
     orderBy: { openedAt: 'asc' },
   });
   return rows.map(toCashSessionDto);
 }
 
 /** Turnos cuyo cierre local todavía no se refleja en el backend. */
-async function getPendingClosePush(prisma) {
+/**
+ * Cierres pendientes de subir.
+ *
+ * `sinHijosPendientes` excluye los turnos que todavía tienen ventas o gastos sin
+ * sincronizar. Es la primera pasada del ciclo, cuyo único fin es **liberar el
+ * hueco** del cajero (el backend admite un turno abierto por persona) para que
+ * el alta de hoy no choque. Cerrar ahí un turno con hijos en cola condenaba a
+ * esos hijos: el backend los rechaza con "el turno de caja ya está cerrado".
+ * Esos turnos se cierran en la pasada final, cuando sus hijos ya subieron.
+ */
+async function getPendingClosePush(prisma, { ownerUid, sinHijosPendientes = false } = {}) {
   const rows = await prisma.cashSession.findMany({
-    where: { remoteId: { not: null }, pendingClosePush: true, closePushError: null },
+    where: {
+      remoteId: { not: null },
+      pendingClosePush: true,
+      closePushError: null,
+      ...ownerFilter(ownerUid),
+    },
     orderBy: { closedAtLocal: 'asc' },
   });
-  return rows.map(toCashSessionDto);
+
+  if (!sinHijosPendientes) {
+    return rows.map(toCashSessionDto);
+  }
+
+  const conHijos = new Set();
+  for (const row of rows) {
+    const [ventas, movimientos] = await Promise.all([
+      prisma.sale.count({ where: { cashSessionId: row.id, pendingPush: true } }),
+      prisma.cashMovement.count({ where: { cashSessionId: row.id, pendingPush: true } }),
+    ]);
+    if (ventas > 0 || movimientos > 0) {
+      conHijos.add(row.id);
+    }
+  }
+  return rows.filter((row) => !conHijos.has(row.id)).map(toCashSessionDto);
 }
 
 /**
@@ -386,6 +427,25 @@ async function markCloseSynced(prisma, localId, { expectedCashAmount, cashDiffer
       ...(cashDifference !== undefined ? { cashDifference } : {}),
     },
   });
+}
+
+/**
+ * Turnos rechazados, tanto en su alta (`pushError`) como en su cierre
+ * (`closePushError`): un cierre que no sube deja el corte solo en este equipo.
+ */
+async function listBlocked(prisma) {
+  const rows = await prisma.cashSession.findMany({
+    where: { OR: [{ pushError: { not: null } }, { closePushError: { not: null } }] },
+    orderBy: { openedAt: 'asc' },
+  });
+  return rows.map((row) => ({
+    kind: 'cashSession',
+    id: row.id,
+    label: row.closePushError ? 'Cierre de turno' : 'Apertura de turno',
+    detail: row.openedBy ?? '',
+    occurredAt: row.openedAt,
+    reason: row.closePushError ?? row.pushError,
+  }));
 }
 
 async function markPushFailed(prisma, localId, message) {
@@ -446,6 +506,7 @@ module.exports = {
   getPendingClosePush,
   markCreateSynced,
   markCloseSynced,
+  listBlocked,
   markPushFailed,
   markClosePushFailed,
   clearPushError,

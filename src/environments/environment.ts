@@ -5,6 +5,12 @@ export const environment = {
   apiUrl: 'https://api-vykfsskx3q-uc.a.run.app/v1',
   primeNgLicense:
     'eyJpZCI6ImIyYTFiMmZkLWVjYzItNDMxNi1iZGU2LTJhOWE1YTg0YTg5MyIsInByb2R1Y3QiOiJwcmltZXVpIiwidGllciI6ImNvbW11bml0eSIsInR5cGUiOiJkZXYiLCJpYXQiOjE3ODU1NDU5MTcsImV4cCI6MTgxNzA4MTkxN30.qU9mWYPh-N38tjPZluyU8GWqThw0DFVabnjlJf50TeU0aBBs8_dqlIBN7Mk5GSS-TfSPk-hxC0v-16yEhzehAQ',
+  /**
+   * Cobro fuera de una venta. Oculto por ahora: la pantalla y su módulo siguen
+   * completos (`/pos/cobro-directo`, `directCharges` en el backend); esto solo
+   * quita la entrada del menú. Poner en `true` para volver a ofrecerlo.
+   */
+  directChargeEnabled: false,
   printTicketOnSale: false,
   expiryWarningDays: 30,
   soundsEnabled: true,

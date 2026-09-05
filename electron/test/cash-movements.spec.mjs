@@ -9,6 +9,8 @@ const {
   listForSession,
   listAllLocal,
   getPendingPush,
+  listBlocked,
+  discard,
   updateExpense,
   markSynced,
   markPushFailed,
@@ -197,6 +199,54 @@ describe('movimientos sin turno', () => {
 
     const { expectedCashAmount } = await cashSessions.getLiveSummary(prisma, turno.id);
     expect(expectedCashAmount).toBe(300);
+  });
+});
+
+describe('rechazados visibles', () => {
+  it('listBlocked devuelve lo que el servidor rechazó, con su motivo', async () => {
+    const ok = await addMovement(prisma, turno.id, gasto());
+    const rechazado = await addMovement(prisma, turno.id, gasto({ amount: 300 }));
+    await markPushFailed(prisma, rechazado.id, 'El turno de caja ya está cerrado');
+
+    const bloqueados = await listBlocked(prisma);
+    expect(bloqueados).toHaveLength(1);
+    expect(bloqueados[0].id).toBe(rechazado.id);
+    expect(bloqueados[0].kind).toBe('cashMovement');
+    expect(bloqueados[0].reason).toBe('El turno de caja ya está cerrado');
+    // El que va bien no aparece: el aviso es solo para lo que necesita decisión.
+    expect(bloqueados.some((item) => item.id === ok.id)).toBe(false);
+  });
+
+  it('deja de listarlo en cuanto se limpia el error para reintentarlo', async () => {
+    const creado = await addMovement(prisma, turno.id, gasto());
+    await markPushFailed(prisma, creado.id, 'Stock insuficiente');
+    expect(await listBlocked(prisma)).toHaveLength(1);
+
+    await clearPushError(prisma, creado.id);
+    expect(await listBlocked(prisma)).toHaveLength(0);
+  });
+});
+
+describe('descartar un rechazado', () => {
+  it('lo borra y deja de restar del efectivo esperado', async () => {
+    const creado = await addMovement(prisma, turno.id, gasto({ amount: 120 }));
+    await markPushFailed(prisma, creado.id, 'El turno de caja ya está cerrado');
+    expect((await cashSessions.getLiveSummary(prisma, turno.id)).expectedCashAmount).toBe(380);
+
+    await discard(prisma, creado.id);
+
+    expect(await listBlocked(prisma)).toHaveLength(0);
+    // Vuelve a los 500 del fondo: el gasto ya no existe.
+    expect((await cashSessions.getLiveSummary(prisma, turno.id)).expectedCashAmount).toBe(500);
+  });
+
+  it('no borra uno que ya existe en el servidor: quedaría vivo en la auditoría', async () => {
+    const creado = await addMovement(prisma, turno.id, gasto());
+    await cashSessions.markCreateSynced(prisma, turno.id, 'remote-turno-1');
+    await markSynced(prisma, creado.id, 'remote-mov-1');
+
+    await expect(discard(prisma, creado.id)).rejects.toThrow(/ya existe en el servidor/i);
+    expect(prisma.cashMovement.rows).toHaveLength(1);
   });
 });
 

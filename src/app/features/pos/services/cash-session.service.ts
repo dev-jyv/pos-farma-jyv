@@ -31,6 +31,7 @@ import {
 import { CashAdjustmentStatus, CashSession, CashSessionSummary } from '../../../shared/models';
 import { isSessionExpired } from '../../../shared/utils/session-expiry';
 import { environment } from '../../../../environments/environment';
+import { PushOwner } from '../../../core/sync/push-owner';
 
 /**
  * Corte tal como llega de `GET /cash-sessions`, con las fechas todavía en el
@@ -283,13 +284,25 @@ export class CashSessionService {
    * primer sync) — el `remoteId` del create se persiste de inmediato para que
    * un fallo del close no dispare un segundo alta en el próximo intento.
    */
-  flushQueue(): void {
-    this.flush$().subscribe();
+  flushQueue(owner: PushOwner = {}): void {
+    this.flush$(owner).subscribe();
   }
 
   /** Esperable: `SyncScheduler` la encadena antes de movimientos y ventas (ambos dependen de esto). */
-  flushQueueAsync(): Promise<void> {
-    return firstValueFrom(this.flush$().pipe(defaultIfEmpty(null))).then(() => undefined);
+  flushQueueAsync(owner: PushOwner = {}): Promise<void> {
+    return firstValueFrom(this.flush$(owner).pipe(defaultIfEmpty(null))).then(() => undefined);
+  }
+
+  /**
+   * Solo los cierres. El sincronizador la llama **al final**, después de gastos y
+   * ventas: el cierre libera el hueco del cajero, pero cerrar antes que sus hijos
+   * hacía que el backend los rechazara con "el turno de caja ya está cerrado" —
+   * gastos y ventas reales que quedaban bloqueados sin haber hecho nada mal.
+   */
+  flushClosesAsync(owner: PushOwner = {}): Promise<void> {
+    return firstValueFrom(
+      this.pushPendingCloses$(new Set<string>(), owner).pipe(defaultIfEmpty(null)),
+    ).then(() => undefined);
   }
 
   /**
@@ -303,7 +316,7 @@ export class CashSessionService {
    * P2002 "Unique constraint failed on the fields: (remoteId)", visto en
    * producción. Cerrando primero, el hueco queda libre y el alta crea uno real.
    */
-  private flush$(): Observable<unknown> {
+  private flush$(owner: PushOwner): Observable<unknown> {
     if (this.flushing) {
       return EMPTY;
     }
@@ -312,25 +325,36 @@ export class CashSessionService {
     // idempotente (responde 409 "el turno ya está cerrado") y el segundo
     // barrido lo marcaría como rechazo permanente sin serlo.
     const cerradosEnEsteCiclo = new Set<string>();
-    return this.pushPendingCloses$(cerradosEnEsteCiclo).pipe(
-      switchMap(() => from(this.api().getPendingPush())),
+    return this.pushPendingCloses$(cerradosEnEsteCiclo, owner, { sinHijosPendientes: true }).pipe(
+      switchMap(() => from(this.api().getPendingPush(owner))),
       catchError(() => of([] as PendingCashSession[])),
       switchMap((pendingCreates) =>
         pendingCreates.length
           ? from(pendingCreates).pipe(concatMap((item) => this.pushOneCreate(item)))
           : of(null),
       ),
-      // Segunda pasada: un turno que se abrió y cerró antes del primer sync
-      // acaba de recibir su `remoteId` en el paso anterior.
-      switchMap(() => this.pushPendingCloses$(cerradosEnEsteCiclo)),
+      // La segunda pasada de cierres ya no va aquí: la hace el sincronizador con
+      // `flushClosesAsync()` después de subir gastos y ventas, para no cerrar el
+      // turno antes que sus propios movimientos (ver ese método).
       finalize(() => {
         this.flushing = false;
       }),
     );
   }
 
-  private pushPendingCloses$(yaIntentados: Set<string>): Observable<unknown> {
-    return from(this.api().getPendingClosePush()).pipe(
+  /**
+   * `sinHijosPendientes`: solo los cierres de turnos que ya no tienen ventas ni
+   * gastos en cola. Se usa en la **primera** pasada, cuya única razón de ser es
+   * liberar el hueco del cajero para el alta de hoy. Sin ese filtro, esa pasada
+   * cerraba el turno recién cortado y sus propios gastos rebotaban con "el turno
+   * de caja ya está cerrado" — el 400 que se veía al cerrar sesión.
+   */
+  private pushPendingCloses$(
+    yaIntentados: Set<string>,
+    owner: PushOwner,
+    { sinHijosPendientes = false } = {},
+  ): Observable<unknown> {
+    return from(this.api().getPendingClosePush({ ...owner, sinHijosPendientes })).pipe(
       catchError(() => of([] as PendingCashSessionClose[])),
       map((pendingCloses) => pendingCloses.filter((item) => !yaIntentados.has(item.id))),
       switchMap((pendingCloses) =>
@@ -435,8 +459,11 @@ export class CashSessionService {
                     api.cashSessions.updateAdjustmentStatus(session.id, {
                       status,
                       reviewedBy: dto.session.adjustmentReviewedBy ?? null,
+                      // El backend manda `Timestamp` serializado (`{_seconds}`):
+                      // `new Date(objeto)` da Invalid Date y `.toISOString()`
+                      // lanza RangeError, tirando el pull entero por una fecha.
                       reviewedAt: dto.session.adjustmentReviewedAt
-                        ? new Date(dto.session.adjustmentReviewedAt).toISOString()
+                        ? toDate(dto.session.adjustmentReviewedAt).toISOString()
                         : null,
                       note: dto.session.adjustmentNote ?? null,
                     }),

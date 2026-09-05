@@ -220,6 +220,78 @@ describe('cierre y ajuste pendiente', () => {
   });
 });
 
+/**
+ * Equipo compartido por dos cajeros. El backend solo acepta el turno de quien lo
+ * abrió (o el de un admin): si el cajero B sincroniza el turno de A, responde 403
+ * y el POS se lo mostraba a B como un "rechazado" que B no podía resolver — pasó
+ * en producción.
+ */
+describe('la cola de push es de cada cajero, no del equipo', () => {
+  it('solo devuelve las altas del cajero que sincroniza', async () => {
+    await createLocal(prisma, { openedBy: CAJERO, openingAmount: 100 });
+    await createLocal(prisma, { openedBy: 'otro-cajero', openingAmount: 200 });
+
+    const mios = await getPendingPush(prisma, { ownerUid: CAJERO });
+
+    expect(mios).toHaveLength(1);
+    expect(mios[0].openedBy).toBe(CAJERO);
+  });
+
+  it('solo devuelve los cierres del cajero que sincroniza', async () => {
+    const ajeno = await createLocal(prisma, { openedBy: 'otro-cajero', openingAmount: 100 });
+    await markCreateSynced(prisma, ajeno.id, 'remote-ajeno');
+    await closeLocal(prisma, ajeno.id, { countedCashAmount: 100, closedBy: 'otro-cajero' });
+
+    expect(await getPendingClosePush(prisma, { ownerUid: CAJERO })).toHaveLength(0);
+    // Cuando entre su dueño, sí sube.
+    expect(await getPendingClosePush(prisma, { ownerUid: 'otro-cajero' })).toHaveLength(1);
+  });
+
+  it('la primera pasada NO cierra un turno que aún tiene gastos en cola', async () => {
+    const turno = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 500 });
+    await markCreateSynced(prisma, turno.id, 'remote-1');
+    await prisma.cashMovement.create({
+      data: {
+        id: 'mov-1',
+        cashSessionId: turno.id,
+        type: 'expense',
+        amount: 100,
+        reason: 'Comida',
+        category: 'food',
+        createdBy: CAJERO,
+        pendingPush: true,
+      },
+    });
+    await closeLocal(prisma, turno.id, { countedCashAmount: 400, closedBy: CAJERO });
+
+    // Cerrarlo aquí condenaría al gasto: el backend lo rechaza con "el turno de
+    // caja ya está cerrado" (el 400 que salía al cerrar sesión).
+    expect(
+      await getPendingClosePush(prisma, { ownerUid: CAJERO, sinHijosPendientes: true }),
+    ).toHaveLength(0);
+    // La pasada final sí lo cierra, ya con el gasto arriba.
+    expect(await getPendingClosePush(prisma, { ownerUid: CAJERO })).toHaveLength(1);
+  });
+
+  it('la primera pasada sí cierra un turno sin nada en cola: es lo que libera el hueco', async () => {
+    const turno = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 500 });
+    await markCreateSynced(prisma, turno.id, 'remote-1');
+    await closeLocal(prisma, turno.id, { countedCashAmount: 500, closedBy: CAJERO });
+
+    expect(
+      await getPendingClosePush(prisma, { ownerUid: CAJERO, sinHijosPendientes: true }),
+    ).toHaveLength(1);
+  });
+
+  /** El admin desatora el equipo cuyo cajero ya no vuelve: sube todo. */
+  it('sin `ownerUid` (admin) sube lo de todos', async () => {
+    await createLocal(prisma, { openedBy: CAJERO, openingAmount: 100 });
+    await createLocal(prisma, { openedBy: 'otro-cajero', openingAmount: 200 });
+
+    expect(await getPendingPush(prisma)).toHaveLength(2);
+  });
+});
+
 describe('colas de push: alta y cierre son independientes', () => {
   it('un turno nuevo está pendiente de alta, no de cierre', async () => {
     await createLocal(prisma, { openedBy: CAJERO, openingAmount: 100 });

@@ -11,6 +11,7 @@ import { CashSession, CashSessionSummary } from '../../../shared/models';
 import { CashSessionService } from '../services/cash-session.service';
 import { TicketPrintService } from '../ticket/ticket-print.service';
 import { CashSessionDialog } from './cash-session-dialog';
+import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
 
 const session = {
   id: 's1',
@@ -78,6 +79,7 @@ describe('CashSessionDialog (local-first)', () => {
   let component: CashSessionDialog;
   let openLocal: (userId: string, label: string | undefined, amount: number) => Observable<CashSession>;
   let closeLocal: (id: string, counted: number, closedBy: string, closedByLabel?: string) => Observable<CashSession>;
+  let syncAfterShiftClose: ReturnType<typeof vi.fn>;
   let liveSummary: () => Observable<{
     summary: CashSessionSummary;
     expectedCashAmount: number;
@@ -101,6 +103,7 @@ describe('CashSessionDialog (local-first)', () => {
         MessageService,
         { provide: NotificationService, useValue: { error: notifyError, success: vi.fn() } },
         { provide: AuthService, useValue: authStub },
+        { provide: SyncScheduler, useValue: { syncAfterShiftClose } },
         {
           provide: CashSessionService,
           // Envueltos en cierres: cada prueba puede reemplazar el doble antes de
@@ -139,6 +142,7 @@ describe('CashSessionDialog (local-first)', () => {
   beforeEach(() => {
     notifyError = vi.fn();
     printCashCut = vi.fn();
+    syncAfterShiftClose = vi.fn();
     openLocal = vi.fn(() => of(session));
     closeLocal = vi.fn(() =>
       of({
@@ -225,6 +229,23 @@ describe('CashSessionDialog (local-first)', () => {
         expect(component.openingAmount()).toBe(0);
       });
 
+      /**
+       * El saldo heredado queda en rojo si se retiró más efectivo del que había.
+       * Recortarlo a cero no hacía aparecer el dinero: abría el turno con un
+       * fondo falso y el faltante reaparecía en el arqueo del cierre siguiente,
+       * sin que nadie pudiera explicarlo.
+       */
+      it('un saldo heredado en rojo se precarga tal cual, no se recorta a cero', async () => {
+        cashOnHand = () => of(-150);
+        await build(null);
+
+        expect(component.openingAmount()).toBe(-150);
+
+        component.confirmOpen();
+        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', -150);
+      });
+
+
       it('si la consulta falla, deja capturar el fondo a mano en vez de bloquear', async () => {
         cashOnHand = () => throwError(() => new Error('SQLite ocupada'));
         await build(null);
@@ -284,6 +305,28 @@ describe('CashSessionDialog (local-first)', () => {
 
         expect(closeLocal).toHaveBeenCalledWith('s1', 1200, 'u1', 'cajero@test.com');
         expect(component.mode()).toBe('result');
+      });
+
+      /**
+       * El corte es dinero contado y el turno que el backend necesita cerrado
+       * para aceptar el siguiente: no se queda esperando al próximo horario de
+       * sync ni al botón del mostrador, y aplica a cualquier rol.
+       */
+      it('cerrar el turno dispara la sincronización completa', () => {
+        component.setCountedCash(1200);
+        component.requestClose();
+        component.confirmClose();
+
+        expect(syncAfterShiftClose).toHaveBeenCalled();
+      });
+
+      it('no sincroniza si el cierre falló', () => {
+        closeLocal = vi.fn(() => throwError(() => new Error('boom')));
+        component.setCountedCash(1200);
+        component.requestClose();
+        component.confirmClose();
+
+        expect(syncAfterShiftClose).not.toHaveBeenCalled();
       });
 
       it('cerrar en $0.00 es válido: solo pide confirmar la diferencia', () => {
@@ -545,30 +588,52 @@ describe('CashSessionDialog (local-first)', () => {
    * pendiente como si faltara ese dinero.
    */
   describe('montos negativos', () => {
-    it('el conteo negativo se recorta a cero', async () => {
+    /**
+     * Una caja puede quedar en rojo: se gastó de más, o un movimiento se
+     * registró mal. Recortar el conteo a cero no saldaba nada — falseaba el
+     * cierre y escondía el faltante en el documento que existe para asentarlo.
+     */
+    it('el conteo admite negativo y la diferencia lo refleja', async () => {
       await build(session);
 
       component.setCountedCash(-500);
 
-      expect(component.countedCashAmount()).toBe(0);
-      expect(component.difference()).toBe(-1200);
+      expect(component.countedCashAmount()).toBe(-500);
+      // Esperado 1200, contado −500: faltan 1700, no 1200.
+      expect(component.difference()).toBe(-1700);
     });
 
-    it('el fondo inicial negativo se recorta a cero', async () => {
+    it('un cierre en rojo se puede confirmar y queda como ajuste pendiente', async () => {
+      await build(session);
+
+      component.setCountedCash(-500);
+      component.requestClose();
+      expect(component.confirmingDifference()).toBe(true);
+
+      component.confirmClose();
+      expect(closeLocal).toHaveBeenCalledWith('s1', -500, 'u1', 'cajero@test.com');
+    });
+
+    /**
+     * El fondo es la excepción: hereda el efectivo del corte anterior, que queda
+     * en rojo si se retiró más de lo que había en el cajón. Recortarlo abría el
+     * turno con un fondo falso y el faltante reaparecía en el arqueo siguiente.
+     */
+    it('el fondo inicial sí admite negativo: es el saldo heredado', async () => {
       await build(null);
 
       component.setOpeningAmount(-300);
       component.confirmOpen();
 
-      expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 0);
+      expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', -300);
     });
 
-    it('los campos declaran el mínimo en el DOM, para que ni se teclee', async () => {
+    it('ningún campo del corte declara mínimo: la caja puede quedar en rojo', async () => {
       await build(null);
-      expect(host().querySelector('#openingAmount')?.getAttribute('aria-valuemin')).toBe('0');
+      expect(host().querySelector('#openingAmount')?.getAttribute('aria-valuemin')).toBeNull();
 
       await build(session);
-      expect(host().querySelector('#countedCash')?.getAttribute('aria-valuemin')).toBe('0');
+      expect(host().querySelector('#countedCash')?.getAttribute('aria-valuemin')).toBeNull();
     });
   });
 

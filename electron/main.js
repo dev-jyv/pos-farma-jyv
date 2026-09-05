@@ -281,7 +281,9 @@ function registrarIPCHandlers() {
   // Ventas locales.
   ipcMain.handle('sales:createLocal', async (_event, sale) => salesDb.createLocal(await getPrisma(), sale));
   ipcMain.handle('sales:list', async (_event, filters) => salesDb.list(await getPrisma(), filters));
-  ipcMain.handle('sales:getPendingPush', async () => salesDb.getPendingPush(await getPrisma()));
+  ipcMain.handle('sales:getPendingPush', async (_event, filters) =>
+    salesDb.getPendingPush(await getPrisma(), filters));
+  ipcMain.handle('sales:listBlocked', async () => salesDb.listBlocked(await getPrisma()));
   ipcMain.handle('sales:markSynced', async (_event, localId, remoteId, remoteFolio) =>
     salesDb.markSynced(await getPrisma(), localId, remoteId, remoteFolio));
   ipcMain.handle('sales:markUnreconciled', async (_event, localId, reason) =>
@@ -310,6 +312,8 @@ function registrarIPCHandlers() {
   ipcMain.handle('sync:recordRun', async (_event, run) => syncRunsDb.recordRun(await getPrisma(), run));
 
   // Turnos de caja locales.
+  ipcMain.handle('cashSessions:listBlocked', async () =>
+    cashSessionsDb.listBlocked(await getPrisma()));
   ipcMain.handle('cashSessions:getOpenLocal', async (_event, userId) =>
     cashSessionsDb.getOpenLocal(await getPrisma(), userId));
   ipcMain.handle('cashSessions:createLocal', async (_event, input) =>
@@ -320,10 +324,10 @@ function registrarIPCHandlers() {
     cashSessionsDb.getCashOnHand(await getPrisma()));
   ipcMain.handle('cashSessions:closeLocal', async (_event, sessionId, input) =>
     cashSessionsDb.closeLocal(await getPrisma(), sessionId, input));
-  ipcMain.handle('cashSessions:getPendingPush', async () =>
-    cashSessionsDb.getPendingPush(await getPrisma()));
-  ipcMain.handle('cashSessions:getPendingClosePush', async () =>
-    cashSessionsDb.getPendingClosePush(await getPrisma()));
+  ipcMain.handle('cashSessions:getPendingPush', async (_event, filters) =>
+    cashSessionsDb.getPendingPush(await getPrisma(), filters));
+  ipcMain.handle('cashSessions:getPendingClosePush', async (_event, filters) =>
+    cashSessionsDb.getPendingClosePush(await getPrisma(), filters));
   ipcMain.handle('cashSessions:markCreateSynced', async (_event, localId, remoteId) =>
     cashSessionsDb.markCreateSynced(await getPrisma(), localId, remoteId));
   ipcMain.handle('cashSessions:markCloseSynced', async (_event, localId, values) =>
@@ -373,6 +377,10 @@ function registrarIPCHandlers() {
 
   ipcMain.handle('cashMovements:add', async (_event, cashSessionId, input) =>
     cashMovementsDb.addMovement(await getPrisma(), cashSessionId, input));
+  ipcMain.handle('cashMovements:discard', async (_event, id) =>
+    cashMovementsDb.discard(await getPrisma(), id));
+  ipcMain.handle('cashMovements:listBlocked', async () =>
+    cashMovementsDb.listBlocked(await getPrisma()));
   ipcMain.handle('cashMovements:updateExpense', async (_event, id, patch) =>
     cashMovementsDb.updateExpense(await getPrisma(), id, patch));
   ipcMain.handle('cashMovements:listForSession', async (_event, cashSessionId) =>
@@ -381,8 +389,8 @@ function registrarIPCHandlers() {
     cashMovementsDb.listAllLocal(await getPrisma(), filters));
   ipcMain.handle('cashMovements:countAllLocal', async (_event, filters) =>
     cashMovementsDb.countAllLocal(await getPrisma(), filters));
-  ipcMain.handle('cashMovements:getPendingPush', async () =>
-    cashMovementsDb.getPendingPush(await getPrisma()));
+  ipcMain.handle('cashMovements:getPendingPush', async (_event, filters) =>
+    cashMovementsDb.getPendingPush(await getPrisma(), filters));
   ipcMain.handle('cashMovements:markSynced', async (_event, localId, remoteId) =>
     cashMovementsDb.markSynced(await getPrisma(), localId, remoteId));
   ipcMain.handle('cashMovements:markPushFailed', async (_event, localId, message) =>

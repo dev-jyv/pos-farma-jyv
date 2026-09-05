@@ -13,6 +13,7 @@ import {
 import { LocalCashMovementInput, PendingCashMovement } from '../../../core/electron/window.d';
 import { CashMovement, CashMovementType, ExpenseCategory } from '../../../shared/models';
 import { environment } from '../../../../environments/environment';
+import { PushOwner } from '../../../core/sync/push-owner';
 
 /**
  * Depósitos, retiros y gastos de un turno — local-first, igual patrón que
@@ -125,21 +126,21 @@ export class CashMovementService {
       );
   }
 
-  flushQueue(): void {
-    this.flush$().subscribe();
+  flushQueue(owner: PushOwner = {}): void {
+    this.flush$(owner).subscribe();
   }
 
   /** Esperable: `SyncScheduler` la encadena después de `CashSessionService.flushQueueAsync()`. */
-  flushQueueAsync(): Promise<void> {
-    return firstValueFrom(this.flush$().pipe(defaultIfEmpty(null))).then(() => undefined);
+  flushQueueAsync(owner: PushOwner = {}): Promise<void> {
+    return firstValueFrom(this.flush$(owner).pipe(defaultIfEmpty(null))).then(() => undefined);
   }
 
-  private flush$(): Observable<unknown> {
+  private flush$(owner: PushOwner): Observable<unknown> {
     if (this.flushing) {
       return EMPTY;
     }
     this.flushing = true;
-    return from(this.api().getPendingPush()).pipe(
+    return from(this.api().getPendingPush(owner)).pipe(
       catchError(() => of([] as PendingCashMovement[])),
       switchMap((pending) => {
         if (!pending.length) {

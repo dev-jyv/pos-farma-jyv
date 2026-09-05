@@ -46,7 +46,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sales: {
     createLocal: (sale) => ipcRenderer.invoke('sales:createLocal', sale),
     list: (filters) => ipcRenderer.invoke('sales:list', filters),
-    getPendingPush: () => ipcRenderer.invoke('sales:getPendingPush'),
+    getPendingPush: (filters) => ipcRenderer.invoke('sales:getPendingPush', filters),
+    listBlocked: () => ipcRenderer.invoke('sales:listBlocked'),
     getPendingVoided: () => ipcRenderer.invoke('sales:getPendingVoided'),
     markSynced: (localId, remoteId, remoteFolio) =>
       ipcRenderer.invoke('sales:markSynced', localId, remoteId, remoteFolio),
@@ -70,12 +71,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   cashSessions: {
     getOpenLocal: (userId) => ipcRenderer.invoke('cashSessions:getOpenLocal', userId),
+    listBlocked: () => ipcRenderer.invoke('cashSessions:listBlocked'),
     createLocal: (input) => ipcRenderer.invoke('cashSessions:createLocal', input),
     getLiveSummary: (sessionId) => ipcRenderer.invoke('cashSessions:getLiveSummary', sessionId),
     getCashOnHand: () => ipcRenderer.invoke('cashSessions:getCashOnHand'),
     closeLocal: (sessionId, input) => ipcRenderer.invoke('cashSessions:closeLocal', sessionId, input),
-    getPendingPush: () => ipcRenderer.invoke('cashSessions:getPendingPush'),
-    getPendingClosePush: () => ipcRenderer.invoke('cashSessions:getPendingClosePush'),
+    getPendingPush: (filters) => ipcRenderer.invoke('cashSessions:getPendingPush', filters),
+    getPendingClosePush: (filters) =>
+      ipcRenderer.invoke('cashSessions:getPendingClosePush', filters),
     markCreateSynced: (localId, remoteId) =>
       ipcRenderer.invoke('cashSessions:markCreateSynced', localId, remoteId),
     markCloseSynced: (localId, values) =>
@@ -104,7 +107,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listForSession: (cashSessionId) => ipcRenderer.invoke('cashMovements:listForSession', cashSessionId),
     listAllLocal: (filters) => ipcRenderer.invoke('cashMovements:listAllLocal', filters),
     countAllLocal: (filters) => ipcRenderer.invoke('cashMovements:countAllLocal', filters),
-    getPendingPush: () => ipcRenderer.invoke('cashMovements:getPendingPush'),
+    getPendingPush: (filters) => ipcRenderer.invoke('cashMovements:getPendingPush', filters),
+    listBlocked: () => ipcRenderer.invoke('cashMovements:listBlocked'),
+    discard: (id) => ipcRenderer.invoke('cashMovements:discard', id),
     markSynced: (localId, remoteId) => ipcRenderer.invoke('cashMovements:markSynced', localId, remoteId),
     markPushFailed: (localId, message) =>
       ipcRenderer.invoke('cashMovements:markPushFailed', localId, message),

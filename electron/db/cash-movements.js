@@ -154,12 +154,14 @@ async function countAllLocal(prisma, filters = {}) {
  * flushQueue()` corre antes en `SyncScheduler`). Los de la caja de la farmacia
  * no dependen de ningún turno y suben de inmediato.
  */
-async function getPendingPush(prisma) {
+/** `ownerUid`: solo los movimientos de ese cajero (ver `ownerFilter` en cash-sessions). */
+async function getPendingPush(prisma, { ownerUid } = {}) {
   const rows = await prisma.cashMovement.findMany({
     where: {
       pendingPush: true,
       pushError: null,
       OR: [{ cashSessionId: null }, { cashSession: { remoteId: { not: null } } }],
+      ...(ownerUid ? { createdBy: ownerUid } : {}),
     },
     include: { cashSession: { select: { remoteId: true } } },
     orderBy: { createdAt: 'asc' },
@@ -167,6 +169,41 @@ async function getPendingPush(prisma) {
   return rows.map((row) => ({
     ...toCashMovementDto(row),
     cashSessionRemoteId: row.cashSession?.remoteId ?? null,
+  }));
+}
+
+/**
+ * Borra un movimiento que el servidor rechazó y que **nunca llegó a existir**
+ * allá. Si ya tiene `remoteId` no se borra: existe en el servidor y borrarlo
+ * aquí lo dejaría fuera del corte local pero vivo en la auditoría del admin.
+ *
+ * A diferencia de la venta, no hay stock que reponer: un gasto solo mueve
+ * efectivo, y el efectivo esperado se recalcula de las filas que queden.
+ */
+async function discard(prisma, id) {
+  const row = await prisma.cashMovement.findUnique({ where: { id } });
+  if (!row) {
+    return;
+  }
+  if (row.remoteId) {
+    throw new Error('Este movimiento ya existe en el servidor: no se puede descartar');
+  }
+  await prisma.cashMovement.delete({ where: { id } });
+}
+
+/** Gastos y movimientos que el servidor rechazó (ver `listBlocked` en sales.js). */
+async function listBlocked(prisma) {
+  const rows = await prisma.cashMovement.findMany({
+    where: { pushError: { not: null } },
+    orderBy: { createdAt: 'asc' },
+  });
+  return rows.map((row) => ({
+    kind: 'cashMovement',
+    id: row.id,
+    label: row.reason ?? row.type,
+    detail: `$${Number(row.amount ?? 0).toFixed(2)}`,
+    occurredAt: row.createdAt,
+    reason: row.pushError,
   }));
 }
 
@@ -192,6 +229,8 @@ module.exports = {
   listAllLocal,
   countAllLocal,
   getPendingPush,
+  listBlocked,
+  discard,
   updateExpense,
   markSynced,
   markPushFailed,

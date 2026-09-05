@@ -1,21 +1,4 @@
-/**
- * `expiryDate`/`updatedAt` llegan del backend como `Timestamp` de Firestore,
- * que por HTTP se serializa `{ _seconds, _nanoseconds }`, no como ISO string.
- * Mismo caso que resuelve `toDate()` en el frontend (`core/api/api.utils.ts`).
- */
-function toDate(value) {
-  if (!value) {
-    return null;
-  }
-  if (typeof value === 'string' || typeof value === 'number') {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  }
-  if (typeof value === 'object' && '_seconds' in value) {
-    return new Date(value._seconds * 1000);
-  }
-  return null;
-}
+const { toDate } = require('./timestamps');
 
 /** Forma que consume el POS (búsqueda/carrito), igual a `shared/models`' `Product`. */
 function toProductDto(row) {

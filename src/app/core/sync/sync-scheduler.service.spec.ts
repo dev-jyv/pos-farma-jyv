@@ -10,9 +10,10 @@ import { ProductCatalogService } from '../../features/pos/services/product-catal
 import { SaleService } from '../../features/pos/services/sale.service';
 import { StockEntryService } from '../../features/pos/services/stock-entry.service';
 import { SyncScheduler } from './sync-scheduler.service';
+import { AuthService } from '../auth/auth.service';
 
 /**
- * Regla de uso del botón "Sincronizar": el cajero una vez por hora, el admin sin
+ * Regla de uso del botón "Sincronizar": el cajero cada 15 minutos, el admin sin
  * límite. El pull trae el catálogo completo y el push recorre toda la cola, así
  * que un botón sin freno en el mostrador son decenas de corridas por turno.
  */
@@ -28,6 +29,11 @@ describe('SyncScheduler — límite de sincronización manual', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: ApiHealthService, useValue: { checkNow: vi.fn() } },
+        // El scheduler pregunta quién sincroniza para subir solo lo de ese cajero.
+        {
+          provide: AuthService,
+          useValue: { user: () => ({ uid: 'uid-cajero' }), isAdmin: () => false },
+        },
         {
           provide: SaleService,
           useValue: { flushQueue: vi.fn(), flushQueueAsync: vi.fn().mockResolvedValue(undefined) },
@@ -45,6 +51,7 @@ describe('SyncScheduler — límite de sincronización manual', () => {
           useValue: {
             flushQueue: vi.fn(),
             flushQueueAsync: vi.fn().mockResolvedValue(undefined),
+            flushClosesAsync: vi.fn().mockResolvedValue(undefined),
             pullAdjustmentStatus: vi.fn(),
           },
         },
@@ -65,14 +72,14 @@ describe('SyncScheduler — límite de sincronización manual', () => {
     expect(scheduler.manualSyncAvailableAt(CAJERO)).toBeNull();
   });
 
-  it('bloquea al cajero durante una hora tras sincronizar', async () => {
+  it('bloquea al cajero 15 minutos tras sincronizar', async () => {
     const inicio = Date.now();
     vi.spyOn(Date, 'now').mockReturnValue(inicio);
     await scheduler.syncManually(CAJERO, false);
 
     expect(scheduler.canSyncManually(CAJERO, false)).toBe(false);
     const disponibleA = scheduler.manualSyncAvailableAt(CAJERO);
-    expect(disponibleA?.getTime()).toBe(inicio + 3_600_000);
+    expect(disponibleA?.getTime()).toBe(inicio + 15 * 60 * 1000);
 
     const rechazo = await scheduler.syncManually(CAJERO, false);
     expect(rechazo.ok).toBe(false);
@@ -80,12 +87,12 @@ describe('SyncScheduler — límite de sincronización manual', () => {
     vi.restoreAllMocks();
   });
 
-  it('vuelve a permitirlo pasada la hora', async () => {
+  it('vuelve a permitirlo pasados los 15 minutos', async () => {
     const inicio = Date.now();
     const ahora = vi.spyOn(Date, 'now').mockReturnValue(inicio);
     await scheduler.syncManually(CAJERO, false);
 
-    ahora.mockReturnValue(inicio + 3_600_001);
+    ahora.mockReturnValue(inicio + 15 * 60 * 1000 + 1);
     expect(scheduler.canSyncManually(CAJERO, false)).toBe(true);
     vi.restoreAllMocks();
   });
@@ -159,6 +166,11 @@ describe('SyncScheduler — catálogos de servicios contra un backend viejo', ()
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: ApiHealthService, useValue: { checkNow: vi.fn() } },
+        // El scheduler pregunta quién sincroniza para subir solo lo de ese cajero.
+        {
+          provide: AuthService,
+          useValue: { user: () => ({ uid: 'uid-cajero' }), isAdmin: () => false },
+        },
         { provide: SaleService, useValue: { flushQueue: vi.fn(), flushQueueAsync: vi.fn().mockResolvedValue(undefined) } },
         { provide: StockEntryService, useValue: { flushQueue: vi.fn(), flushQueueAsync: vi.fn().mockResolvedValue(undefined) } },
         { provide: ProductCatalogService, useValue: { flushQueue: vi.fn(), flushQueueAsync: vi.fn().mockResolvedValue(undefined) } },
@@ -167,6 +179,7 @@ describe('SyncScheduler — catálogos de servicios contra un backend viejo', ()
           useValue: {
             flushQueue: vi.fn(),
             flushQueueAsync: vi.fn().mockResolvedValue(undefined),
+            flushClosesAsync: vi.fn().mockResolvedValue(undefined),
             pullAdjustmentStatus: vi.fn(),
           },
         },

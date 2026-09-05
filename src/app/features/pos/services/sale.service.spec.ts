@@ -124,7 +124,13 @@ describe('SaleService', () => {
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: AuthService, useValue: { user: () => ({ uid: 'u1', email: 'caja@farmajyv.mx' }) } },
+        {
+          provide: AuthService,
+          useValue: {
+            user: () => ({ uid: 'u1', email: 'caja@farmajyv.mx' }),
+            isAdmin: () => false,
+          },
+        },
       ],
     });
     service = TestBed.inject(SaleService);
@@ -150,7 +156,10 @@ describe('SaleService', () => {
     it('manda solo lo que el backend necesita de cada partida', () => {
       const payload = service.buildPayload(cart(), 5, 'cash', 100, null, 's1');
       expect(payload.items).toEqual([
-        { kind: 'product', productId: 'p1', quantity: 2, discountAmount: 0 },
+        // `unitPrice`: el precio **cobrado**. Sin él, el backend retarifa con el
+        // catálogo del momento de sincronizar y una venta offline se rechaza si
+        // el precio cambió entre medias.
+        { kind: 'product', productId: 'p1', quantity: 2, discountAmount: 0, unitPrice: 50 },
       ]);
       expect(payload.saleDiscountAmount).toBe(5);
       expect(payload.cashSessionId).toBe('s1');

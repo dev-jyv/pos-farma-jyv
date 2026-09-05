@@ -6,6 +6,7 @@ import { ButtonModule } from 'primeng/button';
 import { DialogModule } from 'primeng/dialog';
 import { InputTextModule } from 'primeng/inputtext';
 import { TableModule } from 'primeng/table';
+import { TooltipModule } from 'primeng/tooltip';
 import { debounceTime, Subject, switchMap } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
@@ -87,6 +88,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
     DialogModule,
     InputTextModule,
     TableModule,
+    TooltipModule,
     Checkout,
     CashSessionDialog,
     PerformerDialog,
@@ -776,6 +778,31 @@ export class Sale {
     this.notifications.success('Reintentando el envío de la venta.');
     if (this.blockedSales().length === 0) {
       this.blockedDialogVisible.set(false);
+    }
+  }
+
+  /**
+   * Descarta una venta que sigue en cola (sin folio del servidor). **Solo admin**:
+   * a diferencia de una rechazada —donde el servidor ya dijo que no la acepta—,
+   * esta subiría sola en la próxima sincronización, así que borrarla es tirar una
+   * venta que iba a registrarse bien. `discard` repone el stock que descontó.
+   */
+  discardPendingSale(item: { queueId: string; folioHint: string }): void {
+    if (!this.isAdmin()) {
+      return;
+    }
+    const confirmado = window.confirm(
+      `¿Descartar la venta pendiente (${item.folioHint})?\n\n` +
+        'Se borra de este equipo y nunca llegará al servidor. Si ya se cobró, ' +
+        'quedará sin folio ni registro. El stock se repone.',
+    );
+    if (!confirmado) {
+      return;
+    }
+    this.saleService.discardBlockedSale(item.queueId);
+    this.notifications.success('Venta pendiente descartada.');
+    if (this.pendingOfflineSales() === 0) {
+      this.pendingDialogVisible.set(false);
     }
   }
 

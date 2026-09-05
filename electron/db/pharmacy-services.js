@@ -14,6 +14,8 @@
  * que acordarse de verificar en cada pantalla.
  */
 
+const { toDateOrNow } = require('./timestamps');
+
 function toServiceDto(row) {
   return {
     id: row.id,
@@ -55,7 +57,7 @@ function serviceData(remote) {
     commissionRate: remote.commissionRate ?? 0,
     requiresPerformer: remote.requiresPerformer === true,
     isActive: remote.isActive !== false,
-    updatedAt: remote.updatedAt ? new Date(remote.updatedAt) : new Date(),
+    updatedAt: toDateOrNow(remote.updatedAt),
   };
 }
 
@@ -65,7 +67,7 @@ function providerData(remote) {
     license: remote.license ?? null,
     defaultCommissionRate: remote.defaultCommissionRate ?? null,
     isActive: remote.isActive !== false,
-    updatedAt: remote.updatedAt ? new Date(remote.updatedAt) : new Date(),
+    updatedAt: toDateOrNow(remote.updatedAt),
   };
 }
 
@@ -73,35 +75,40 @@ function providerData(remote) {
  * Pull: reemplaza lo que llegó del backend. Es un upsert por id (que ya es el
  * remoto), así que no hay nada que reconciliar — la caja nunca escribe estos
  * catálogos, solo los lee.
+ *
+ * Va en **una sola transacción**, no en un upsert suelto por fila: así el lote
+ * se aplica entero o no se aplica, y un fallo a media tanda no deja el catálogo
+ * mezclando servicios nuevos con precios viejos. De paso es un commit en vez de
+ * uno por servicio. Mismo criterio que `products.upsertMany`, cuyo cursor solo
+ * avanza si el lote completa.
  */
-async function upsertServices(prisma, remotes = []) {
-  for (const remote of remotes) {
-    if (!remote?.id) {
-      continue;
-    }
-    const data = serviceData(remote);
-    await prisma.pharmacyService.upsert({
-      where: { id: remote.id },
-      create: { id: remote.id, ...data },
-      update: data,
-    });
+function upsertCatalog(prisma, modelo, remotes, toData) {
+  // Las filas sin `id` se descartan: el id remoto es la llave, sin él no hay
+  // upsert posible. Se cuentan solo las aplicadas.
+  const validos = remotes.filter((remote) => remote?.id);
+  if (validos.length === 0) {
+    return Promise.resolve({ count: 0 });
   }
-  return { count: remotes.length };
+  return prisma
+    .$transaction(
+      validos.map((remote) => {
+        const data = toData(remote);
+        return modelo(prisma).upsert({
+          where: { id: remote.id },
+          create: { id: remote.id, ...data },
+          update: data,
+        });
+      }),
+    )
+    .then(() => ({ count: validos.length }));
+}
+
+async function upsertServices(prisma, remotes = []) {
+  return upsertCatalog(prisma, (db) => db.pharmacyService, remotes, serviceData);
 }
 
 async function upsertProviders(prisma, remotes = []) {
-  for (const remote of remotes) {
-    if (!remote?.id) {
-      continue;
-    }
-    const data = providerData(remote);
-    await prisma.serviceProvider.upsert({
-      where: { id: remote.id },
-      create: { id: remote.id, ...data },
-      update: data,
-    });
-  }
-  return { count: remotes.length };
+  return upsertCatalog(prisma, (db) => db.serviceProvider, remotes, providerData);
 }
 
 /**

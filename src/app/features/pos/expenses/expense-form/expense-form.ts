@@ -1,7 +1,7 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { InputNumberModule } from 'primeng/inputnumber';
@@ -49,6 +49,7 @@ export class ExpenseForm {
   private readonly authService = inject(AuthService);
   private readonly notifications = inject(NotificationService);
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   private readonly translate = inject(TranslateService);
 
   readonly cashSessionOpen = this.cashSessionService.isOpen;
@@ -145,7 +146,13 @@ export class ExpenseForm {
     // estado local en vez de asumir que `current`/`isOpen` ya están al día.
     this.cashSessionService
       .refreshCurrent(this.authService.user()?.uid ?? '')
-      .subscribe(() => this.loadSessionExpenses());
+      // Sin manejador de error, un fallo del IPC escapaba del `subscribe` como
+      // excepción no controlada al entrar a la pantalla. Los bloqueos del
+      // formulario ya avisan si no hay turno; aquí basta con no listar gastos.
+      .subscribe({
+        next: () => this.loadSessionExpenses(),
+        error: () => this.sessionExpenses.set([]),
+      });
   }
 
   /**
@@ -164,8 +171,10 @@ export class ExpenseForm {
       .listForSession(session.id)
       .pipe(finalize(() => this.expensesLoading.set(false)))
       .subscribe({
-        next: (movements) =>
-          this.sessionExpenses.set(movements.filter((movement) => movement.type === 'expense')),
+        next: (movements) => {
+          this.sessionExpenses.set(movements.filter((movement) => movement.type === 'expense'));
+          this.openPendingFix();
+        },
         error: () => this.sessionExpenses.set([]),
       });
   }
@@ -173,6 +182,25 @@ export class ExpenseForm {
   /** Llave de i18n del rótulo; la plantilla la traduce con el pipe. */
   categoryKey(category: ExpenseCategory | null | undefined): string {
     return expenseCategoryKey(category);
+  }
+
+  /**
+   * `?corregir=<id>` — se llega así desde el aviso de rechazados al sincronizar:
+   * el gasto se abre ya cargado, en vez de obligar a buscarlo en la lista.
+   */
+  private openPendingFix(): void {
+    const id = this.route.snapshot.queryParamMap.get('corregir');
+    if (!id || this.editing()) {
+      return;
+    }
+    const target = this.sessionExpenses().find((expense) => expense.id === id);
+    if (target) {
+      this.edit(target);
+    } else {
+      // El gasto puede ser de un turno anterior: no está en esta lista.
+      this.notifications.error('Ese gasto no es del turno abierto: no se puede corregir aquí.');
+    }
+    void this.router.navigate([], { queryParams: {}, replaceUrl: true });
   }
 
   categoryLabel(category: ExpenseCategory | null | undefined): string {
