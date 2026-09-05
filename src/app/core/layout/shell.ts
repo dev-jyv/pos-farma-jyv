@@ -13,13 +13,15 @@ import { filter, map } from 'rxjs';
 
 import { AuthService } from '../auth/auth.service';
 import { ApiHealthService } from '../health/api-health.service';
+import { BlockedSyncRecord } from '../electron/window.d';
+import { BlockedSyncService } from '../sync/blocked-sync.service';
 import { NotificationService } from '../notifications/notification.service';
 import { CashSessionDialog } from '../../features/pos/cash-session/cash-session-dialog';
 import { CashSessionService } from '../../features/pos/services/cash-session.service';
 import { SaleService } from '../../features/pos/services/sale.service';
 import { SyncScheduler } from '../sync/sync-scheduler.service';
 import { environment } from '../../../environments/environment';
-import { NAV_ITEMS } from './nav.config';
+import { NAV_ITEMS, NavItem } from './nav.config';
 
 @Component({
   selector: 'app-shell',
@@ -47,6 +49,7 @@ export class Shell {
   private readonly authService = inject(AuthService);
   private readonly router = inject(Router);
   private readonly health = inject(ApiHealthService);
+  private readonly blockedSync = inject(BlockedSyncService);
   private readonly syncScheduler = inject(SyncScheduler);
   private readonly notifications = inject(NotificationService);
   private readonly saleService = inject(SaleService);
@@ -60,6 +63,70 @@ export class Shell {
   /** Las tres opciones al salir con turno abierto (ver `logout()`). */
   readonly logoutPromptVisible = signal(false);
   /**
+   * Subiendo lo pendiente antes de salir. Sin este aviso la app se queda unos
+   * segundos sin responder al pulsar "Cerrar sesión" y parece colgada.
+   */
+  readonly flushingBeforeExit = signal(false);
+
+  /** Registros que el servidor rechazó: se avisan aparte de los pendientes. */
+  readonly blockedCount = this.blockedSync.count;
+  readonly blockedRecords = this.blockedSync.records;
+  readonly blockedDialogVisible = signal(false);
+
+  openBlocked(): void {
+    this.blockedDialogVisible.set(true);
+    void this.blockedSync.refresh();
+  }
+
+  async retryBlocked(record: BlockedSyncRecord): Promise<void> {
+    await this.blockedSync.retry(record);
+    this.closeBlockedIfEmpty();
+  }
+
+  canFixBlocked(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.canFix(record);
+  }
+
+  canDiscardBlocked(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.canDiscard(record);
+  }
+
+  /** Abre el gasto en su pantalla, ya cargado para corregirlo. */
+  fixBlocked(record: BlockedSyncRecord): void {
+    this.blockedDialogVisible.set(false);
+    void this.router.navigate(['/pos/gastos'], { queryParams: { corregir: record.id } });
+  }
+
+  /**
+   * Borrar es irreversible y puede ser dinero ya cobrado: se confirma nombrando
+   * el registro, no con un "¿estás seguro?" genérico.
+   */
+  async discardBlocked(record: BlockedSyncRecord): Promise<void> {
+    const confirmado = window.confirm(
+      `¿Descartar "${record.label}" (${record.detail})?\n\n` +
+        'Se borra de este equipo y nunca llegará al servidor. ' +
+        'Si ya se cobró o se pagó, quedará sin registro.',
+    );
+    if (!confirmado) {
+      return;
+    }
+    try {
+      await this.blockedSync.discard(record);
+      this.notifications.success('Registro descartado.');
+    } catch (error: unknown) {
+      this.notifications.error(
+        error instanceof Error ? error.message : 'No se pudo descartar el registro.',
+      );
+    }
+    this.closeBlockedIfEmpty();
+  }
+
+  private closeBlockedIfEmpty(): void {
+    if (this.blockedCount() === 0) {
+      this.blockedDialogVisible.set(false);
+    }
+  }
+  /**
    * El diálogo se abrió por la X de la ventana, no por "Cerrar sesión": al
    * terminar hay que cerrar la app (y **no** cerrar la sesión de Firebase, para
    * que la siguiente apertura no pida contraseña otra vez).
@@ -69,15 +136,25 @@ export class Shell {
   /** Solo lo que el rol puede abrir: un enlace que devuelve 403 no es navegación. */
   readonly navItems = computed(() =>
     NAV_ITEMS.filter(
-      (item) => !item.permission || this.authService.can(item.permission.area, item.permission.level),
+      (item) =>
+        item.enabled !== false &&
+        (!item.permission || this.authService.can(item.permission.area, item.permission.level)),
     ),
   );
-  /** Lo que el cajero toca todo el turno: siempre visible como botón directo. */
-  readonly primaryNavItems = computed(() =>
-    this.navItems().filter((item) => (item.group ?? 'primary') === 'primary'),
+  /** Lo que se toca a cada rato: siempre visible como botón directo. */
+  readonly barNavItems = computed(() => this.navItems().filter((item) => (item.group ?? 'bar') === 'bar'));
+  /** Menú "Catálogo": cómo se clasifica la mercancía y quién la surte. */
+  readonly catalogNavItems = computed(() => this.navItems().filter((item) => item.group === 'catalog'));
+  /** Menú "Inventario": qué entra, con qué factura, y el maestro de productos. */
+  readonly inventoryNavItems = computed(() =>
+    this.navItems().filter((item) => item.group === 'inventory'),
   );
-  /** Pantallas de administración/consulta ocasional: agrupadas detrás de "Más". */
-  readonly secondaryNavItems = computed(() => this.navItems().filter((item) => item.group === 'secondary'));
+  /**
+   * Menú "Administración": lo que el mostrador **no** puede hacer. Para un
+   * cajero queda vacío —`navItems` ya filtró por permiso— y el botón no se
+   * pinta: su barra se ve igual de simple que antes de separar los grupos.
+   */
+  readonly adminNavItems = computed(() => this.navItems().filter((item) => item.group === 'admin'));
 
   private readonly currentUrl = toSignal(
     this.router.events.pipe(
@@ -86,17 +163,26 @@ export class Shell {
     ),
     { initialValue: this.router.url },
   );
-  /** Resalta el botón "Más" cuando la pantalla activa vive dentro del menú, no en la barra. */
-  readonly isSecondaryActive = computed(() =>
-    this.secondaryNavItems().some((item) => this.currentUrl().startsWith(item.path)),
-  );
-  readonly secondaryMenuItems = computed<MenuItem[]>(() =>
-    this.secondaryNavItems().map((item) => ({
+  /** Resalta el botón del menú cuando la pantalla activa vive dentro, no en la barra. */
+  private isGroupActive(items: NavItem[]): boolean {
+    return items.some((item) => this.currentUrl().startsWith(item.path));
+  }
+  readonly isCatalogGroupActive = computed(() => this.isGroupActive(this.catalogNavItems()));
+  readonly isInventoryGroupActive = computed(() => this.isGroupActive(this.inventoryNavItems()));
+  readonly isAdminGroupActive = computed(() => this.isGroupActive(this.adminNavItems()));
+
+  private toMenuItems(items: NavItem[]): MenuItem[] {
+    return items.map((item) => ({
       label: this.translate.instant(item.labelKey),
       icon: item.icon,
       routerLink: item.path,
-    })),
+    }));
+  }
+  readonly catalogMenuItems = computed<MenuItem[]>(() => this.toMenuItems(this.catalogNavItems()));
+  readonly inventoryMenuItems = computed<MenuItem[]>(() =>
+    this.toMenuItems(this.inventoryNavItems()),
   );
+  readonly adminMenuItems = computed<MenuItem[]>(() => this.toMenuItems(this.adminNavItems()));
 
   readonly userMenuItems = computed<MenuItem[]>(() => {
     const email = this.user()?.email;
@@ -145,7 +231,7 @@ export class Shell {
    * justo tras un inicio de sesión explícito.
    */
   /**
-   * El cajero puede forzar la sincronización una vez por hora; el admin, siempre.
+   * El cajero puede forzar la sincronización cada 15 minutos; el admin, siempre.
    * La regla vive en `SyncScheduler` (que además la persiste): aquí solo se
    * consulta para no ofrecer un botón que va a rebotar.
    */
@@ -161,6 +247,9 @@ export class Shell {
     if (api) {
       const off = api.app.onCloseRequested(() => this.onWindowCloseRequested());
       inject(DestroyRef).onDestroy(off);
+      // Al abrir la caja: un rechazo de ayer no puede esperar a que alguien
+      // pulse Sincronizar para hacerse visible.
+      void this.blockedSync.refresh();
     }
   }
 
@@ -195,6 +284,8 @@ export class Shell {
     } else {
       this.notifications.error(result.errorMessage || 'No se pudo sincronizar el catálogo.');
     }
+    // Sincronizar es justo cuando aparecen (o se van) los rechazos.
+    await this.blockedSync.refresh();
   }
 
   /**
@@ -216,11 +307,29 @@ export class Shell {
       this.logoutPromptVisible.set(true);
       return;
     }
-    const pending = this.saleService.pendingCount();
+    void this.closeAfterFlush(api);
+  }
+
+  /**
+   * Antes se avisaba de lo pendiente pero no se intentaba subirlo, y el conteo
+   * solo miraba las ventas: un corte de caja o una entrada de mercancía sin
+   * sincronizar salían del equipo en silencio. Ahora se intenta el envío y solo
+   * se pregunta por lo que de verdad quedó.
+   */
+  private async closeAfterFlush(api: NonNullable<Window['electronAPI']>): Promise<void> {
+    if ((await this.syncScheduler.countPending()) === 0) {
+      void api.app.confirmClose();
+      return;
+    }
+
+    // El proceso principal no puede esperar indefinidamente: avisa que hay
+    // trabajo antes de ponerse a subir.
+    void api.app.closePending();
+    const pending = await this.flushBeforeLeaving();
     if (pending > 0) {
-      void api.app.closePending();
       const salir = window.confirm(
-        `Hay ${pending} venta(s) sin sincronizar. Se enviarán la próxima vez que abras la app. ¿Salir de todas formas?`,
+        `Quedan ${pending} movimiento(s) sin sincronizar (ventas, cortes, entradas o gastos). ` +
+          'Se enviarán la próxima vez que abras la app. ¿Salir de todas formas?',
       );
       if (!salir) {
         void api.app.cancelClose();
@@ -228,6 +337,27 @@ export class Shell {
       }
     }
     void api.app.confirmClose();
+  }
+
+  /**
+   * Intenta subir todo lo que queda en cola y devuelve lo que sobrevivió al
+   * intento. Sin red no hay nada que hacer —el push fallaría entero—, así que
+   * se salta el envío y se reporta el pendiente tal cual.
+   */
+  private async flushBeforeLeaving(): Promise<number> {
+    this.flushingBeforeExit.set(true);
+    try {
+      if (this.browserOnline()) {
+        await this.syncScheduler.flushPendingNow();
+      }
+      return await this.syncScheduler.countPending();
+    } catch {
+      // Un fallo del envío no puede dejar al cajero encerrado: se reporta lo que
+      // haya en cola y él decide.
+      return this.syncScheduler.countPending().catch(() => 0);
+    } finally {
+      this.flushingBeforeExit.set(false);
+    }
   }
 
   goToSale(event: Event): void {
@@ -252,6 +382,27 @@ export class Shell {
       return;
     }
     await this.finishLogout();
+  }
+
+  /**
+   * Cerrar sesión no revisaba nada: lo que quedara en cola se iba con el equipo
+   * y el siguiente cajero heredaba ventas, cortes y gastos ajenos sin subir. Se
+   * intenta el envío y, si algo sobrevive, se pregunta antes de salir.
+   *
+   * Devuelve `false` solo si el cajero decide quedarse.
+   */
+  private async confirmPendingBeforeLogout(): Promise<boolean> {
+    if (!window.electronAPI || (await this.syncScheduler.countPending()) === 0) {
+      return true;
+    }
+    const pending = await this.flushBeforeLeaving();
+    if (pending === 0) {
+      return true;
+    }
+    return window.confirm(
+      `Quedan ${pending} movimiento(s) sin sincronizar (ventas, cortes, entradas o gastos). ` +
+        'Se enviarán cuando este equipo vuelva a tener red. ¿Cerrar sesión de todas formas?',
+    );
   }
 
   /** "Cancelar": no se cierra sesión, ni se toca el turno, ni se cierra la app. */
@@ -302,6 +453,17 @@ export class Shell {
   }
 
   private async finishLogout(): Promise<void> {
+    // Único punto por el que pasan los tres caminos de salida (cerrar sesión,
+    // salir dejando el turno abierto y salir tras cortar caja), así que la
+    // comprobación de pendientes vive aquí y no en cada uno.
+    if (!(await this.confirmPendingBeforeLogout())) {
+      if (this.closingApp()) {
+        this.closingApp.set(false);
+        void window.electronAPI?.app.cancelClose();
+      }
+      return;
+    }
+
     // Salida por la X: se cierra la app conservando la sesión. Cerrar sesión
     // aquí obligaría a teclear la contraseña al abrir mañana, que no es lo que
     // pidió quien solo cerró la ventana.

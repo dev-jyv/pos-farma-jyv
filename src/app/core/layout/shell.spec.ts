@@ -15,13 +15,24 @@ import { SyncScheduler } from '../sync/sync-scheduler.service';
 import { NAV_ITEMS } from './nav.config';
 import { Shell } from './shell';
 
+/** El camino de salida encadena varias promesas (contar cola → vaciar → contar). */
+async function drenarMicrotareas(): Promise<void> {
+  for (let i = 0; i < 12; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe('Shell', () => {
   let fixture: ComponentFixture<Shell>;
   let component: Shell;
   let navigate: ReturnType<typeof vi.fn>;
+  /** `window.confirm` no existe en jsdom con comportamiento útil: se controla aquí. */
+  let confirmSpy: ReturnType<typeof vi.fn>;
   let logout: ReturnType<typeof vi.fn>;
   let can: (area: string, level?: string) => boolean;
   let turnoAbierto: CashSession | null;
+  /** Movimientos en cola al intentar salir; 0 = todo sincronizado. */
+  let pendientesAlSalir: number;
   let electronApp: {
     onCloseRequested: ReturnType<typeof vi.fn>;
     closePending: ReturnType<typeof vi.fn>;
@@ -59,7 +70,14 @@ describe('Shell', () => {
           // Evita construir la cadena real SyncScheduler -> SaleService -> HttpClient:
           // estas pruebas no ejercitan el sync, solo el resto del shell.
           provide: SyncScheduler,
-          useValue: { syncing: signal(false), syncNow: vi.fn().mockResolvedValue({ ok: true, pulled: 0 }) },
+          useValue: {
+            syncing: signal(false),
+            syncNow: vi.fn().mockResolvedValue({ ok: true, pulled: 0 }),
+            // Salir consulta la cola y trata de vaciarla; por defecto no hay nada
+            // pendiente, y las pruebas que sí lo necesitan reemplazan el doble.
+            countPending: () => Promise.resolve(pendientesAlSalir),
+            flushPendingNow: () => Promise.resolve(),
+          },
         },
         { provide: NotificationService, useValue: { success: vi.fn(), error: vi.fn() } },
         {
@@ -92,11 +110,24 @@ describe('Shell', () => {
     logout = vi.fn(() => Promise.resolve());
     can = () => true;
     turnoAbierto = null;
+    pendientesAlSalir = 0;
+    confirmSpy = vi.fn().mockReturnValue(true);
+    window.confirm = confirmSpy as unknown as typeof window.confirm;
     await build();
   });
 
   it('con todos los permisos muestra el menú completo', () => {
-    expect(component.navItems()).toHaveLength(NAV_ITEMS.length);
+    // Las entradas apagadas por bandera (`enabled: false`) no cuentan: son
+    // pantallas terminadas que todavía no se ofrecen al mostrador.
+    const ofrecibles = NAV_ITEMS.filter((item) => item.enabled !== false);
+    expect(component.navItems()).toHaveLength(ofrecibles.length);
+  });
+
+  it('una entrada apagada por bandera no aparece aunque el rol tenga el permiso', () => {
+    const apagadas = NAV_ITEMS.filter((item) => item.enabled === false);
+    for (const item of apagadas) {
+      expect(component.navItems().some((visible) => visible.path === item.path)).toBe(false);
+    }
   });
 
   it('oculta los enlaces cuyo permiso no tiene el rol: un enlace que da 403 no es navegación', async () => {
@@ -132,8 +163,10 @@ describe('Shell', () => {
    * cambiar de cajero.
    */
   describe('cerrar la ventana de la app', () => {
-    it('sin turno ni pendientes cierra directo', () => {
+    it('sin turno ni pendientes cierra directo', async () => {
       cerrarSolicitado?.();
+      // El cierre consulta la cola antes de confirmar: es asíncrono.
+      await drenarMicrotareas();
 
       expect(electronApp.confirmClose).toHaveBeenCalled();
       expect(logout).not.toHaveBeenCalled();
@@ -253,8 +286,9 @@ describe('Shell', () => {
 
       turnoAbierto = null;
       component.onLogoutShiftClosed();
-      await Promise.resolve();
-      await Promise.resolve();
+      // La salida consulta la cola y trata de vaciarla antes de cerrar sesión:
+      // son varios saltos de microtarea, no dos.
+      await drenarMicrotareas();
 
       expect(logout).toHaveBeenCalled();
       expect(navigate).toHaveBeenCalledWith(['/login']);
@@ -297,5 +331,74 @@ describe('Shell', () => {
 
     expect(component.logoutPromptVisible()).toBe(false);
     expect(logout).toHaveBeenCalled();
+  });
+
+  /**
+   * Antes, salir no miraba las colas: lo que quedara sin subir se iba con el
+   * equipo y el siguiente cajero heredaba ventas, cortes y gastos ajenos. Y el
+   * único conteo que existía (al cerrar la ventana) miraba solo las ventas.
+   */
+  describe('pendientes al salir', () => {
+    it('con todo sincronizado sale sin preguntar ni sincronizar', async () => {
+      const flush = vi.fn().mockResolvedValue(undefined);
+      TestBed.inject(SyncScheduler).flushPendingNow = flush;
+
+      await component.logout();
+
+      expect(flush).not.toHaveBeenCalled();
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(logout).toHaveBeenCalled();
+    });
+
+    it('intenta subir lo pendiente antes de salir', async () => {
+      pendientesAlSalir = 3;
+      const flush = vi.fn().mockImplementation(() => {
+        pendientesAlSalir = 0;
+        return Promise.resolve();
+      });
+      TestBed.inject(SyncScheduler).flushPendingNow = flush;
+
+      await component.logout();
+
+      expect(flush).toHaveBeenCalled();
+      // Se subió todo: no hay por qué molestar al cajero con una pregunta.
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(logout).toHaveBeenCalled();
+    });
+
+    it('si algo no se pudo subir, pregunta antes de cerrar sesión', async () => {
+      pendientesAlSalir = 2;
+      confirmSpy.mockReturnValue(true);
+
+      await component.logout();
+
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(String(confirmSpy.mock.calls[0][0])).toContain('2');
+      expect(logout).toHaveBeenCalled();
+    });
+
+    it('si el cajero se arrepiente, la sesión sigue abierta', async () => {
+      pendientesAlSalir = 2;
+      confirmSpy.mockReturnValue(false);
+
+      await component.logout();
+
+      expect(logout).not.toHaveBeenCalled();
+      expect(navigate).not.toHaveBeenCalledWith(['/login']);
+    });
+
+    /** El aviso de "subiendo" no puede quedarse pegado si el envío revienta. */
+    it('un fallo al subir no deja el aviso encendido ni encierra al cajero', async () => {
+      pendientesAlSalir = 1;
+      TestBed.inject(SyncScheduler).flushPendingNow = vi
+        .fn()
+        .mockRejectedValue(new Error('sin red'));
+      confirmSpy.mockReturnValue(true);
+
+      await component.logout();
+
+      expect(component.flushingBeforeExit()).toBe(false);
+      expect(logout).toHaveBeenCalled();
+    });
   });
 });

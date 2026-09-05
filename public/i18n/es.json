@@ -18,7 +18,9 @@
     "pending": "Hay ventas pendientes de sincronizar",
     "modalTitle": "Sincronizando catálogo",
     "modalBody": "Trayendo el catálogo más reciente antes de empezar a vender…",
-    "cooldown": "Ya sincronizaste hace poco. Podrás volver a hacerlo a las {{time}}."
+    "cooldown": "Ya sincronizaste hace poco. Podrás volver a hacerlo a las {{time}}.",
+    "exitTitle": "Sincronizando antes de salir",
+    "exitBody": "Enviando ventas, cortes y movimientos pendientes…"
   },
   "nav": {
     "sale": "Venta",
@@ -27,7 +29,6 @@
     "controlledLedger": "Libro de control",
     "directCharge": "Cobro directo",
     "stockEntry": "Entrada de stock",
-    "more": "Más",
     "categories": "Categorías",
     "suppliers": "Proveedores",
     "invoices": "Facturas",
@@ -35,7 +36,12 @@
     "expenses": "Gastos",
     "cashSessionsAudit": "Cortes de caja",
     "expensesAudit": "Auditoría de gastos",
-    "cashBox": "Efectivo de farmacia"
+    "cashBox": "Efectivo de farmacia",
+    "groups": {
+      "admin": "Administración",
+      "catalog": "Catálogo",
+      "inventory": "Inventario"
+    }
   },
   "categories": {
     "title": "Categorías",
@@ -107,7 +113,7 @@
     "type": "Tipo",
     "withInvoice": "Factura",
     "withoutInvoice": "Ticket",
-    "file": "Comprobante",
+    "file": "Comprobante (opcional)",
     "dropHere": "Arrastra el archivo aquí o haz clic",
     "fileHint": "PDF, JPG, PNG o WebP · máx. 10 MB",
     "removeFile": "Quitar archivo",

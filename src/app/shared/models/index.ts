@@ -61,7 +61,14 @@ export type PermissionArea =
    * Auditoría de gastos de TODAS las cajas. Exclusiva de `admin` — el cajero
    * registra sus propios gastos con `pos:write`.
    */
-  | 'expenses';
+  | 'expenses'
+  /**
+   * Catálogo de servicios de consultorio y padrón de doctores. El POS no tiene
+   * pantallas para administrarlos —los da de alta el admin web—, pero la caja
+   * los baja en **lectura** para poder cobrar una consulta sin red, y ese
+   * permiso viene en el perfil de `/auth/me`.
+   */
+  | 'pharmacyServices';
 
 export type PermissionLevel = 'read' | 'write';
 

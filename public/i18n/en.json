@@ -20,7 +20,6 @@
     "controlledLedger": "Controlled ledger",
     "directCharge": "Direct charge",
     "stockEntry": "Stock entry",
-    "more": "More",
     "categories": "Categories",
     "suppliers": "Suppliers",
     "invoices": "Invoices",
@@ -28,7 +27,12 @@
     "expenses": "Expenses",
     "cashSessionsAudit": "Cash cuts",
     "expensesAudit": "Expenses audit",
-    "cashBox": "Pharmacy cash"
+    "cashBox": "Pharmacy cash",
+    "groups": {
+      "admin": "Administration",
+      "catalog": "Catalog",
+      "inventory": "Inventory"
+    }
   },
   "shell": {
     "banner": {
@@ -342,7 +346,9 @@
     "pending": "There are sales pending sync",
     "modalTitle": "Syncing catalog",
     "modalBody": "Fetching the latest catalog before you start selling…",
-    "cooldown": "You synced recently. You can sync again at {{time}}."
+    "cooldown": "You synced recently. You can sync again at {{time}}.",
+    "exitTitle": "Syncing before exit",
+    "exitBody": "Sending pending sales, cash cuts and movements…"
   },
   "categories": {
     "title": "Categories",
@@ -414,7 +420,7 @@
     "type": "Type",
     "withInvoice": "Invoice",
     "withoutInvoice": "Receipt",
-    "file": "Document",
+    "file": "Document (optional)",
     "dropHere": "Drop the file here or click",
     "fileHint": "PDF, JPG, PNG or WebP · max 10 MB",
     "removeFile": "Remove file",
