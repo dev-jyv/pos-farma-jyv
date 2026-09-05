@@ -7,6 +7,7 @@ import {
   getApiErrorMessage,
   unwrapEntity,
   unwrapList,
+  toDate,
   unwrapListWithMeta,
 } from '../../../core/api/api.utils';
 import { LocalCashMovementInput, PendingCashMovement } from '../../../core/electron/window.d';
@@ -110,7 +111,18 @@ export class CashMovementService {
     if (filters.limit !== undefined) params = { ...params, limit: String(filters.limit) };
     return this.http
       .get<unknown>(`${this.apiUrl}/cash-sessions/movements`, { params })
-      .pipe(map((response) => unwrapListWithMeta<CashMovement>(response)));
+      .pipe(
+        map((response) => {
+          const { items, meta } = unwrapListWithMeta<CashMovement>(response);
+          return {
+            // El backend serializa `createdAt` como Timestamp de Firestore
+            // (`{_seconds}`), que el `DatePipe` no sabe pintar: la columna Fecha
+            // salía vacía. `toDate` normaliza esa forma y las demás.
+            items: items.map((item) => ({ ...item, createdAt: toDate(item.createdAt) })),
+            meta,
+          };
+        }),
+      );
   }
 
   flushQueue(): void {

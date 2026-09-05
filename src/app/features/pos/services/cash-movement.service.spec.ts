@@ -271,6 +271,25 @@ describe('CashMovementService (local-first)', () => {
   });
 
   describe('auditoría admin', () => {
+    it('normaliza el Timestamp de Firestore: la columna Fecha salía vacía', async () => {
+      const resultado: CashMovement[] = [];
+      service.listMovementsAudit({ type: 'expense' }).subscribe((page) => {
+        resultado.push(...page.items);
+      });
+      await flushMicrotasks();
+
+      const request = http.expectOne((req) => req.url === `${BASE}/movements`);
+      // Forma real del backend: Firestore serializa así, y el `DatePipe` no la
+      // sabe pintar, así que la fecha se veía en blanco.
+      request.flush({
+        data: [{ ...movement(), createdAt: { _seconds: 1_757_030_400, _nanoseconds: 0 } }],
+        meta: { page: 1, limit: 50, total: 1, totalPages: 1 },
+      });
+
+      expect(resultado[0].createdAt).toBeInstanceOf(Date);
+      expect((resultado[0].createdAt as Date).getTime()).toBe(1_757_030_400_000);
+    });
+
     it('listMovementsAudit consulta el backend con el filtro de gastos', async () => {
       const resultado: CashMovement[] = [];
       let meta: { total: number } | null = null;

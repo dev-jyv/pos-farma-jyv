@@ -83,7 +83,9 @@
           </td>
           <td class="text-sm">{{ movement.reason }}</td>
           <td class="text-sm text-slate-600">{{ movement.description || '—' }}</td>
-          <td class="text-sm">{{ movement.createdBy }}</td>
+          <!-- El uid no le dice nada al admin: se muestra el nombre denormalizado y
+               solo se cae al uid en movimientos anteriores a que se guardara. -->
+          <td class="text-sm">{{ movement.createdByLabel || movement.createdBy }}</td>
           <td class="text-right text-sm font-semibold tabular-nums">${{ movement.amount | number: '1.2-2' }}</td>
         </tr>
       </ng-template>
