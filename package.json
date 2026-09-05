@@ -1,6 +1,6 @@
 {
   "name": "farma-jyv-pos",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "FarmaJyV Venta — punto de venta de escritorio (Angular + Electron)",
   "main": "electron/main.js",
   "author": "FarmaJyV",
@@ -20,7 +20,10 @@
     "electron:dist:mac": "npm run electron:build && electron-builder --mac",
     "electron:dist:win": "npm run electron:build && electron-builder --win",
     "postinstall": "prisma generate --schema=electron/prisma/schema.prisma",
-    "db:migrate:dev": "cross-env DATABASE_URL=file:./dev.sqlite prisma migrate dev --schema=electron/prisma/schema.prisma"
+    "db:migrate:dev": "cross-env DATABASE_URL=file:./dev.sqlite prisma migrate dev --schema=electron/prisma/schema.prisma",
+    "release:prepare": "node scripts/publicar-actualizacion.mjs",
+    "release:mac": "npm run electron:dist:mac && npm run release:prepare && firebase deploy --only hosting:updates",
+    "release:win": "npm run electron:dist:win && npm run release:prepare && firebase deploy --only hosting:updates"
   },
   "private": true,
   "packageManager": "npm@11.13.0",
@@ -47,20 +50,20 @@
     ],
     "publish": {
       "provider": "generic",
-      "url": "https://updates.farmajyv.mx/pos"
+      "url": "https://farma-jyv-updates.web.app"
     },
     "mac": {
       "category": "public.app-category.business",
       "target": [
         {
-          "target": "dmg",
+          "target": "zip",
           "arch": [
             "arm64",
             "x64"
           ]
         },
         {
-          "target": "zip",
+          "target": "dmg",
           "arch": [
             "arm64",
             "x64"

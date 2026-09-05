@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "farma-jyv"
+  },
+  "targets": {
+    "farma-jyv": {
+      "hosting": {
+        "updates": [
+          "farma-jyv-updates"
+        ]
+      }
+    }
+  }
+}
