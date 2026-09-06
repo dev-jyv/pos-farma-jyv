@@ -688,6 +688,29 @@ describe('sincronización: la cola contra el backend', () => {
     // Con SQLite real, sin la guarda esto sería el P2002 que se vio en producción.
     const resultado = await cashSessions.markCreateSynced(prisma, hoy.id, 'remote-1');
 
+    // El dueño del `remoteId` ya cerró en local: el hueco en el servidor se
+    // libera subiendo ESE cierre, así que se reencola y el alta de hoy se queda
+    // en cola —sin bloquear— para el ciclo siguiente (closes → creates).
+    expect(resultado).toEqual({ conflict: true, requeuedClose: true });
+    const fila = await prisma.cashSession.findUnique({ where: { id: hoy.id } });
+    expect(fila.remoteId).toBeNull();
+    // Sin `pushError`: no hay nada que un humano deba resolver, se resuelve solo.
+    expect(fila.pushError).toBeNull();
+    expect(await cashSessions.getPendingClosePush(prisma)).toHaveLength(1);
+  });
+
+  /**
+   * La otra rama del mismo conflicto: el dueño del `remoteId` sigue **abierto**
+   * en local, así que no hay cierre que reencolar y nadie puede liberar el hueco
+   * solo. Ahí sí se bloquea el alta nueva con un motivo legible.
+   */
+  it('si el dueño del remoteId sigue abierto, el alta nueva queda bloqueada con motivo', async () => {
+    const otro = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 500 });
+    await cashSessions.markCreateSynced(prisma, otro.id, 'remote-1');
+    const hoy = await cashSessions.createLocal(prisma, { openedBy: 'otro-cajero', openingAmount: 300 });
+
+    const resultado = await cashSessions.markCreateSynced(prisma, hoy.id, 'remote-1');
+
     expect(resultado).toEqual({ conflict: true });
     const fila = await prisma.cashSession.findUnique({ where: { id: hoy.id } });
     expect(fila.remoteId).toBeNull();
