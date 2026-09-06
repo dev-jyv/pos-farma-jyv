@@ -3,7 +3,8 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import sales from '../db/sales.js';
 import { createFakePrisma } from './fake-prisma.mjs';
 
-const { createLocal, voidLocal, discard, getPendingPush, markPushFailed, clearPushError } = sales;
+const { createLocal, voidLocal, discard, getPendingPush, markPushFailed, clearPushError, getNeedingRemoteVoid } =
+  sales;
 
 const CAJERO = 'uid-cajero';
 
@@ -136,6 +137,28 @@ describe('anulación', () => {
 
     expect(prisma.product.rows[0].totalStock).toBe(10);
     expect(prisma.sale.rows[0].voidedAt).toBeTruthy();
+  });
+
+  it('si ya tiene remoteId, encola needsRemoteVoid para el sync', async () => {
+    await producto('p-1', { stock: 10 });
+    const creada = await createLocal(prisma, venta([partidaProducto('p-1')]));
+    prisma.sale.rows.find((row) => row.id === creada.id).remoteId = 'remote-sale-1';
+    prisma.sale.rows.find((row) => row.id === creada.id).pendingPush = false;
+
+    await voidLocal(prisma, creada.id, 'uid-admin');
+
+    expect(prisma.sale.rows[0].needsRemoteVoid).toBe(true);
+    expect((await getNeedingRemoteVoid(prisma)).map((row) => row.id)).toContain(creada.id);
+  });
+
+  it('sin remoteId no encola void remoto (sube por getPendingVoided)', async () => {
+    await producto('p-1', { stock: 10 });
+    const creada = await createLocal(prisma, venta([partidaProducto('p-1')]));
+
+    await voidLocal(prisma, creada.id, 'uid-admin');
+
+    expect(prisma.sale.rows[0].needsRemoteVoid).toBe(false);
+    expect(await getNeedingRemoteVoid(prisma)).toEqual([]);
   });
 
   /**

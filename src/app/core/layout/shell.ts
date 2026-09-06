@@ -17,6 +17,7 @@ import { BlockedSyncRecord } from '../electron/window.d';
 import { BlockedSyncService } from '../sync/blocked-sync.service';
 import { NotificationService } from '../notifications/notification.service';
 import { CashSessionDialog } from '../../features/pos/cash-session/cash-session-dialog';
+import { CashMovementService } from '../../features/pos/services/cash-movement.service';
 import { CashSessionService } from '../../features/pos/services/cash-session.service';
 import { SaleService } from '../../features/pos/services/sale.service';
 import { SyncScheduler } from '../sync/sync-scheduler.service';
@@ -53,6 +54,7 @@ export class Shell {
   private readonly syncScheduler = inject(SyncScheduler);
   private readonly notifications = inject(NotificationService);
   private readonly saleService = inject(SaleService);
+  private readonly cashMovementService = inject(CashMovementService);
   private readonly cashSessionService = inject(CashSessionService);
   private readonly translate = inject(TranslateService);
 
@@ -221,8 +223,10 @@ export class Shell {
 
   /** Sincronizando ahora mismo (botón manual o el modal al iniciar sesión). */
   readonly syncing = this.syncScheduler.syncing;
-  /** Puntito en el botón: hay ventas que aún no suben. Nada de texto permanente en pantalla. */
-  readonly hasPendingSync = computed(() => this.saleService.pendingCount() > 0);
+  /** Puntito en el botón: hay ventas o gastos que aún no suben. */
+  readonly hasPendingSync = computed(
+    () => this.saleService.pendingCount() > 0 || this.cashMovementService.pendingCount() > 0,
+  );
 
   /**
    * El sync automático ya no se dispara aquí. `Shell` se monta también cuando
@@ -261,10 +265,22 @@ export class Shell {
       );
       return;
     }
-    const pending = this.saleService.pendingCount();
-    // El conteo solo se muestra aquí, al ir a sincronizar — no como badge fijo en pantalla.
-    const detail = pending > 0 ? `Hay ${pending} venta(s) pendiente(s) de sincronizar. ` : '';
-    if (!window.confirm(`${detail}¿Sincronizar ahora? Se subirán las ventas pendientes y se traerá el catálogo más reciente.`)) {
+    const ventas = this.saleService.pendingCount();
+    const gastos = this.cashMovementService.pendingCount();
+    const partes: string[] = [];
+    if (ventas > 0) {
+      partes.push(`${ventas} venta(s)`);
+    }
+    if (gastos > 0) {
+      partes.push(`${gastos} gasto(s)`);
+    }
+    const detail =
+      partes.length > 0 ? `Hay ${partes.join(' y ')} pendiente(s) de sincronizar. ` : '';
+    if (
+      !window.confirm(
+        `${detail}¿Sincronizar ahora? Se subirán ventas, gastos y lo demás pendiente, y se traerá el catálogo.`,
+      )
+    ) {
       return;
     }
     void this.runSync();
@@ -279,12 +295,19 @@ export class Shell {
       this.user()?.uid ?? '',
       this.isAdmin(),
     );
-    if (result.ok) {
-      this.notifications.success(`Catálogo sincronizado (${result.pulled} cambios).`);
-    } else {
-      this.notifications.error(result.errorMessage || 'No se pudo sincronizar el catálogo.');
+    if (!result.ok) {
+      this.notifications.error(result.errorMessage || 'No se pudo sincronizar.');
+      await this.blockedSync.refresh();
+      return;
     }
-    // Sincronizar es justo cuando aparecen (o se van) los rechazos.
+    const pending = await this.syncScheduler.countPending().catch(() => 0);
+    if (pending > 0) {
+      this.notifications.error(
+        `Catálogo actualizado (${result.pulled} cambios), pero quedan ${pending} movimiento(s) sin subir. Revisa los rechazados o vuelve a intentar.`,
+      );
+    } else {
+      this.notifications.success(`Sincronizado (${result.pulled} cambios de catálogo).`);
+    }
     await this.blockedSync.refresh();
   }
 
@@ -424,9 +447,41 @@ export class Shell {
     await this.finishLogout();
   }
 
-  /** "Cerrar turno": abre el corte. El logout espera a que termine. */
-  closeShiftBeforeLogout(): void {
+  /**
+   * "Cerrar turno": mismo motor que el botón Sincronizar (sube ventas, gastos,
+   * productos, entradas y trae el catálogo), con el turno todavía abierto, y
+   * luego abre el corte. Sin el tope de 15 min del cajero: al cortar no se puede
+   * posponer. Si se cerrara antes de subir, el servidor rechazaría esos POST.
+   */
+  async closeShiftBeforeLogout(): Promise<void> {
     this.logoutPromptVisible.set(false);
+    this.flushingBeforeExit.set(true);
+    try {
+      if (this.browserOnline()) {
+        await this.syncScheduler.syncNow();
+      }
+      const pending = await this.syncScheduler.countPending();
+      if (pending > 0) {
+        this.notifications.error(
+          this.browserOnline()
+            ? `Quedan ${pending} movimiento(s) sin sincronizar (ventas, gastos, productos o entradas). ` +
+              'Hay red, pero el servidor no los confirmó. Revisa los rechazados o pulsa Sincronizar; ' +
+              'puedes cerrar el turno igual.'
+            : `Quedan ${pending} movimiento(s) sin sincronizar (ventas, gastos, productos o entradas). ` +
+              'Sin red se reintentarán al volver a conectar; puedes cerrar el turno igual.',
+        );
+      }
+      await this.blockedSync.refresh();
+    } catch {
+      const pending = await this.syncScheduler.countPending().catch(() => 0);
+      if (pending > 0) {
+        this.notifications.error(
+          `Quedan ${pending} movimiento(s) sin sincronizar. Puedes cerrar el turno igual.`,
+        );
+      }
+    } finally {
+      this.flushingBeforeExit.set(false);
+    }
     this.logoutCashSessionDialogVisible.set(true);
   }
 

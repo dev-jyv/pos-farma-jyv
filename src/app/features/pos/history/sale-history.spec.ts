@@ -66,7 +66,7 @@ describe('SaleHistory', () => {
   let voidSale: (id: string) => Observable<Sale>;
   let current: ReturnType<typeof signal<CashSession | null>>;
   let isAdmin: ReturnType<typeof signal<boolean>>;
-  /** `sales:write`: lo tiene el cajero. */
+  /** `pos:write`: el permiso con el que el cajero cobra. */
   let puedeVender: ReturnType<typeof signal<boolean>>;
   let notifyError: ReturnType<typeof vi.fn>;
   let notifySuccess: ReturnType<typeof vi.fn>;
@@ -101,7 +101,8 @@ describe('SaleHistory', () => {
           // mostrador, no atribución de admin.
           useValue: {
             isAdmin,
-            can: (area: string, level: string) => area === 'sales' && level === 'write' && puedeVender(),
+            can: (area: string, level: string) =>
+              area === 'pos' && level === 'write' && puedeVender(),
             user: signal({ uid: 'u1', email: 'caja@farmajyv.mx' }),
           },
         },
@@ -197,7 +198,7 @@ describe('SaleHistory', () => {
       expect(voidSpy).toHaveBeenCalled();
     });
 
-    it('un rol sin `sales:write` no puede anular', () => {
+    it('un rol sin `pos:write` ni `sales:write` no puede anular', () => {
       isAdmin.set(false);
       puedeVender.set(false);
       const voidSpy = vi.fn(() => of(sale()));

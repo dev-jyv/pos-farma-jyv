@@ -71,14 +71,19 @@ export class SaleHistory {
   readonly isAdmin = this.authService.isAdmin;
   /**
    * Anular es rutina de mostrador: el cajero se equivoca de producto o el
-   * cliente se arrepiente, y eso pasa con la fila enfrente. Basta `sales:write`,
-   * el mismo permiso con el que cobra — el backend valida igual. Lo que protege
-   * la operación no es negarla, sino que quede firmada (`voidedBy`, `voidedAt`).
+   * cliente se arrepiente, y eso pasa con la fila enfrente.
+   *
+   * El permiso es `pos:write` —con el que cobra— o `sales:write`. **No basta
+   * `sales:write` a secas**: el rol `cashier` no lo tiene, porque ese área cubre
+   * devoluciones y reembolsos, donde sale dinero hacia el cliente. Mismo criterio
+   * que `assertCanVoidSale` en el backend, que valida igual.
    *
    * Una venta de un turno ya cerrado sí sigue siendo de admin: ahí se toca un
    * arqueo firmado. El servidor lo rechaza y el mensaje lo explica.
    */
-  readonly canVoid = computed(() => this.authService.can('sales', 'write'));
+  readonly canVoid = computed(
+    () => this.authService.can('pos', 'write') || this.authService.can('sales', 'write'),
+  );
   readonly cashSession = this.cashSessionService.current;
 
   /**
@@ -180,9 +185,20 @@ export class SaleHistory {
       .pipe(finalize(() => this.voiding.set(null)))
       .subscribe({
         next: (voided) => {
-          this.sales.update((list) => list.map((item) => (item.id === voided.id ? voided : item)));
-          if (this.detailSale()?.id === voided.id) {
-            this.detailSale.set(voided);
+          this.sales.update((list) =>
+            list.map((item) =>
+              item.id === sale.id
+                ? { ...item, ...voided, id: sale.id, remoteId: item.remoteId ?? voided.remoteId }
+                : item,
+            ),
+          );
+          if (this.detailSale()?.id === sale.id) {
+            this.detailSale.set({
+              ...sale,
+              ...voided,
+              id: sale.id,
+              remoteId: sale.remoteId ?? voided.remoteId,
+            });
             // La anulación acaba de asentar su renglón: el detalle debe mostrarlo
             // sin obligar a cerrar y volver a abrir.
             this.loadMovements(sale.id);

@@ -191,6 +191,11 @@ async function voidLocal(prisma, localId, voidedBy, voidedByLabel, reason) {
       data: {
         voidedAt,
         voidedBy,
+        // Si ya existe en el servidor, el void remoto puede fallar (sin red) o
+        // ni intentarse (lista con `pendingPush`/`remoteId` viejos). Encolar
+        // siempre el cierre remoto: el éxito online lo limpia con
+        // `markRemoteVoided`.
+        ...(sale.remoteId ? { needsRemoteVoid: true } : {}),
         // La anulación se asienta como movimiento propio: el flag dice *que*
         // está anulada, el renglón dice *quién* y *cuándo* —que es lo que se
         // revisa cuando el turno no cuadra.
@@ -386,8 +391,32 @@ async function resolvePayloadCashSession(prisma, payload) {
   return { ...payload, cashSessionId: session.remoteId };
 }
 
+/**
+ * Ventas que quedaron bloqueadas con "turno cerrado" no se arreglan
+ * reintentando el mismo POST: el Angular las manda a `unreconciled`. Limpiar
+ * el `pushError` las vuelve a poner en cola para ese camino (antes quedaban
+ * atrapadas para siempre en el badge de rechazados).
+ */
+async function healClosedShiftBlocks(prisma) {
+  const bloqueadas = await prisma.sale.findMany({
+    where: { pendingPush: true, pushError: { not: null } },
+    select: { id: true, pushError: true },
+  });
+  for (const fila of bloqueadas) {
+    const msg = String(fila.pushError).toLowerCase();
+    if (!(msg.includes('turno') && msg.includes('cerrado'))) {
+      continue;
+    }
+    await prisma.sale.update({
+      where: { id: fila.id },
+      data: { pushError: null },
+    });
+  }
+}
+
 /** `ownerUid`: solo las ventas de ese cajero (ver `ownerFilter` en cash-sessions). */
 async function getPendingPush(prisma, { ownerUid } = {}) {
+  await healClosedShiftBlocks(prisma);
   const rows = await prisma.sale.findMany({
     // Una venta anulada que nunca llegó a existir en el servidor va por otro
     // camino (`getPendingVoided`: se crea y se anula, para que quede el rastro
@@ -567,6 +596,23 @@ async function markRemoteVoided(prisma, localId) {
   await prisma.sale.update({ where: { id: localId }, data: { needsRemoteVoid: false } });
 }
 
+/**
+ * Una sola vez (ver `client.js`): reencola voids que quedaron solo en local
+ * porque la UI anuló con `pendingPush` viejo sin mirar el `remoteId` ya
+ * guardado. El sync siguiente hace `POST /void`; si allá ya estaba anulada,
+ * cuenta como éxito.
+ */
+async function requeueOrphanRemoteVoids(prisma) {
+  await prisma.sale.updateMany({
+    where: {
+      voidedAt: { not: null },
+      remoteId: { not: null },
+      needsRemoteVoid: false,
+    },
+    data: { needsRemoteVoid: true },
+  });
+}
+
 async function clearPushError(prisma, localId) {
   await prisma.sale.update({ where: { id: localId }, data: { pushError: null } });
 }
@@ -605,4 +651,5 @@ module.exports = {
   listMovements,
   markNeedsRemoteVoid,
   markRemoteVoided,
+  requeueOrphanRemoteVoids,
 };

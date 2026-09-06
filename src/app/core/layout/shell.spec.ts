@@ -6,11 +6,13 @@ import { EMPTY } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CashSession } from '../../shared/models';
+import { CashMovementService } from '../../features/pos/services/cash-movement.service';
 import { CashSessionService } from '../../features/pos/services/cash-session.service';
 import { SaleService } from '../../features/pos/services/sale.service';
 import { ApiHealthService } from '../health/api-health.service';
 import { AuthService } from '../auth/auth.service';
 import { NotificationService } from '../notifications/notification.service';
+import { BlockedSyncService } from '../sync/blocked-sync.service';
 import { SyncScheduler } from '../sync/sync-scheduler.service';
 import { NAV_ITEMS } from './nav.config';
 import { Shell } from './shell';
@@ -33,6 +35,8 @@ describe('Shell', () => {
   let turnoAbierto: CashSession | null;
   /** Movimientos en cola al intentar salir; 0 = todo sincronizado. */
   let pendientesAlSalir: number;
+  let flushPendingNow: ReturnType<typeof vi.fn>;
+  let syncNow: ReturnType<typeof vi.fn>;
   let electronApp: {
     onCloseRequested: ReturnType<typeof vi.fn>;
     closePending: ReturnType<typeof vi.fn>;
@@ -72,11 +76,12 @@ describe('Shell', () => {
           provide: SyncScheduler,
           useValue: {
             syncing: signal(false),
-            syncNow: vi.fn().mockResolvedValue({ ok: true, pulled: 0 }),
-            // Salir consulta la cola y trata de vaciarla; por defecto no hay nada
-            // pendiente, y las pruebas que sí lo necesitan reemplazan el doble.
+            syncNow,
+            canSyncManually: () => true,
+            manualSyncAvailableAt: () => null,
+            syncManually: vi.fn().mockResolvedValue({ ok: true, pulled: 0 }),
             countPending: () => Promise.resolve(pendientesAlSalir),
-            flushPendingNow: () => Promise.resolve(),
+            flushPendingNow,
           },
         },
         { provide: NotificationService, useValue: { success: vi.fn(), error: vi.fn() } },
@@ -85,6 +90,19 @@ describe('Shell', () => {
           useValue: { current: () => turnoAbierto, isOpen: () => turnoAbierto !== null },
         },
         { provide: SaleService, useValue: { pendingCount: signal(0) } },
+        { provide: CashMovementService, useValue: { pendingCount: signal(0) } },
+        {
+          provide: BlockedSyncService,
+          useValue: {
+            count: signal(0),
+            records: signal([]),
+            refresh: vi.fn().mockResolvedValue(undefined),
+            retry: vi.fn(),
+            discard: vi.fn(),
+            canFix: () => false,
+            canDiscard: () => false,
+          },
+        },
       ],
     });
 
@@ -111,6 +129,8 @@ describe('Shell', () => {
     can = () => true;
     turnoAbierto = null;
     pendientesAlSalir = 0;
+    flushPendingNow = vi.fn().mockResolvedValue(undefined);
+    syncNow = vi.fn().mockResolvedValue({ ok: true, pulled: 0 });
     confirmSpy = vi.fn().mockReturnValue(true);
     window.confirm = confirmSpy as unknown as typeof window.confirm;
     await build();
@@ -216,7 +236,7 @@ describe('Shell', () => {
       turnoAbierto = { id: 's1' } as CashSession;
       await build();
       cerrarSolicitado?.();
-      component.closeShiftBeforeLogout();
+      await component.closeShiftBeforeLogout();
 
       component.dismissLogoutCashSession();
 
@@ -270,19 +290,35 @@ describe('Shell', () => {
       expect(navigate).toHaveBeenCalledWith(['/login']);
     });
 
-    it('cerrar turno abre el corte y todavía NO cierra la sesión', () => {
+    it('cerrar turno sincroniza como el botón Sincronizar y abre el corte', async () => {
       void component.logout();
 
-      component.closeShiftBeforeLogout();
+      await component.closeShiftBeforeLogout();
 
+      expect(syncNow).toHaveBeenCalled();
       expect(component.logoutPromptVisible()).toBe(false);
+      expect(component.logoutCashSessionDialogVisible()).toBe(true);
+      expect(logout).not.toHaveBeenCalled();
+    });
+
+    it('si queda pendiente al cerrar turno, avisa y aun así abre el corte', async () => {
+      pendientesAlSalir = 2;
+      const notifications = TestBed.inject(NotificationService);
+      void component.logout();
+
+      await component.closeShiftBeforeLogout();
+
+      expect(syncNow).toHaveBeenCalled();
+      expect(notifications.error).toHaveBeenCalledWith(
+        expect.stringContaining('Hay red, pero el servidor no los confirmó'),
+      );
       expect(component.logoutCashSessionDialogVisible()).toBe(true);
       expect(logout).not.toHaveBeenCalled();
     });
 
     it('cuando el corte se confirma, sale', async () => {
       void component.logout();
-      component.closeShiftBeforeLogout();
+      await component.closeShiftBeforeLogout();
 
       turnoAbierto = null;
       component.onLogoutShiftClosed();
@@ -296,7 +332,7 @@ describe('Shell', () => {
 
     it('si el cajero cancela el corte, se queda en la caja con su turno', async () => {
       void component.logout();
-      component.closeShiftBeforeLogout();
+      await component.closeShiftBeforeLogout();
 
       // El turno sigue abierto: el corte se canceló.
       component.dismissLogoutCashSession();
@@ -308,7 +344,7 @@ describe('Shell', () => {
 
     it('cancelar no cierra sesión ni aunque el turno ya no esté abierto', async () => {
       void component.logout();
-      component.closeShiftBeforeLogout();
+      await component.closeShiftBeforeLogout();
 
       // El turno pudo cerrarse por otra vía (auto-cierre por cambio de día).
       // Cancelar sigue siendo solo "cerrar el modal".
