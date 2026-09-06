@@ -165,51 +165,55 @@ describe('AuthService', () => {
   });
 
   /**
-   * A las 24:00 (hora CDMX) el backend deja de aceptar el token. Si el turno
-   * sigue abierto, el POS lo cierra solo ANTES del logout: después ya no hay
-   * `uid` del que colgar el corte, y un turno que nunca cierra deja el
-   * efectivo del día sin arqueo.
+   * A las 24:00 (hora CDMX) el backend deja de aceptar el token, y la sesión se
+   * cierra. **El turno de caja NO.**
+   *
+   * Antes se cerraba solo aquí, y era el peor momento posible: quedaba cerrado
+   * en local con sus gastos y ventas todavía en cola, el cierre viajaba en el
+   * mismo ciclo, y cualquier rezagado llegaba al servidor contra un turno ya
+   * cerrado y moría en 400 — sin nadie delante que viera el error.
+   *
+   * Ahora el turno sobrevive a la medianoche y lo liquida
+   * `SyncScheduler.settleStaleShift()` al entrar la siguiente sesión: primero
+   * los movimientos y las ventas, después el cierre, y solo entonces se ofrece
+   * abrir el turno nuevo.
    */
-  describe('auto-cierre del turno al expirar la sesión', () => {
-    it('sin sesión activa no hay turno que cerrar, pero sí se avisa y se sale', async () => {
+  describe('expiración de sesión a medianoche', () => {
+    it('avisa y sale', async () => {
       vi.spyOn(service, 'logout').mockResolvedValue(undefined);
 
       await service.endExpiredSession();
 
-      expect(autoCloseForExpiry).not.toHaveBeenCalled();
       expect(sessionExpired).toHaveBeenCalled();
       expect(navigate).toHaveBeenCalledWith(['/login']);
     });
 
-    it('con sesión activa cierra el turno y solo entonces sale', async () => {
-      const orden: string[] = [];
-      autoCloseForExpiry.mockImplementation(() => {
-        orden.push('cierra-turno');
-        return Promise.resolve();
-      });
-      navigate.mockImplementation(() => {
-        orden.push('navega-login');
-        return Promise.resolve(true);
-      });
+    it('NO cierra el turno de caja, ni con sesión activa', async () => {
       vi.spyOn(service, 'user').mockReturnValue({ uid: 'u1' } as never);
       vi.spyOn(service, 'profile').mockReturnValue({ email: 'caja@farmajyv.mx' } as never);
       vi.spyOn(service, 'logout').mockResolvedValue(undefined);
 
       await service.endExpiredSession();
 
-      expect(autoCloseForExpiry).toHaveBeenCalledWith('u1', 'caja@farmajyv.mx');
-      expect(orden).toEqual(['cierra-turno', 'navega-login']);
+      // El turno queda abierto a propósito: se liquida al entrar la próxima vez.
+      expect(autoCloseForExpiry).not.toHaveBeenCalled();
     });
 
-    it('si el cierre del turno falla, el logout ocurre igual', async () => {
-      autoCloseForExpiry.mockRejectedValue(new Error('SQLite bloqueada'));
+    it('el aviso sale antes de navegar al login', async () => {
+      const orden: string[] = [];
+      sessionExpired.mockImplementation(() => {
+        orden.push('avisa');
+      });
+      navigate.mockImplementation(() => {
+        orden.push('navega-login');
+        return Promise.resolve(true);
+      });
       vi.spyOn(service, 'user').mockReturnValue({ uid: 'u1' } as never);
       vi.spyOn(service, 'logout').mockResolvedValue(undefined);
 
-      await expect(service.endExpiredSession()).rejects.toThrow();
-      // El contrato de `autoCloseForExpiry` es no lanzar nunca (traga sus
-      // errores); esta prueba fija esa expectativa desde el lado del llamador.
-      expect(autoCloseForExpiry).toHaveBeenCalled();
+      await service.endExpiredSession();
+
+      expect(orden).toEqual(['avisa', 'navega-login']);
     });
   });
 });

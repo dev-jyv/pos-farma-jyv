@@ -412,7 +412,7 @@ describe('CashSessionService (local-first)', () => {
       expect(cashSessions.markPushFailed).not.toHaveBeenCalled();
     });
 
-    it('un cierre rechazado marca solo el error de cierre, nunca reencola el alta', async () => {
+    it('un cierre 409 "ya cerrado" se da por sincronizado, no como rechazo', async () => {
       cashSessions.getPendingPush.mockResolvedValue([]);
       cashSessions.getPendingClosePush.mockResolvedValue([
         { id: 'local-1', remoteId: 'remote-1', countedCashAmount: 700, autoClosedByExpiry: false, closePushError: null },
@@ -423,6 +423,24 @@ describe('CashSessionService (local-first)', () => {
       http.expectOne(`${BASE}/remote-1/close`).flush(
         { error: { message: 'El turno ya está cerrado' } },
         { status: 409, statusText: 'Conflict' },
+      );
+      await flushMicrotasks();
+
+      expect(cashSessions.markCloseSynced).toHaveBeenCalledWith('local-1', {});
+      expect(cashSessions.markClosePushFailed).not.toHaveBeenCalled();
+    });
+
+    it('un cierre rechazado marca solo el error de cierre, nunca reencola el alta', async () => {
+      cashSessions.getPendingPush.mockResolvedValue([]);
+      cashSessions.getPendingClosePush.mockResolvedValue([
+        { id: 'local-1', remoteId: 'remote-1', countedCashAmount: 700, autoClosedByExpiry: false, closePushError: null },
+      ]);
+      service.flushQueue();
+      await flushMicrotasks();
+
+      http.expectOne(`${BASE}/remote-1/close`).flush(
+        { error: { message: 'Counted cash amount inválido' } },
+        { status: 400, statusText: 'Bad Request' },
       );
       await flushMicrotasks();
 

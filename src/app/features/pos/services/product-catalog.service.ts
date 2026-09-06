@@ -1,6 +1,6 @@
 import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
-import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, firstValueFrom, from, map, of, switchMap, tap } from 'rxjs';
+import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, lastValueFrom, from, map, of, switchMap, tap } from 'rxjs';
 
 import { getApiErrorMessage, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
 import { PendingCatalogProduct } from '../../../core/electron/window.d';
@@ -68,8 +68,17 @@ export class ProductCatalogService {
    * red crearía un duplicado sin esta defensa. Las ediciones van directo a
    * `PATCH`, que ya es idempotente por sí solo.
    */
+  /**
+   * Disparar y olvidar. Si ya hay un empuje en vuelo **no** encola otro: se
+   * apoya en el que corre, que va a leer la cola igual. Encolar aquí duplicaba
+   * la pasada sin ganar nada. Un empuje **esperado** (`flushQueueAsync`) sí se
+   * encola siempre: quien lo espera necesita que de verdad ocurra.
+   */
   flushQueue(): void {
-    this.flush$().subscribe();
+    if (this.cola) {
+      return;
+    }
+    void this.flushQueueAsync();
   }
 
   /**
@@ -77,14 +86,49 @@ export class ProductCatalogService {
    * → entradas → ventas, porque una venta de un producto recién dado de alta
    * necesita que ese producto ya exista en el servidor.
    */
-  flushQueueAsync(): Promise<void> {
-    return firstValueFrom(this.flush$().pipe(defaultIfEmpty(null))).then(() => undefined);
+    /**
+   * **Encadenada, no descartada.** El guard `flushing` de `flush$()` devuelve
+   * `EMPTY` cuando ya hay un empuje en vuelo, y con `defaultIfEmpty` esta
+   * promesa resolvía de inmediato **sin haber subido nada**: el sincronizador
+   * la daba por cumplida y pasaba al cierre del turno, que adelantaba a lo que
+   * seguía en vuelo. El backend rechaza a los rezagados con "el turno de caja
+   * ya está cerrado".
+   *
+   * `flushQueue()` entra por aquí también, para que todo empuje quede en la
+   * misma fila.
+   *
+   * `lastValueFrom` y no `firstValueFrom`: `flush$()` emite **un valor por
+   * registro** (`concatMap`), y tomar el primero desuscribía la cadena y
+   * cancelaba los que faltaban. Con tres gastos en cola subía uno y abandonaba
+   * dos, y el cierre salía enseguida: los dos rezagados quedaban rechazados
+   * para siempre con "el turno de caja ya está cerrado".
+   */
+flushQueueAsync(): Promise<void> {
+    return this.enFila(() => lastValueFrom(this.flush$().pipe(defaultIfEmpty(null))).then(() => undefined));
+  }
+
+  /**
+   * Fila de un solo carril: cada empuje espera al anterior, ninguno se descarta.
+   *
+   * Con la fila vacía el trabajo arranca **en el acto**, sin diferir un tick: el
+   * push debe salir en el mismo turno en que se pide, como antes de encolarlo.
+   */
+  private cola: Promise<void> | null = null;
+
+  private enFila(trabajo: () => Promise<void>): Promise<void> {
+    const propia = this.cola ? this.cola.catch(() => undefined).then(trabajo) : trabajo();
+    let seguimiento: Promise<void>;
+    seguimiento = propia.catch(() => undefined).then(() => {
+      // Solo el último de la fila la libera; si ya hay otro detrás, es suyo.
+      if (this.cola === seguimiento) {
+        this.cola = null;
+      }
+    });
+    this.cola = seguimiento;
+    return propia;
   }
 
   private flush$(): Observable<unknown> {
-    if (this.flushing) {
-      return EMPTY;
-    }
     this.flushing = true;
     return from(this.api().getPendingCatalogPush())
       .pipe(

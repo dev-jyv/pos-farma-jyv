@@ -273,6 +273,43 @@ describe('la cola de push es de cada cajero, no del equipo', () => {
     expect(await getPendingClosePush(prisma, { ownerUid: CAJERO })).toHaveLength(1);
   });
 
+  /**
+   * Una venta que el servidor ya tiene **activa** y que aquí se anuló: le falta
+   * el `POST /sales/:id/void`. No lleva `pendingPush` —su alta sí subió—, así
+   * que no la veía ninguno de los dos conteos de hijos y el cierre se le
+   * adelantaba. Después de cerrar, el backend responde "solo un administrador
+   * puede anularla" (un turno cerrado tiene su arqueo firmado) y el cajero se
+   * queda sin poder aplicarla: el servidor conserva como buena una venta que en
+   * la caja no existe.
+   */
+  it('la primera pasada NO cierra un turno con una anulación remota pendiente', async () => {
+    const turno = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 500 });
+    await markCreateSynced(prisma, turno.id, 'remote-1');
+    await prisma.sale.create({
+      data: {
+        id: 'venta-1',
+        cashSessionId: turno.id,
+        remoteId: 'remota-1',
+        // Su alta ya subió: por eso no está en `pendingPush`.
+        pendingPush: false,
+        needsRemoteVoid: true,
+        voidedAt: new Date(),
+        voidedBy: CAJERO,
+        cashierId: CAJERO,
+        folio: 'A-1',
+        total: 100,
+        subtotal: 100,
+        discountTotal: 0,
+        paymentMethod: 'cash',
+      },
+    });
+    await closeLocal(prisma, turno.id, { countedCashAmount: 400, closedBy: CAJERO });
+
+    expect(
+      await getPendingClosePush(prisma, { ownerUid: CAJERO, sinHijosPendientes: true }),
+    ).toHaveLength(0);
+  });
+
   it('la primera pasada sí cierra un turno sin nada en cola: es lo que libera el hueco', async () => {
     const turno = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 500 });
     await markCreateSynced(prisma, turno.id, 'remote-1');
@@ -641,30 +678,65 @@ describe('regresiones vistas en caja', () => {
    * de ayer (su cierre no había subido) y el turno de hoy intentaba adoptar
    * ese mismo `remoteId`, que es único.
    */
-  it('no adopta un remoteId que ya es de otro turno local: lo marca como conflicto', async () => {
+  it('si el dueño del remoteId ya cerró en local, reencola ese cierre y deja el alta en cola', async () => {
     const ayer = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 500 });
     await markCreateSynced(prisma, ayer.id, 'remote-1');
     await closeLocal(prisma, ayer.id, { countedCashAmount: 500, closedBy: CAJERO });
+    // Simula el estado atascado: el cierre local se dio por subido pero el
+    // servidor sigue con ese turno como `current`.
+    await prisma.cashSession.update({
+      where: { id: ayer.id },
+      data: { pendingClosePush: false },
+    });
     const hoy = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 400 });
 
     const resultado = await markCreateSynced(prisma, hoy.id, 'remote-1');
 
-    expect(resultado).toEqual({ conflict: true });
+    expect(resultado).toEqual({ conflict: true, requeuedClose: true });
     const filaHoy = prisma.cashSession.rows.find((row) => row.id === hoy.id);
     expect(filaHoy.remoteId).toBeNull();
-    expect(filaHoy.pushError).toMatch(/ya pertenece a otro turno/i);
-    // Y el turno de ayer conserva el suyo, intacto.
-    expect(prisma.cashSession.rows.find((row) => row.id === ayer.id).remoteId).toBe('remote-1');
+    expect(filaHoy.pushError).toBeNull();
+    expect(filaHoy.pendingPush).toBe(true);
+    const filaAyer = prisma.cashSession.rows.find((row) => row.id === ayer.id);
+    expect(filaAyer.remoteId).toBe('remote-1');
+    expect(filaAyer.pendingClosePush).toBe(true);
   });
 
-  it('el conflicto saca la fila de la cola hasta que un admin la destrabe', async () => {
+  it('si el dueño del remoteId sigue abierto en local, marca conflicto y saca el alta de la cola', async () => {
+    const abierto = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 500 });
+    await markCreateSynced(prisma, abierto.id, 'remote-1');
+    const otro = await createLocal(prisma, { openedBy: 'uid-otro', openingAmount: 400 });
+
+    const resultado = await markCreateSynced(prisma, otro.id, 'remote-1');
+
+    expect(resultado).toEqual({ conflict: true });
+    const filaOtro = prisma.cashSession.rows.find((row) => row.id === otro.id);
+    expect(filaOtro.remoteId).toBeNull();
+    expect(filaOtro.pushError).toMatch(/ya pertenece a otro turno/i);
+    expect((await getPendingPush(prisma)).map((row) => row.id)).not.toContain(otro.id);
+  });
+
+  it('healRemoteOpenConflicts reencola el cierre y destraba el alta bloqueada', async () => {
     const ayer = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 500 });
     await markCreateSynced(prisma, ayer.id, 'remote-1');
     await closeLocal(prisma, ayer.id, { countedCashAmount: 500, closedBy: CAJERO });
+    await prisma.cashSession.update({
+      where: { id: ayer.id },
+      data: { pendingClosePush: false },
+    });
     const hoy = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 400 });
-    await markCreateSynced(prisma, hoy.id, 'remote-1');
+    await prisma.cashSession.update({
+      where: { id: hoy.id },
+      data: {
+        pushError:
+          'El turno remoto remote-1 ya pertenece a otro turno de este equipo. ' +
+          'Sincroniza el cierre del turno anterior antes de subir este.',
+      },
+    });
 
-    expect((await getPendingPush(prisma)).map((row) => row.id)).not.toContain(hoy.id);
+    expect((await getPendingClosePush(prisma)).map((row) => row.id)).toContain(ayer.id);
+    expect((await getPendingPush(prisma)).map((row) => row.id)).toContain(hoy.id);
+    expect(prisma.cashSession.rows.find((row) => row.id === hoy.id).pushError).toBeNull();
   });
 
   it('reintentar el mismo remoteId sobre su propio turno es idempotente, no conflicto', async () => {

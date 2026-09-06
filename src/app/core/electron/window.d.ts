@@ -309,7 +309,10 @@ declare global {
          * turno anterior sigue abierto en el backend): no se adopta, se marca
          * `pushError` y lo resuelve un admin.
          */
-        markCreateSynced: (localId: string, remoteId: string) => Promise<{ conflict: boolean }>;
+        markCreateSynced: (
+          localId: string,
+          remoteId: string,
+        ) => Promise<{ conflict: boolean; requeuedClose?: boolean }>;
         markCloseSynced: (
           localId: string,
           values: { expectedCashAmount?: number; cashDifference?: number },
@@ -359,6 +362,12 @@ declare global {
           },
         ) => Promise<CashMovement>;
         listForSession: (cashSessionId: string) => Promise<CashMovement[]>;
+        /**
+         * Cerrojo consultado **justo antes** de emitir el POST: `false` si el
+         * turno ya cerró en el servidor. En ese caso deja el movimiento
+         * bloqueado con su motivo y no se manda nada.
+         */
+        assertPushable: (id: string) => Promise<boolean>;
         /** Todos los movimientos locales, para la pantalla de auditoría de gastos del POS. */
         listAllLocal: (filters?: {
           type?: CashMovementType;

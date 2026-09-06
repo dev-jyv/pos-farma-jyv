@@ -38,7 +38,26 @@
     </div>
   </ng-template>
 
-  @if (mode() === 'open') {
+  @if (syncing()) {
+    <!--
+      Dos momentos usan la misma pantalla: vaciar la cola ANTES del corte (turno
+      aún abierto) y subir el cierre DESPUÉS. El texto cambia con `syncPhase`.
+    -->
+    <div
+      data-testid="cut-syncing"
+      class="flex flex-col items-center justify-center gap-3 py-10 text-center"
+      role="status"
+      aria-live="polite"
+    >
+      <i class="pi pi-spin pi-spinner text-3xl text-[var(--pos-primary)]"></i>
+      <div class="text-sm font-semibold text-slate-800">
+        {{ (syncPhase() === 'pre' ? 'cashCut.syncingPre' : 'cashCut.syncing') | translate }}
+      </div>
+      <div class="max-w-xs text-xs text-slate-500">
+        {{ (syncPhase() === 'pre' ? 'cashCut.syncingPreHint' : 'cashCut.syncingHint') | translate }}
+      </div>
+    </div>
+  } @else if (mode() === 'open') {
     <label for="openingAmount" class="mb-1.5 block text-sm font-medium text-slate-700">{{ 'cashCut.openingAmount' | translate }}</label>
     <p-inputnumber
       inputId="openingAmount"
@@ -269,7 +288,9 @@
 
   <ng-template #footer>
     <div class="flex w-full gap-2">
-      @if (mode() === 'close') {
+      <!-- Sin botones mientras sube: no hay nada que decidir hasta que termine. -->
+      @if (syncing()) {
+      } @else if (mode() === 'close') {
         @if (!confirmingDifference()) {
           <p-button
             data-testid="cut-cancel"

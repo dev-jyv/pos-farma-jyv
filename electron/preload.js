@@ -108,6 +108,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listAllLocal: (filters) => ipcRenderer.invoke('cashMovements:listAllLocal', filters),
     countAllLocal: (filters) => ipcRenderer.invoke('cashMovements:countAllLocal', filters),
     getPendingPush: (filters) => ipcRenderer.invoke('cashMovements:getPendingPush', filters),
+    assertPushable: (id) => ipcRenderer.invoke('cashMovements:assertPushable', id),
     listBlocked: () => ipcRenderer.invoke('cashMovements:listBlocked'),
     discard: (id) => ipcRenderer.invoke('cashMovements:discard', id),
     markSynced: (localId, remoteId) => ipcRenderer.invoke('cashMovements:markSynced', localId, remoteId),

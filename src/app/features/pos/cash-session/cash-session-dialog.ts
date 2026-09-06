@@ -21,8 +21,8 @@ import { AuthService } from '../../../core/auth/auth.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { CashSession, CashSessionSummary, PaymentMethod } from '../../../shared/models';
 import { CashSessionService } from '../services/cash-session.service';
-import { TicketPrintService } from '../ticket/ticket-print.service';
 import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
+import { TicketPrintService } from '../ticket/ticket-print.service';
 
 /**
  * Turno de caja — local-first: abrir/cerrar y ver el efectivo esperado no
@@ -39,11 +39,11 @@ import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
 })
 export class CashSessionDialog {
   private readonly cashSessionService = inject(CashSessionService);
+  private readonly syncScheduler = inject(SyncScheduler);
   private readonly authService = inject(AuthService);
   private readonly notifications = inject(NotificationService);
   private readonly ticketPrint = inject(TicketPrintService);
   private readonly translate = inject(TranslateService);
-  private readonly syncScheduler = inject(SyncScheduler);
 
   readonly visible = input(false);
   readonly session = input<CashSession | null>(null);
@@ -81,7 +81,13 @@ export class CashSessionDialog {
   });
 
   /** Solo el modo `open` se puede bloquear; cerrar y resultado siempre salen. */
-  readonly canDismiss = computed(() => this.mode() !== 'open' || this.dismissible());
+  /**
+   * Mientras se sube el corte no hay salida: ni la X, ni Esc, ni el clic fuera.
+   * Cerrar a media subida deja al cajero sin saber si el corte llegó.
+   */
+  readonly canDismiss = computed(
+    () => !this.syncing() && (this.mode() !== 'open' || this.dismissible()),
+  );
   readonly openingAmount = signal(0);
   /** Efectivo heredado del cierre anterior, con el que se precarga el fondo. */
   readonly cashOnHand = signal(0);
@@ -94,6 +100,17 @@ export class CashSessionDialog {
    */
   readonly countedCashAmount = signal(0);
   readonly submitting = signal(false);
+  /**
+   * El cierre local ya pasó y se está subiendo. Bloquea el diálogo: sin esto el
+   * cajero avanzaba —o cerraba con la X— mientras los movimientos, las ventas y
+   * el cierre seguían viajando.
+   */
+  readonly syncing = signal(false);
+  /**
+   * `pre` = subiendo cola con el turno aún abierto (antes del corte).
+   * `post` = subiendo el cierre recién hecho. Misma UI, textos distintos.
+   */
+  readonly syncPhase = signal<'pre' | 'post' | null>(null);
   readonly summaryLoading = signal(false);
   readonly summary = signal<CashSessionSummary | null>(null);
   readonly expectedCash = signal(0);
@@ -131,6 +148,34 @@ export class CashSessionDialog {
     });
   }
 
+  /**
+   * Sube lo pendiente **antes** de mostrar el corte, con el turno todavía
+   * abierto aquí y en el servidor.
+   *
+   * Dos razones, y las dos se vieron en producción. Una: un turno cerrado no
+   * acepta movimientos ni ventas, así que lo que quedara en cola rebotaba con
+   * "el turno de caja ya está cerrado" y el cajero se quedaba con un aviso rojo
+   * que no podía resolver. Otra: el desglose que firma es el del servidor, y si
+   * hay gastos o ventas sin subir, la cifra que cuenta no es la que quedará
+   * asentada.
+   *
+   * Va aquí y no en cada botón porque el corte se abre desde varios sitios (la
+   * barra de venta, el flujo de cerrar sesión, el cierre de la app).
+   */
+  private async flushBeforeClosing(): Promise<void> {
+    // Mismo motor que el botón Sincronizar (push + pull), no solo el push.
+    this.syncPhase.set('pre');
+    this.syncing.set(true);
+    try {
+      await this.syncScheduler.syncNow();
+    } catch {
+      // Sin red se corta igual: el corte es local y lo pendiente sube después.
+    } finally {
+      this.syncing.set(false);
+      this.syncPhase.set(null);
+    }
+  }
+
   private resetForOpening(): void {
     this.openingAmount.set(0);
     this.countedCashAmount.set(0);
@@ -140,12 +185,15 @@ export class CashSessionDialog {
     const session = this.session();
     this.sessionAtOpen.set(session);
     if (session) {
-      this.loadSummary(session.id);
-    } else {
-      this.summary.set(null);
-      this.expectedCash.set(0);
-      this.preloadCashOnHand();
+      // El resumen se pide DESPUÉS de vaciar la cola: así refleja lo que el
+      // servidor ya tiene, no una foto a medias.
+      void this.flushBeforeClosing().then(() => this.loadSummary(session.id));
+      return;
     }
+    // Modo apertura: no hay turno que cortar, solo el fondo inicial.
+    this.summary.set(null);
+    this.expectedCash.set(0);
+    this.preloadCashOnHand();
   }
 
   /**
@@ -252,24 +300,58 @@ export class CashSessionDialog {
     }
     this.confirmingDifference.set(false);
     this.submitting.set(true);
+    void this.runCloseWithFullSync(session, user);
+  }
+
+  /**
+   * Orden: sincronizar (como el botón del header) con el turno aún abierto →
+   * cerrar en local → subir el cierre. Si se cerrara primero, gastos y ventas
+   * pendientes rebotarían con "el turno de caja ya está cerrado".
+   */
+  private async runCloseWithFullSync(
+    session: CashSession,
+    user: { uid: string },
+  ): Promise<void> {
+    this.syncPhase.set('pre');
+    this.syncing.set(true);
+    try {
+      await this.syncScheduler.syncNow();
+    } catch {
+      // El corte sigue siendo local: lo que no subió queda en cola.
+    } finally {
+      this.syncing.set(false);
+      this.syncPhase.set(null);
+    }
+
     this.cashSessionService
       .closeLocal(session.id, this.countedCashAmount(), user.uid, this.authService.profile()?.email ?? undefined)
       .subscribe({
         next: (closed) => {
-          this.submitting.set(false);
-          // El corte no se queda en el equipo: se sube en cuanto existe, para
-          // cualquier rol. Va aquí y no en `finish()` porque el cajero puede
-          // quedarse en la pantalla del corte imprimiéndolo.
-          this.syncScheduler.syncAfterShiftClose();
           const expected = closed.expectedCashAmount ?? this.expectedCash();
           const counted = closed.countedCashAmount ?? this.countedCashAmount();
-          this.closeResult.set({
+          const resultado = {
             session: closed,
             summary: closed.summary ?? this.summary() ?? this.emptySummary(),
             expectedCashAmount: expected,
             countedCashAmount: counted,
             cashDifference: closed.cashDifference ?? counted - expected,
-          });
+          };
+
+          this.syncPhase.set('post');
+          this.syncing.set(true);
+          void this.syncScheduler
+            .syncAfterShiftCloseAsync()
+            .catch(() => {
+              // El push ya deja el registro como pendiente o bloqueado y la
+              // barra del shell lo muestra; tragarlo aquí evita que un fallo de
+              // red esconda un corte que en local sí quedó cerrado.
+            })
+            .finally(() => {
+              this.syncing.set(false);
+              this.syncPhase.set(null);
+              this.submitting.set(false);
+              this.closeResult.set(resultado);
+            });
         },
         error: () => {
           this.submitting.set(false);

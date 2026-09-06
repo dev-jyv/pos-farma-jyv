@@ -7,10 +7,11 @@ import {
   concatMap,
   defaultIfEmpty,
   finalize,
-  firstValueFrom,
+  lastValueFrom,
   from,
   map,
   of,
+  reduce,
   switchMap,
 } from 'rxjs';
 
@@ -284,13 +285,60 @@ export class CashSessionService {
    * primer sync) — el `remoteId` del create se persiste de inmediato para que
    * un fallo del close no dispare un segundo alta en el próximo intento.
    */
+  /**
+   * Disparar y olvidar. Si ya hay un empuje en vuelo **no** encola otro: se
+   * apoya en el que corre, que va a leer la cola igual. Encolar aquí duplicaba
+   * la pasada sin ganar nada. Un empuje **esperado** (`flushQueueAsync`) sí se
+   * encola siempre: quien lo espera necesita que de verdad ocurra.
+   */
   flushQueue(owner: PushOwner = {}): void {
-    this.flush$(owner).subscribe();
+    if (this.cola) {
+      return;
+    }
+    void this.flushQueueAsync(owner);
   }
 
   /** Esperable: `SyncScheduler` la encadena antes de movimientos y ventas (ambos dependen de esto). */
-  flushQueueAsync(owner: PushOwner = {}): Promise<void> {
-    return firstValueFrom(this.flush$(owner).pipe(defaultIfEmpty(null))).then(() => undefined);
+    /**
+   * **Encadenada, no descartada.** El guard `flushing` de `flush$()` devuelve
+   * `EMPTY` cuando ya hay un empuje en vuelo, y con `defaultIfEmpty` esta
+   * promesa resolvía de inmediato **sin haber subido nada**: el sincronizador
+   * la daba por cumplida y pasaba al cierre del turno, que adelantaba a lo que
+   * seguía en vuelo. El backend rechaza a los rezagados con "el turno de caja
+   * ya está cerrado".
+   *
+   * `flushQueue()` entra por aquí también, para que todo empuje quede en la
+   * misma fila.
+   *
+   * `lastValueFrom` y no `firstValueFrom`: `flush$()` emite **un valor por
+   * registro** (`concatMap`), y tomar el primero desuscribía la cadena y
+   * cancelaba los que faltaban. Con tres gastos en cola subía uno y abandonaba
+   * dos, y el cierre salía enseguida: los dos rezagados quedaban rechazados
+   * para siempre con "el turno de caja ya está cerrado".
+   */
+flushQueueAsync(owner: PushOwner = {}): Promise<void> {
+    return this.enFila(() => lastValueFrom(this.flush$(owner).pipe(defaultIfEmpty(null))).then(() => undefined));
+  }
+
+  /**
+   * Fila de un solo carril: cada empuje espera al anterior, ninguno se descarta.
+   *
+   * Con la fila vacía el trabajo arranca **en el acto**, sin diferir un tick: el
+   * push debe salir en el mismo turno en que se pide, como antes de encolarlo.
+   */
+  private cola: Promise<void> | null = null;
+
+  private enFila(trabajo: () => Promise<void>): Promise<void> {
+    const propia = this.cola ? this.cola.catch(() => undefined).then(trabajo) : trabajo();
+    let seguimiento: Promise<void>;
+    seguimiento = propia.catch(() => undefined).then(() => {
+      // Solo el último de la fila la libera; si ya hay otro detrás, es suyo.
+      if (this.cola === seguimiento) {
+        this.cola = null;
+      }
+    });
+    this.cola = seguimiento;
+    return propia;
   }
 
   /**
@@ -300,9 +348,12 @@ export class CashSessionService {
    * gastos y ventas reales que quedaban bloqueados sin haber hecho nada mal.
    */
   flushClosesAsync(owner: PushOwner = {}): Promise<void> {
-    return firstValueFrom(
-      this.pushPendingCloses$(new Set<string>(), owner).pipe(defaultIfEmpty(null)),
-    ).then(() => undefined);
+    // Misma fila que las altas: las dos escriben sobre `CashSession`.
+    return this.enFila(() =>
+      lastValueFrom(
+        this.pushPendingCloses$(new Set<string>(), owner).pipe(defaultIfEmpty(null)),
+      ).then(() => undefined),
+    );
   }
 
   /**
@@ -317,25 +368,53 @@ export class CashSessionService {
    * producción. Cerrando primero, el hueco queda libre y el alta crea uno real.
    */
   private flush$(owner: PushOwner): Observable<unknown> {
-    if (this.flushing) {
-      return EMPTY;
-    }
     this.flushing = true;
     // Un turno solo se cierra una vez por ciclo: `POST /:id/close` no es
     // idempotente (responde 409 "el turno ya está cerrado") y el segundo
-    // barrido lo marcaría como rechazo permanente sin serlo.
+    // barrido lo marcaría como rechazo permanente sin serlo —salvo que ese 409
+    // se trate como éxito (`pushOneClose`).
     const cerradosEnEsteCiclo = new Set<string>();
-    return this.pushPendingCloses$(cerradosEnEsteCiclo, owner, { sinHijosPendientes: true }).pipe(
-      switchMap(() => from(this.api().getPendingPush(owner))),
-      catchError(() => of([] as PendingCashSession[])),
-      switchMap((pendingCreates) =>
-        pendingCreates.length
-          ? from(pendingCreates).pipe(concatMap((item) => this.pushOneCreate(item)))
-          : of(null),
+    const pushCreates$ = () =>
+      from(this.api().getPendingPush(owner)).pipe(
+        catchError(() => of([] as PendingCashSession[])),
+        switchMap((pendingCreates) => {
+          if (!pendingCreates.length) {
+            return of({ requeuedClose: false });
+          }
+          return from(pendingCreates).pipe(
+            concatMap((item) => this.pushOneCreate(item)),
+            reduce(
+              (acc, result) => ({
+                requeuedClose:
+                  acc.requeuedClose ||
+                  Boolean(
+                    result &&
+                      typeof result === 'object' &&
+                      'requeuedClose' in result &&
+                      (result as { requeuedClose?: boolean }).requeuedClose,
+                  ),
+              }),
+              { requeuedClose: false },
+            ),
+            defaultIfEmpty({ requeuedClose: false }),
+          );
+        }),
+      );
+
+    // Ya no hace falta filtrar por hijos pendientes: el sincronizador sube los
+    // hijos ANTES de llamar a los cierres (paso 2 de `runPush`). Filtrarlos aquí
+    // aplazaba el cierre y el alta del turno siguiente chocaba con el turno que
+    // seguía abierto en el servidor.
+    return this.pushPendingCloses$(cerradosEnEsteCiclo, owner).pipe(
+      switchMap(() => pushCreates$()),
+      // Solo si un alta reencoló un cierre: súbelo y reintenta altas. Sin el
+      // guard, una segunda pasada siempre volvería a empujar el mismo alta
+      // (mocks / IPC que aún listan `pendingPush`).
+      switchMap((first) =>
+        first.requeuedClose
+          ? this.pushPendingCloses$(cerradosEnEsteCiclo, owner).pipe(switchMap(() => pushCreates$()))
+          : of(first),
       ),
-      // La segunda pasada de cierres ya no va aquí: la hace el sincronizador con
-      // `flushClosesAsync()` después de subir gastos y ventas, para no cerrar el
-      // turno antes que sus propios movimientos (ver ese método).
       finalize(() => {
         this.flushing = false;
       }),
@@ -419,6 +498,12 @@ export class CashSessionService {
           );
         }),
         catchError((error: unknown) => {
+          // El servidor ya lo tiene cerrado (409 / mensaje): el objetivo local
+          // se cumplió. Marcarlo como fallo permanente dejaba `closePushError`
+          // y el hueco del cajero nunca se liberaba para el alta siguiente.
+          if (this.isAlreadyClosedOnServer(error)) {
+            return from(this.api().markCloseSynced(item.id, {}));
+          }
           if (this.isPermanentFailure(error)) {
             return from(this.api().markClosePushFailed(item.id, getApiErrorMessage(error)));
           }
@@ -518,6 +603,17 @@ export class CashSessionService {
     return this.http
       .post<unknown>(`${this.apiUrl}/cash-sessions/${sessionRemoteId}/adjustment/review`, { decision, note })
       .pipe(map((response) => unwrapEntity<CashSession>(response)));
+  }
+
+  private isAlreadyClosedOnServer(error: unknown): boolean {
+    if (!(error instanceof HttpErrorResponse)) {
+      return false;
+    }
+    if (error.status !== 409 && error.status !== 400) {
+      return false;
+    }
+    const message = getApiErrorMessage(error).toLowerCase();
+    return message.includes('cerrado') || message.includes('already closed');
   }
 
   private isPermanentFailure(error: unknown): boolean {

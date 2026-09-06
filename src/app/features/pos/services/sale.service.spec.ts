@@ -222,9 +222,11 @@ describe('SaleService', () => {
       http.expectNone(`${SALES_URL}/local-1/void`);
     });
 
-    it('venta ya sincronizada: anula en el backend y refleja el resultado local', () => {
+    it('venta ya sincronizada: anula en el backend y refleja el resultado local', async () => {
       const synced: Sale = { ...localSale(), id: 'v1', remoteId: 'v1', pendingPush: false };
-      service.void(synced).subscribe();
+      sales.voidLocal.mockResolvedValue({ ...synced, voidedAt: new Date('2026-08-08T10:00:00.000Z') });
+      let result: Sale | undefined;
+      service.void(synced).subscribe((sale) => (result = sale));
 
       const request = http.expectOne(`${SALES_URL}/v1/void`);
       expect(request.request.method).toBe('POST');
@@ -246,9 +248,41 @@ describe('SaleService', () => {
           createdAt: '2026-08-08T10:00:00.000Z',
         },
       });
+      await flushMicrotasks();
 
       expect(sales.voidLocal).toHaveBeenCalledWith('v1', 'u1', 'caja@farmajyv.mx');
+      expect(sales.markRemoteVoided).toHaveBeenCalledWith('v1');
       expect(sales.markNeedsRemoteVoid).not.toHaveBeenCalled();
+      expect(result?.id).toBe('v1');
+    });
+
+    it('lista con pendingPush viejo pero remoteId: igual intenta el void remoto', async () => {
+      const stale: Sale = { ...localSale(), id: 'v1', remoteId: 'remote-1', pendingPush: true };
+      sales.voidLocal.mockResolvedValue({ ...stale, voidedAt: new Date() });
+      service.void(stale).subscribe();
+
+      http.expectOne(`${SALES_URL}/remote-1/void`).flush({
+        data: {
+          id: 'remote-1',
+          folio: 'V-1',
+          items: [],
+          subtotal: 100,
+          discountTotal: 0,
+          total: 100,
+          paymentMethod: 'cash',
+          amountReceived: 100,
+          change: 0,
+          cardPaymentReference: null,
+          cashierId: 'u1',
+          cashSessionId: 's1',
+          voidedAt: '2026-08-08T10:00:00.000Z',
+          createdAt: '2026-08-08T10:00:00.000Z',
+        },
+      });
+      await flushMicrotasks();
+
+      expect(sales.voidLocal).toHaveBeenCalled();
+      expect(sales.markRemoteVoided).toHaveBeenCalledWith('v1');
     });
 
     it('sin red: anula en local y la deja marcada para anularse en el servidor', async () => {
@@ -282,6 +316,67 @@ describe('SaleService', () => {
       expect(failed).toBeTruthy();
       expect(sales.voidLocal).not.toHaveBeenCalled();
       expect(sales.markNeedsRemoteVoid).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Lo que el sincronizador espera antes de cerrar el turno. Las anulaciones
+     * salían en un `tap`, disparadas y olvidadas: corrían por fuera del orden y
+     * el cierre podía adelantarlas. Las dos formas mueren si el cierre gana —
+     * `POST /sales` responde "el turno de caja ya está cerrado", y
+     * `POST /sales/:id/void` responde "solo un administrador puede anularla".
+     */
+    describe('flushQueueAsync espera también a las anulaciones', () => {
+      it('no resuelve hasta que la anulación remota se aplicó', async () => {
+        sales.getNeedingRemoteVoid.mockResolvedValue([
+          { id: 'v1', remoteId: 'remote-1', voidedAt: null, voidedBy: null },
+        ]);
+        let resuelta = false;
+
+        void service.flushQueueAsync().then(() => {
+          resuelta = true;
+        });
+        await flushMicrotasks();
+
+        const request = http.expectOne(`${SALES_URL}/remote-1/void`);
+        // Si resolviera aquí, el cierre saldría antes que esta anulación.
+        expect(resuelta).toBe(false);
+
+        sales.getNeedingRemoteVoid.mockResolvedValue([]);
+        request.flush({ data: {} });
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        expect(resuelta).toBe(true);
+        expect(sales.markRemoteVoided).toHaveBeenCalledWith('v1');
+      });
+
+      it('no resuelve hasta que la venta anulada que nunca subió se creó y se anuló', async () => {
+        sales.getPendingVoided.mockResolvedValue([
+          { id: 'v2', payload: { idempotencyKey: 'k-v2' }, voidedAt: null, voidedBy: null },
+        ]);
+        let resuelta = false;
+
+        void service.flushQueueAsync().then(() => {
+          resuelta = true;
+        });
+        await flushMicrotasks();
+
+        // Se crea y se anula, en dos pasos: sin el alta, el libro de control se
+        // queda sin el asiento y sin su reversa.
+        const alta = http.expectOne(SALES_URL);
+        expect(resuelta).toBe(false);
+        sales.getPendingVoided.mockResolvedValue([]);
+        alta.flush({ data: { id: 'remote-2', folio: 'A-2', items: [], createdAt: new Date().toISOString(), voidedAt: null } });
+        await flushMicrotasks();
+
+        const anulacion = http.expectOne(`${SALES_URL}/remote-2/void`);
+        expect(resuelta).toBe(false);
+        anulacion.flush({ data: {} });
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        expect(resuelta).toBe(true);
+      });
     });
 
     it('la anulación pendiente viaja con su hora y su autor reales', async () => {
@@ -359,7 +454,7 @@ describe('SaleService', () => {
       expect(sales.markPushFailed).not.toHaveBeenCalled();
     });
 
-    it('un rechazo que el cajero sí puede corregir se marca como bloqueado', async () => {
+    it('un rechazo por turno cerrado se guarda como venta no conciliada', async () => {
       rejectWith('El turno de caja ya está cerrado');
       await flushMicrotasks();
 
@@ -368,8 +463,30 @@ describe('SaleService', () => {
       });
       await flushMicrotasks();
 
+      const request = http.expectOne(`${SALES_URL}/unreconciled`);
+      expect(request.request.body).toMatchObject({
+        localId: 'local-1',
+        reason: 'El turno de caja ya está cerrado',
+        total: 100,
+      });
+      request.flush({ data: { id: 'local-1' } });
+      await flushMicrotasks();
+
+      expect(sales.markUnreconciled).toHaveBeenCalledWith('local-1', 'El turno de caja ya está cerrado');
+      expect(sales.markPushFailed).not.toHaveBeenCalled();
+    });
+
+    it('un rechazo que el cajero sí puede corregir se marca como bloqueado', async () => {
+      rejectWith('Llave de idempotencia ya usada');
+      await flushMicrotasks();
+
+      http.expectOne(`${SALES_URL}/bulk`).flush({
+        data: [{ ok: false, error: 'Llave de idempotencia ya usada' }],
+      });
+      await flushMicrotasks();
+
       http.expectNone(`${SALES_URL}/unreconciled`);
-      expect(sales.markPushFailed).toHaveBeenCalledWith('local-1', 'El turno de caja ya está cerrado');
+      expect(sales.markPushFailed).toHaveBeenCalledWith('local-1', 'Llave de idempotencia ya usada');
     });
 
     it('si tampoco se puede guardar aparte, queda bloqueada y visible', async () => {
@@ -473,6 +590,43 @@ describe('SaleService', () => {
       });
     });
 
+    it('un 4xx del lote entero deja las ventas bloqueadas con el motivo', async () => {
+      sales.getPendingPush.mockResolvedValue([
+        localSale({ id: 'local-1', payload: { idempotencyKey: 'key-1' } }),
+        localSale({ id: 'local-2', payload: { idempotencyKey: 'key-2' } }),
+      ]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+
+      http.expectOne(BULK_URL).flush(
+        { error: { message: 'Turno de caja no encontrado' } },
+        { status: 400, statusText: 'Bad Request' },
+      );
+      await flushMicrotasks();
+
+      expect(sales.markPushFailed).toHaveBeenCalledWith('local-1', 'Turno de caja no encontrado');
+      expect(sales.markPushFailed).toHaveBeenCalledWith('local-2', 'Turno de caja no encontrado');
+    });
+
+    it('un 5xx del lote deja las ventas en cola para reintentar', async () => {
+      sales.getPendingPush.mockResolvedValue([
+        localSale({ id: 'local-1', payload: { idempotencyKey: 'key-1' } }),
+      ]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+
+      http.expectOne(BULK_URL).flush(
+        { error: { message: 'Unavailable' } },
+        { status: 503, statusText: 'Service Unavailable' },
+      );
+      await flushMicrotasks();
+
+      expect(sales.markPushFailed).not.toHaveBeenCalled();
+      expect(sales.markSynced).not.toHaveBeenCalled();
+    });
+
     it('una venta rechazada por índice se bloquea sin tumbar el resto del lote', () => {
       sales.getPendingPush.mockResolvedValue([
         localSale({ id: 'local-1' }),
@@ -483,11 +637,11 @@ describe('SaleService', () => {
       return Promise.resolve().then(() => {
         http.expectOne(BULK_URL).flush({
           data: [
-            { ok: false, error: 'Turno cerrado' },
+            { ok: false, error: 'Llave de idempotencia ya usada' },
             { ok: true, sale: { id: 'v2', folio: 'V-2' } },
           ],
         });
-        expect(sales.markPushFailed).toHaveBeenCalledWith('local-1', 'Turno cerrado');
+        expect(sales.markPushFailed).toHaveBeenCalledWith('local-1', 'Llave de idempotencia ya usada');
         expect(sales.markSynced).toHaveBeenCalledWith('local-2', 'v2', 'V-2');
       });
     });

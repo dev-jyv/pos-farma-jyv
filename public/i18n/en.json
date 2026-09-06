@@ -234,7 +234,13 @@
       "commissions": "Commissions generated",
       "commissionsHint": "They aren't deducted from the shift's cash.",
       "expectedCash": "Services cash"
-    }
+    },
+    "syncing": "Closing the shift…",
+    "syncingHint": "Sending movements, sales and the closing. Do not close this window.",
+    "syncingPre": "Syncing before the cash cut…",
+    "syncingPreHint": "Sending expenses, sales, new products and stock entries while the shift is still open. Do not close this window.",
+    "settlingStale": "Closing the previous shift…",
+    "settlingStaleHint": "Sending the movements and sales of the shift left open, then its closing. Do not close this window."
   },
   "checkout": {
     "activatePdv": "Activate PDV"
@@ -343,12 +349,12 @@
   },
   "sync": {
     "now": "Sync",
-    "pending": "There are sales pending sync",
+    "pending": "There are sales or expenses pending sync",
     "modalTitle": "Syncing catalog",
     "modalBody": "Fetching the latest catalog before you start selling…",
     "cooldown": "You synced recently. You can sync again at {{time}}.",
     "exitTitle": "Syncing before exit",
-    "exitBody": "Sending pending sales, cash cuts and movements…"
+    "exitBody": "Sending pending sales, expenses, new products and movements…"
   },
   "categories": {
     "title": "Categories",

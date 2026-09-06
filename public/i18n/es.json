@@ -15,12 +15,12 @@
   },
   "sync": {
     "now": "Sincronizar",
-    "pending": "Hay ventas pendientes de sincronizar",
+    "pending": "Hay ventas o gastos pendientes de sincronizar",
     "modalTitle": "Sincronizando catálogo",
     "modalBody": "Trayendo el catálogo más reciente antes de empezar a vender…",
     "cooldown": "Ya sincronizaste hace poco. Podrás volver a hacerlo a las {{time}}.",
     "exitTitle": "Sincronizando antes de salir",
-    "exitBody": "Enviando ventas, cortes y movimientos pendientes…"
+    "exitBody": "Enviando ventas, gastos, productos nuevos y movimientos pendientes…"
   },
   "nav": {
     "sale": "Venta",
@@ -323,7 +323,13 @@
       "commissions": "Comisiones generadas",
       "commissionsHint": "No se descuentan del efectivo del turno.",
       "expectedCash": "Efectivo de servicios"
-    }
+    },
+    "syncing": "Cerrando el turno…",
+    "syncingHint": "Se están enviando los movimientos, las ventas y el cierre. No cierres esta ventana.",
+    "syncingPre": "Sincronizando antes del corte…",
+    "syncingPreHint": "Se están enviando gastos, ventas, productos nuevos y entradas con el turno aún abierto. No cierres esta ventana.",
+    "settlingStale": "Cerrando el turno anterior…",
+    "settlingStaleHint": "Se están enviando los movimientos y las ventas del turno que quedó abierto, y después su cierre. No cierres esta ventana."
   },
   "checkout": {
     "activatePdv": "Activar PDV"

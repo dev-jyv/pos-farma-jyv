@@ -486,6 +486,35 @@
   (dismissed)="onPerformerDismissed()"
 />
 
+<!--
+  Liquidación del turno que quedó abierto de un día anterior. Bloquea de verdad:
+  sin botones, sin ×, sin Esc y sin clic fuera. Cancelarlo a medias dejaría al
+  cajero operando encima de un turno que se está cerrando, y el aviso que
+  aparece durante la subida es justo el que nadie debe poder descartar por error.
+-->
+<p-dialog
+  [visible]="settlingStaleShift()"
+  [modal]="true"
+  [closable]="false"
+  [closeOnEscape]="false"
+  [dismissableMask]="false"
+  [draggable]="false"
+  [resizable]="false"
+  [showHeader]="false"
+  [style]="{ width: '24rem', maxWidth: '95vw' }"
+>
+  <div
+    data-testid="settling-stale-shift"
+    class="flex flex-col items-center justify-center gap-3 py-8 text-center"
+    role="status"
+    aria-live="polite"
+  >
+    <i class="pi pi-spin pi-spinner text-3xl text-[var(--pos-primary)]"></i>
+    <div class="text-sm font-semibold text-slate-800">{{ 'cashCut.settlingStale' | translate }}</div>
+    <div class="max-w-xs text-xs text-slate-500">{{ 'cashCut.settlingStaleHint' | translate }}</div>
+  </div>
+</p-dialog>
+
 <app-cash-session-dialog
   [visible]="cashSessionDialogVisible()"
   [session]="cashSession()"

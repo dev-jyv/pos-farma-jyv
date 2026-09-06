@@ -7,13 +7,14 @@ import { DialogModule } from 'primeng/dialog';
 import { InputTextModule } from 'primeng/inputtext';
 import { TableModule } from 'primeng/table';
 import { TooltipModule } from 'primeng/tooltip';
-import { debounceTime, Subject, switchMap } from 'rxjs';
+import { debounceTime, from, Subject, switchMap } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { environment } from '../../../../environments/environment';
 import { getApiErrorMessage } from '../../../core/api/api.utils';
 import { ScanSoundService } from '../../../core/audio/scan-sound.service';
 import { AuthService } from '../../../core/auth/auth.service';
+import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import {
   CartLine,
@@ -115,6 +116,7 @@ export class Sale {
   private readonly saleService = inject(SaleService);
   private readonly cashSessionService = inject(CashSessionService);
   private readonly authService = inject(AuthService);
+  private readonly syncScheduler = inject(SyncScheduler);
   private readonly notifications = inject(NotificationService);
   private readonly ticketPrint = inject(TicketPrintService);
   private readonly sounds = inject(ScanSoundService);
@@ -133,6 +135,16 @@ export class Sale {
   readonly manualDiscounts = signal<Record<string, number>>({});
   readonly checkoutVisible = signal(false);
   readonly cashSessionDialogVisible = signal(false);
+  /**
+   * Se está liquidando el turno que quedó abierto de un día anterior: suben sus
+   * movimientos, sus ventas y su cierre. Bloquea la pantalla hasta terminar —
+   * operar encima significaría cobrar contra un turno que se está cerrando.
+   *
+   * La señal vive en el sincronizador y no aquí: solo él sabe si de verdad hay
+   * un turno rezagado, y encenderla antes de saberlo hacía parpadear el modal
+   * en cada entrada a Ventas.
+   */
+  readonly settlingStaleShift = this.syncScheduler.settlingStaleShift;
   readonly blockedDialogVisible = signal(false);
   readonly pendingDialogVisible = signal(false);
   readonly lastSale = signal<SaleModel | null>(null);
@@ -220,7 +232,22 @@ export class Sale {
     this.serviceCatalog.refresh().subscribe();
 
     const uid = this.authService.user()?.uid ?? '';
-    this.cashSessionService.refreshCurrent(uid).subscribe(() => {
+    /**
+     * Antes de nada: si quedó un turno abierto de un día anterior, se liquida
+     * **completo** —movimientos y ventas primero, cierre al final— y recién
+     * entonces se lee el turno actual y se ofrece abrir uno nuevo. Sustituye al
+     * auto-cierre de medianoche, que cerraba el turno con sus hijos todavía en
+     * cola y los condenaba a "el turno de caja ya está cerrado".
+     */
+    from(
+      this.syncScheduler
+        .settleStaleShift(uid, this.authService.user()?.email ?? undefined)
+        // Que la liquidación falle no puede dejar la caja bloqueada: lo que no
+        // subió queda en cola o en bloqueados, visible en la barra.
+        .catch(() => false),
+    )
+      .pipe(switchMap(() => this.cashSessionService.refreshCurrent(uid)))
+      .subscribe(() => {
       // Al cajero se le pide el turno de entrada: sin él no puede vender, y
       // dejarlo pasar solo retrasa el descubrimiento hasta el primer cobro. El
       // admin entra sin abrir caja —viene a consultar, mover efectivo o dar

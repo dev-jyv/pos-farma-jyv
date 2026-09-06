@@ -80,6 +80,11 @@ describe('CashSessionDialog (local-first)', () => {
   let openLocal: (userId: string, label: string | undefined, amount: number) => Observable<CashSession>;
   let closeLocal: (id: string, counted: number, closedBy: string, closedByLabel?: string) => Observable<CashSession>;
   let syncAfterShiftClose: ReturnType<typeof vi.fn>;
+  let syncAfterShiftCloseAsync: ReturnType<typeof vi.fn>;
+  /** `syncNow`: misma corrida que el botón Sincronizar (antes y al abrir el corte). */
+  let syncNow: ReturnType<typeof vi.fn>;
+  /** Orden real de eventos, para comprobar que la cola se vacía antes del resumen. */
+  let orden: string[];
   let liveSummary: () => Observable<{
     summary: CashSessionSummary;
     expectedCashAmount: number;
@@ -94,6 +99,20 @@ describe('CashSessionDialog (local-first)', () => {
     profile: () => ({ email: 'cajero@test.com' }),
   };
 
+  /**
+   * El corte ya no aparece en el mismo tick que el clic: el diálogo se queda
+   * bloqueado mientras sube y solo entonces muestra el resultado.
+   */
+  async function esperarSubida(): Promise<void> {
+    // Primero `syncNow` (turno abierto), luego `closeLocal`, luego la subida del
+    // cierre: varios turnos de microtarea antes del resultado.
+    for (let i = 0; i < 12; i += 1) {
+      await Promise.resolve();
+    }
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
   async function build(currentSession: CashSession | null): Promise<void> {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
@@ -103,7 +122,7 @@ describe('CashSessionDialog (local-first)', () => {
         MessageService,
         { provide: NotificationService, useValue: { error: notifyError, success: vi.fn() } },
         { provide: AuthService, useValue: authStub },
-        { provide: SyncScheduler, useValue: { syncAfterShiftClose } },
+        { provide: SyncScheduler, useValue: { syncAfterShiftClose, syncAfterShiftCloseAsync, syncNow } },
         {
           provide: CashSessionService,
           // Envueltos en cierres: cada prueba puede reemplazar el doble antes de
@@ -143,6 +162,12 @@ describe('CashSessionDialog (local-first)', () => {
     notifyError = vi.fn();
     printCashCut = vi.fn();
     syncAfterShiftClose = vi.fn();
+    syncAfterShiftCloseAsync = vi.fn(() => Promise.resolve());
+    orden = [];
+    syncNow = vi.fn(() => {
+      orden.push('sync');
+      return Promise.resolve({ ok: true, pulled: 0 });
+    });
     openLocal = vi.fn(() => of(session));
     closeLocal = vi.fn(() =>
       of({
@@ -155,7 +180,10 @@ describe('CashSessionDialog (local-first)', () => {
         closedAt: new Date(),
       }),
     );
-    liveSummary = () => of({ summary: summary(), expectedCashAmount: 1200, expectedServicesCashAmount: 0 });
+    liveSummary = () => {
+      orden.push('resumen');
+      return of({ summary: summary(), expectedCashAmount: 1200, expectedServicesCashAmount: 0 });
+    };
     cashOnHand = () => of(0);
   });
 
@@ -285,8 +313,37 @@ describe('CashSessionDialog (local-first)', () => {
     });
   });
 
+  describe('subida previa al corte', () => {
+    beforeEach(() => build(session));
+
+    it('vacía la cola ANTES de pedir el resumen que el cajero va a firmar', () => {
+      // Un turno cerrado no acepta movimientos ni ventas: lo que quede en cola
+      // rebotaría con "el turno de caja ya está cerrado". Y el desglose que se
+      // firma debe reflejar lo que el servidor ya tiene, no una foto a medias.
+      expect(syncNow).toHaveBeenCalled();
+      expect(orden[0]).toBe('sync');
+      expect(orden).toContain('resumen');
+      expect(orden.indexOf('sync')).toBeLessThan(orden.indexOf('resumen'));
+    });
+  });
+
   describe('cierre', () => {
     beforeEach(() => build(session));
+
+    it('al confirmar sincroniza antes de cerrar en local y luego sube el cierre', async () => {
+      syncNow.mockClear();
+      boton('cut-close')!.click();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(syncNow).toHaveBeenCalled();
+      expect(closeLocal).toHaveBeenCalled();
+      expect(syncAfterShiftCloseAsync).toHaveBeenCalled();
+      expect(syncNow.mock.invocationCallOrder[0]).toBeLessThan(
+        (closeLocal as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0],
+      );
+    });
 
     it('precarga el efectivo esperado, calculado en vivo y sin red', () => {
       expect(component.mode()).toBe('close');
@@ -300,8 +357,9 @@ describe('CashSessionDialog (local-first)', () => {
      * $0.00— son cierres válidos, y la diferencia ya es el control real.
      */
     describe('el botón cierra al primer clic', () => {
-      it('sin tocar el monto precargado, cierra directo', () => {
+      it('sin tocar el monto precargado, cierra directo', async () => {
         component.requestClose();
+        await esperarSubida();
 
         expect(closeLocal).toHaveBeenCalledWith('s1', 1200, 'u1', 'cajero@test.com');
         expect(component.mode()).toBe('result');
@@ -312,24 +370,24 @@ describe('CashSessionDialog (local-first)', () => {
        * para aceptar el siguiente: no se queda esperando al próximo horario de
        * sync ni al botón del mostrador, y aplica a cualquier rol.
        */
-      it('cerrar el turno dispara la sincronización completa', () => {
+      it('cerrar el turno dispara la sincronización completa', async () => {
         component.setCountedCash(1200);
         component.requestClose();
-        component.confirmClose();
+        await esperarSubida();
 
-        expect(syncAfterShiftClose).toHaveBeenCalled();
+        expect(syncAfterShiftCloseAsync).toHaveBeenCalled();
       });
 
-      it('no sincroniza si el cierre falló', () => {
+      it('no sincroniza si el cierre falló', async () => {
         closeLocal = vi.fn(() => throwError(() => new Error('boom')));
         component.setCountedCash(1200);
         component.requestClose();
-        component.confirmClose();
+        await esperarSubida();
 
-        expect(syncAfterShiftClose).not.toHaveBeenCalled();
+        expect(syncAfterShiftCloseAsync).not.toHaveBeenCalled();
       });
 
-      it('cerrar en $0.00 es válido: solo pide confirmar la diferencia', () => {
+      it('cerrar en $0.00 es válido: solo pide confirmar la diferencia', async () => {
         component.setCountedCash(0);
         component.requestClose();
 
@@ -337,6 +395,7 @@ describe('CashSessionDialog (local-first)', () => {
         expect(component.confirmingDifference()).toBe(true);
 
         component.confirmClose();
+        await esperarSubida();
         expect(closeLocal).toHaveBeenCalledWith('s1', 0, 'u1', 'cajero@test.com');
       });
 
@@ -345,6 +404,7 @@ describe('CashSessionDialog (local-first)', () => {
         await build(session);
 
         component.requestClose();
+        await esperarSubida();
 
         expect(component.confirmingDifference()).toBe(false);
         expect(closeLocal).toHaveBeenCalledWith('s1', 0, 'u1', 'cajero@test.com');
@@ -364,9 +424,10 @@ describe('CashSessionDialog (local-first)', () => {
         expect(component.mode()).toBe('close');
       });
 
-      it('tras cerrar queda en el resultado, no en apertura', () => {
+      it('tras cerrar queda en el resultado, no en apertura', async () => {
         component.setCountedCash(1200);
         component.requestClose();
+        await esperarSubida();
 
         expect(component.mode()).toBe('result');
       });
@@ -379,9 +440,10 @@ describe('CashSessionDialog (local-first)', () => {
       });
     });
 
-    it('con el conteo confirmado y sin diferencia cierra directo, sin pasar por confirmación', () => {
+    it('con el conteo confirmado y sin diferencia cierra directo, sin pasar por confirmación', async () => {
       component.setCountedCash(1200);
       component.requestClose();
+      await esperarSubida();
 
       expect(component.confirmingDifference()).toBe(false);
       expect(closeLocal).toHaveBeenCalledWith('s1', 1200, 'u1', 'cajero@test.com');
@@ -398,10 +460,11 @@ describe('CashSessionDialog (local-first)', () => {
       expect(closeLocal).not.toHaveBeenCalled();
     });
 
-    it('al confirmar la diferencia, el turno se cierra igual (nunca bloquea)', () => {
+    it('al confirmar la diferencia, el turno se cierra igual (nunca bloquea)', async () => {
       component.setCountedCash(1100);
       component.requestClose();
       component.confirmClose();
+      await esperarSubida();
 
       expect(closeLocal).toHaveBeenCalledWith('s1', 1100, 'u1', 'cajero@test.com');
       expect(component.confirmingDifference()).toBe(false);
@@ -416,11 +479,12 @@ describe('CashSessionDialog (local-first)', () => {
       expect(closeLocal).not.toHaveBeenCalled();
     });
 
-    it('un fallo al cerrar avisa y no deja el turno como cerrado', () => {
+    it('un fallo al cerrar avisa y no deja el turno como cerrado', async () => {
       closeLocal = vi.fn(() => throwError(() => new Error('500')));
       component.setCountedCash(1200);
 
       component.requestClose();
+      await esperarSubida();
 
       expect(notifyError).toHaveBeenCalled();
       expect(component.mode()).toBe('close');
@@ -440,6 +504,7 @@ describe('CashSessionDialog (local-first)', () => {
       await build(session);
       component.setCountedCash(1200);
       component.requestClose();
+      await esperarSubida();
     });
 
     it('imprime el corte con lo contado y lo esperado', () => {
@@ -488,6 +553,7 @@ describe('CashSessionDialog (local-first)', () => {
       component.setCountedCash(1100);
       component.requestClose();
       component.confirmClose();
+      await esperarSubida();
 
       expect(component.closeResult()?.session.hasPendingAdjustment).toBe(true);
     });
@@ -550,6 +616,7 @@ describe('CashSessionDialog (local-first)', () => {
       await conServicios();
       component.setCountedCash(1400);
       component.requestClose();
+      await esperarSubida();
 
       expect(closeLocal).toHaveBeenCalledWith('s1', 1400, 'u1', 'cajero@test.com');
       expect(component.mode()).toBe('result');
@@ -611,6 +678,7 @@ describe('CashSessionDialog (local-first)', () => {
       expect(component.confirmingDifference()).toBe(true);
 
       component.confirmClose();
+      await esperarSubida();
       expect(closeLocal).toHaveBeenCalledWith('s1', -500, 'u1', 'cajero@test.com');
     });
 
@@ -717,8 +785,9 @@ describe('CashSessionDialog (local-first)', () => {
         expect(boton('cut-confirm-adjustment')).toBeNull();
       });
 
-      it('el clic en "cerrar turno" cierra el turno', () => {
+      it('el clic en "cerrar turno" cierra el turno', async () => {
         boton('cut-close')!.click();
+        await esperarSubida();
 
         expect(closeLocal).toHaveBeenCalledWith('s1', 1200, 'u1', 'cajero@test.com');
       });
@@ -728,12 +797,15 @@ describe('CashSessionDialog (local-first)', () => {
        * botón lo deshabilite: sin candado en `requestClose()` se escribían dos
        * cierres del mismo turno, y por tanto dos cortes.
        */
-      it('un doble clic no cierra dos veces', () => {
+      it('un doble clic no cierra dos veces', async () => {
         const enVuelo = new Subject<CashSession>();
         closeLocal = vi.fn(() => enVuelo.asObservable());
 
         boton('cut-close')!.click();
         boton('cut-close')!.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        await fixture.whenStable();
 
         expect(closeLocal).toHaveBeenCalledTimes(1);
         enVuelo.complete();
@@ -750,6 +822,9 @@ describe('CashSessionDialog (local-first)', () => {
 
         boton('cut-confirm-adjustment')!.click();
         boton('cut-confirm-adjustment')!.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        await fixture.whenStable();
 
         expect(closeLocal).toHaveBeenCalledTimes(1);
         enVuelo.complete();
@@ -779,6 +854,7 @@ describe('CashSessionDialog (local-first)', () => {
         await fixture.whenStable();
 
         boton('cut-confirm-adjustment')!.click();
+        await esperarSubida();
 
         expect(closeLocal).toHaveBeenCalledWith('s1', 1100, 'u1', 'cajero@test.com');
       });
@@ -827,12 +903,82 @@ describe('CashSessionDialog (local-first)', () => {
       });
     });
 
+    /**
+     * El cierre local ya pasó, pero el corte todavía va en camino: sus
+     * movimientos, sus ventas y el propio cierre siguen subiendo. Avanzar ahí
+     * imprime un corte que el servidor no tiene, y un fallo de red aparece
+     * cuando el cajero ya no está mirando la pantalla.
+     */
+    describe('bloqueo mientras sube el corte', () => {
+      /** Subida que no termina hasta que la prueba lo decide. */
+      let terminarSubida: () => void;
+
+      beforeEach(async () => {
+        syncAfterShiftCloseAsync = vi.fn(
+          () => new Promise<void>((resolve) => {
+            terminarSubida = resolve;
+          }),
+        );
+        await build(session);
+        boton('cut-close')!.click();
+        fixture.detectChanges();
+        await fixture.whenStable();
+        fixture.detectChanges();
+      });
+
+      it('muestra el indicador de subida', () => {
+        expect(host().querySelector('[data-testid="cut-syncing"]')).not.toBeNull();
+      });
+
+      it('no ofrece ningún botón mientras sube', () => {
+        // Nada que decidir hasta que termine: ni imprimir, ni terminar, ni cerrar.
+        expect(boton('cut-print')).toBeNull();
+        expect(boton('cut-done')).toBeNull();
+        expect(boton('cut-close')).toBeNull();
+      });
+
+      it('no deja cerrar el diálogo mientras sube', () => {
+        // Sin esto, la X o un Esc dejan al cajero sin saber si el corte llegó.
+        expect(component.canDismiss()).toBe(false);
+      });
+
+      it('todavía no muestra el corte', () => {
+        expect(component.closeResult()).toBeNull();
+        expect(component.mode()).not.toBe('result');
+      });
+
+      it('al terminar la subida muestra el corte y desbloquea', async () => {
+        terminarSubida();
+        await esperarSubida();
+
+        expect(component.syncing()).toBe(false);
+        expect(component.mode()).toBe('result');
+        expect(boton('cut-print')).not.toBeNull();
+        expect(component.canDismiss()).toBe(true);
+      });
+    });
+
+    /**
+     * El turno ya quedó cerrado en local: que la subida falle no puede esconder
+     * el corte, o el cajero se queda sin poder imprimirlo ni salir.
+     */
+    it('si la subida falla, igual muestra el corte y desbloquea', async () => {
+      syncAfterShiftCloseAsync = vi.fn(() => Promise.reject(new Error('sin red')));
+      await build(session);
+
+      component.requestClose();
+      await esperarSubida();
+
+      expect(component.syncing()).toBe(false);
+      expect(component.mode()).toBe('result');
+    });
+
     describe('resultado', () => {
       beforeEach(async () => {
         await build(session);
         boton('cut-close')!.click();
         fixture.detectChanges();
-        await fixture.whenStable();
+        await esperarSubida();
       });
 
       it('ofrece imprimir y terminar, y ya no el cierre', () => {

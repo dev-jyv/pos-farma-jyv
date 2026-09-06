@@ -154,8 +154,92 @@ async function countAllLocal(prisma, filters = {}) {
  * flushQueue()` corre antes en `SyncScheduler`). Los de la caja de la farmacia
  * no dependen de ningún turno y suben de inmediato.
  */
+/**
+ * Motivo con el que se marca un movimiento que ya no tiene a dónde subir.
+ * Se escribe en `pushError`, así que aparece en la lista de bloqueados.
+ */
+const TURNO_YA_CERRADO =
+  'El turno ya se cerró en el servidor: este movimiento no se puede subir. Requiere revisión de un administrador.';
+
+/**
+ * Un movimiento de un turno **ya cerrado en el servidor** no puede subir: el
+ * backend responde 400 "el turno de caja ya está cerrado". Mandarlo igual es la
+ * petición en rojo que se veía después del `close`.
+ *
+ * Se marca como bloqueado en vez de dejarlo en la cola:
+ *
+ * - **no se reintenta**, así que deja de salir esa petición condenada;
+ * - **no desaparece**: `pushError` lo pone en la lista de bloqueados, donde un
+ *   administrador lo ve. Sacarlo de la cola sin más escondería dinero — el
+ *   contador de pendientes diría 0 con un gasto real sin registrar allá.
+ *
+ * "Cerrado en el servidor" es: el turno se cerró en local, su cierre ya subió
+ * (`pendingClosePush` en false, sin error) y tiene `remoteId`. Un turno cerrado
+ * cuyo cierre **sigue en cola** no entra aquí: sus movimientos todavía llegan a
+ * tiempo, y de que suban antes se encarga el orden de `SyncScheduler`.
+ */
+async function bloquearLosDeTurnoCerrado(prisma, ownerUid) {
+  const condenados = await prisma.cashMovement.findMany({
+    where: {
+      pendingPush: true,
+      pushError: null,
+      ...(ownerUid ? { createdBy: ownerUid } : {}),
+      cashSession: {
+        remoteId: { not: null },
+        closedAtLocal: { not: null },
+        pendingClosePush: false,
+        closePushError: null,
+      },
+    },
+    select: { id: true },
+  });
+
+  for (const row of condenados) {
+    await prisma.cashMovement.updateMany({
+      where: { id: row.id },
+      data: { pushError: TURNO_YA_CERRADO },
+    });
+  }
+  return condenados.length;
+}
+
+/**
+ * Cerrojo del **momento del envío**: se consulta justo antes de emitir el
+ * `POST`, no al armar la cola.
+ *
+ * El filtro de `getPendingPush` mira el estado cuando se lee la cola, y entre
+ * esa lectura y el envío de cada movimiento cabe un cierre: basta que otro
+ * empuje suba el `close` en esa ventana para que la petición salga condenada.
+ * Esto la corta en seco y, de paso, la deja bloqueada con su motivo.
+ *
+ * Devuelve `false` **solo** cuando el turno ya cerró en el servidor. Un turno
+ * abierto, o cerrado con su cierre todavía en cola, sigue aceptando el envío.
+ */
+async function assertPushable(prisma, id) {
+  const row = await prisma.cashMovement.findUnique({ where: { id } });
+  if (!row || !row.cashSessionId) {
+    // Sin turno padre (caja de la farmacia) no hay nada que se pueda cerrar.
+    return true;
+  }
+  const turno = await prisma.cashSession.findUnique({ where: { id: row.cashSessionId } });
+  const cerradoEnServidor = Boolean(
+    turno && turno.remoteId && turno.closedAtLocal && !turno.pendingClosePush && !turno.closePushError,
+  );
+  if (!cerradoEnServidor) {
+    return true;
+  }
+  await prisma.cashMovement.updateMany({
+    where: { id },
+    data: { pushError: TURNO_YA_CERRADO },
+  });
+  return false;
+}
+
 /** `ownerUid`: solo los movimientos de ese cajero (ver `ownerFilter` en cash-sessions). */
 async function getPendingPush(prisma, { ownerUid } = {}) {
+  // Antes de entregar la cola: lo que ya no puede subir sale de ella.
+  await bloquearLosDeTurnoCerrado(prisma, ownerUid);
+
   const rows = await prisma.cashMovement.findMany({
     where: {
       pendingPush: true,
@@ -229,6 +313,7 @@ module.exports = {
   listAllLocal,
   countAllLocal,
   getPendingPush,
+  assertPushable,
   listBlocked,
   discard,
   updateExpense,

@@ -39,6 +39,7 @@ describe('CashMovementService (local-first)', () => {
     listForSession: ReturnType<typeof vi.fn>;
     listAllLocal: ReturnType<typeof vi.fn>;
     getPendingPush: ReturnType<typeof vi.fn>;
+    assertPushable: ReturnType<typeof vi.fn>;
     markSynced: ReturnType<typeof vi.fn>;
     markPushFailed: ReturnType<typeof vi.fn>;
     clearPushError: ReturnType<typeof vi.fn>;
@@ -50,6 +51,8 @@ describe('CashMovementService (local-first)', () => {
       listForSession: vi.fn().mockResolvedValue([movement()]),
       listAllLocal: vi.fn().mockResolvedValue([]),
       getPendingPush: vi.fn().mockResolvedValue([]),
+      // Cerrojo del momento del envío: por defecto el turno sigue admitiendo.
+      assertPushable: vi.fn().mockResolvedValue(true),
       markSynced: vi.fn().mockResolvedValue(undefined),
       markPushFailed: vi.fn().mockResolvedValue(undefined),
       clearPushError: vi.fn().mockResolvedValue(undefined),
@@ -261,6 +264,146 @@ describe('CashMovementService (local-first)', () => {
       http.expectOne(`${BASE}/remote-1/movements`).flush({ data: {} });
       await flushMicrotasks();
       expect(cashMovements.markSynced).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * Lo que el sincronizador **espera** antes de cerrar el turno. Si esta
+     * promesa resuelve con gastos todavía en cola, el cierre les gana y el
+     * backend los rechaza con "el turno de caja ya está cerrado": gastos reales
+     * que quedan bloqueados sin haber hecho nada mal.
+     */
+    describe('flushQueueAsync (la que espera el cierre de turno)', () => {
+      it('sube TODOS los pendientes, no solo el primero', async () => {
+        cashMovements.getPendingPush.mockResolvedValue([
+          { id: 'mov-1', cashSessionRemoteId: 'remote-1', type: 'expense', amount: 10, reason: 'a', category: 'food' },
+          { id: 'mov-2', cashSessionRemoteId: 'remote-1', type: 'expense', amount: 20, reason: 'b', category: 'food' },
+          { id: 'mov-3', cashSessionRemoteId: 'remote-1', type: 'expense', amount: 30, reason: 'c', category: 'food' },
+        ]);
+
+        // `flush$` emite uno por movimiento: tomar el primero desuscribía la
+        // cadena y cancelaba los otros dos.
+        const promesa = service.flushQueueAsync();
+        await flushMicrotasks();
+
+        for (const monto of [10, 20, 30]) {
+          const request = http.expectOne(`${BASE}/remote-1/movements`);
+          expect(request.request.body).toMatchObject({ amount: monto });
+          request.flush({ data: {} });
+          await flushMicrotasks();
+        }
+
+        await promesa;
+        expect(cashMovements.markSynced).toHaveBeenCalledTimes(3);
+      });
+
+      it('no resuelve mientras quedan pendientes por subir', async () => {
+        cashMovements.getPendingPush.mockResolvedValue([
+          { id: 'mov-1', cashSessionRemoteId: 'remote-1', type: 'expense', amount: 10, reason: 'a', category: 'food' },
+          { id: 'mov-2', cashSessionRemoteId: 'remote-1', type: 'expense', amount: 20, reason: 'b', category: 'food' },
+        ]);
+        let resuelta = false;
+
+        void service.flushQueueAsync().then(() => {
+          resuelta = true;
+        });
+        await flushMicrotasks();
+
+        http.expectOne(`${BASE}/remote-1/movements`).flush({ data: {} });
+        await flushMicrotasks();
+
+        // El segundo todavía va en camino: resolver aquí deja pasar el cierre.
+        expect(resuelta).toBe(false);
+
+        http.expectOne(`${BASE}/remote-1/movements`).flush({ data: {} });
+        await flushMicrotasks();
+        expect(resuelta).toBe(true);
+      });
+
+      it('espera al empuje que ya venía en vuelo, no resuelve en el acto', async () => {
+        cashMovements.getPendingPush.mockResolvedValue([
+          { id: 'mov-1', cashSessionRemoteId: 'remote-1', type: 'expense', amount: 10, reason: 'a', category: 'food' },
+        ]);
+        // El cajero acaba de tocar "reintentar" y cierra el turno enseguida.
+        service.flushQueue();
+        await flushMicrotasks();
+        let resuelta = false;
+
+        void service.flushQueueAsync().then(() => {
+          resuelta = true;
+        });
+        await flushMicrotasks();
+
+        // Con el guard devolviendo EMPTY, esta promesa resolvía sin subir nada.
+        expect(resuelta).toBe(false);
+
+        // La pasada encolada relee la cola: para entonces ya no queda nada.
+        cashMovements.getPendingPush.mockResolvedValue([]);
+        http.expectOne(`${BASE}/remote-1/movements`).flush({ data: {} });
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        expect(resuelta).toBe(true);
+      });
+    });
+
+    /**
+     * **Ninguna petición de movimiento después del cierre.**
+     *
+     * La cola se lee al arrancar el empuje, y entre esa lectura y el `POST` de
+     * cada movimiento cabe un cierre. Si la petición sale igual, el backend
+     * responde 400 "el turno de caja ya está cerrado": es la petición en rojo
+     * que aparecía justo después del `close`.
+     */
+    describe('cerrojo del momento del envío', () => {
+      it('no manda el POST si el turno cerró entre la lectura de la cola y el envío', async () => {
+        cashMovements.getPendingPush.mockResolvedValue([
+          { id: 'mov-1', cashSessionRemoteId: 'remote-1', type: 'expense', amount: 10, reason: 'a', category: 'food' },
+        ]);
+        // El cierre ganó la carrera mientras este movimiento esperaba su turno.
+        cashMovements.assertPushable.mockResolvedValue(false);
+
+        await service.flushQueueAsync();
+        await flushMicrotasks();
+
+        // `http.verify()` del afterEach confirma que no quedó ninguna en vuelo.
+        http.expectNone(`${BASE}/remote-1/movements`);
+        expect(cashMovements.markSynced).not.toHaveBeenCalled();
+      });
+
+      it('el cerrojo se consulta por movimiento, no una vez por lote', async () => {
+        cashMovements.getPendingPush.mockResolvedValue([
+          { id: 'mov-1', cashSessionRemoteId: 'remote-1', type: 'expense', amount: 10, reason: 'a', category: 'food' },
+          { id: 'mov-2', cashSessionRemoteId: 'remote-1', type: 'expense', amount: 20, reason: 'b', category: 'food' },
+        ]);
+        // El primero alcanza; para cuando toca el segundo, el turno ya cerró.
+        cashMovements.assertPushable
+          .mockResolvedValueOnce(true)
+          .mockResolvedValueOnce(false);
+
+        const promesa = service.flushQueueAsync();
+        await flushMicrotasks();
+        http.expectOne(`${BASE}/remote-1/movements`).flush({ data: {} });
+        await flushMicrotasks();
+        await promesa;
+
+        http.expectNone(`${BASE}/remote-1/movements`);
+        expect(cashMovements.assertPushable).toHaveBeenCalledTimes(2);
+        expect(cashMovements.markSynced).toHaveBeenCalledTimes(1);
+      });
+
+      it('un movimiento sin turno (caja de la farmacia) no consulta el cerrojo', async () => {
+        // No cuelga de ningún turno: no hay nada que se pueda cerrar.
+        cashMovements.getPendingPush.mockResolvedValue([
+          { id: 'mov-1', cashSessionRemoteId: null, type: 'withdrawal', amount: 50, reason: 'Banco' },
+        ]);
+
+        const promesa = service.flushQueueAsync();
+        await flushMicrotasks();
+        http.expectOne(`${BASE}/movements`).flush({ data: {} });
+        await promesa;
+
+        expect(cashMovements.assertPushable).not.toHaveBeenCalled();
+      });
     });
 
     it('un fallo del propio IPC no revienta el ciclo de sincronización', async () => {

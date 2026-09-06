@@ -113,18 +113,20 @@ export class AuthService {
 
   /**
    * Cierra la sesión avisando el motivo; el ticket queda en `localStorage`.
-   * Antes de cerrar sesión, si el turno de caja sigue abierto, se cierra solo
-   * (aceptando el corte esperado sin diferencia — nunca queda ajuste
-   * pendiente): a las 24:00 no hay cajero presente para contar el efectivo.
-   * `uid`/email se leen ANTES de `logout()`, porque después ya no hay sesión
-   * de la que sacarlos.
+   *
+   * **El turno de caja NO se cierra aquí.** Antes se cerraba solo a las 24:00, y
+   * eso dejaba el peor escenario posible: el turno quedaba cerrado en local con
+   * sus gastos y ventas todavía en cola, y como el cierre viajaba en el mismo
+   * ciclo, cualquier rezagado llegaba al servidor con el turno ya cerrado y
+   * moría en 400. Además nadie estaba presente para ver el error.
+   *
+   * Ahora el turno sobrevive a la medianoche y se liquida al entrar la siguiente
+   * sesión (`SyncScheduler.settleStaleShift`), en orden y con la pantalla
+   * bloqueada: primero suben movimientos y ventas, después el cierre, y solo
+   * entonces se ofrece abrir el turno nuevo.
    */
   async endExpiredSession(detail?: string): Promise<void> {
     this.clearExpiryTimer();
-    const uid = this.user()?.uid;
-    if (uid) {
-      await this.cashSessionService.autoCloseForExpiry(uid, this.profile()?.email ?? undefined);
-    }
     this.notifications.sessionExpired(detail);
     await this.logout();
     await this.router.navigate(['/login']);

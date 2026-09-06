@@ -1,14 +1,16 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
 import {
-  EMPTY,
   Observable,
   catchError,
+  concat,
+  concatMap,
   defaultIfEmpty,
   finalize,
-  firstValueFrom,
+  lastValueFrom,
   forkJoin,
   from,
+  last,
   map,
   of,
   switchMap,
@@ -385,11 +387,16 @@ export class SaleService {
    * Anula la venta. Si nunca sincronizó, todo pasa en local (no existe nada que
    * anular en el servidor). Si ya sincronizó, primero se anula en el backend
    * (online) y el resultado se refleja en la copia local.
+   *
+   * La decisión se basa en `remoteId`, no en `pendingPush`: la lista puede
+   * seguir mostrando `pendingPush: true` después de que el sync ya escribió el
+   * `remoteId` en SQLite, y con el criterio viejo la anulación quedaba solo en
+   * local sin encolar el void remoto.
    */
   void(sale: Sale): Observable<Sale> {
     const voidedBy = this.auth.user()?.uid ?? '';
     const voidedByLabel = this.auth.user()?.email ?? undefined;
-    if (sale.pendingPush || !sale.remoteId) {
+    if (!sale.remoteId) {
       return from(this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel)).pipe(
         switchMap((voided) =>
           voided ? of(voided) : throwError(() => new Error('Venta no encontrada.')),
@@ -397,11 +404,20 @@ export class SaleService {
         tap(() => this.refreshPending()),
       );
     }
-    return this.http.post<unknown>(`${this.apiUrl}/sales/${sale.remoteId}/void`, {}).pipe(
-      map((response) => mapRemoteSale(unwrapEntity<SaleDto>(response))),
-      switchMap((voided) =>
+    const remoteId = sale.remoteId;
+    return this.http.post<unknown>(`${this.apiUrl}/sales/${remoteId}/void`, {}).pipe(
+      switchMap(() =>
         from(this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel)).pipe(
-          map(() => voided),
+          switchMap((voided) => {
+            if (!voided) {
+              return throwError(() => new Error('Venta no encontrada.'));
+            }
+            // `voidLocal` encola `needsRemoteVoid` cuando hay remoteId; el void
+            // remoto ya corrió, así que se limpia el flag.
+            return from(this.api().sales.markRemoteVoided(sale.id)).pipe(
+              map(() => ({ ...voided, id: sale.id, remoteId })),
+            );
+          }),
         ),
       ),
       catchError((error: unknown) => {
@@ -422,7 +438,9 @@ export class SaleService {
         return from(this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel)).pipe(
           switchMap((voided) =>
             voided
-              ? from(this.api().sales.markNeedsRemoteVoid(sale.id)).pipe(map(() => voided))
+              ? from(this.api().sales.markNeedsRemoteVoid(sale.id)).pipe(
+                  map(() => ({ ...voided, id: sale.id, remoteId })),
+                )
               : throwError(() => new Error('Venta no encontrada.')),
           ),
           tap(() => this.refreshPending()),
@@ -465,8 +483,17 @@ export class SaleService {
    * fallar la llamada completa. Solo si la llamada en sí falla (red, 401, 500)
    * no se marca nada y se reintenta en el próximo sync.
    */
+  /**
+   * Disparar y olvidar. Si ya hay un empuje en vuelo **no** encola otro: se
+   * apoya en el que corre, que va a leer la cola igual. Encolar aquí duplicaba
+   * la pasada sin ganar nada. Un empuje **esperado** (`flushQueueAsync`) sí se
+   * encola siempre: quien lo espera necesita que de verdad ocurra.
+   */
   flushQueue(): void {
-    this.flush$().subscribe();
+    if (this.cola) {
+      return;
+    }
+    void this.flushQueueAsync();
   }
 
   /**
@@ -474,14 +501,49 @@ export class SaleService {
    * subir las ventas **antes** de cerrar el turno: si el cierre gana la carrera,
    * el backend rechaza la venta con "el turno de caja ya está cerrado".
    */
-  flushQueueAsync(): Promise<void> {
-    return firstValueFrom(this.flush$().pipe(defaultIfEmpty(null))).then(() => undefined);
+    /**
+   * **Encadenada, no descartada.** El guard `flushing` de `flush$()` devuelve
+   * `EMPTY` cuando ya hay un empuje en vuelo, y con `defaultIfEmpty` esta
+   * promesa resolvía de inmediato **sin haber subido nada**: el sincronizador
+   * la daba por cumplida y pasaba al cierre del turno, que adelantaba a lo que
+   * seguía en vuelo. El backend rechaza a los rezagados con "el turno de caja
+   * ya está cerrado".
+   *
+   * `flushQueue()` entra por aquí también, para que todo empuje quede en la
+   * misma fila.
+   *
+   * `lastValueFrom` y no `firstValueFrom`: `flush$()` emite **un valor por
+   * registro** (`concatMap`), y tomar el primero desuscribía la cadena y
+   * cancelaba los que faltaban. Con tres gastos en cola subía uno y abandonaba
+   * dos, y el cierre salía enseguida: los dos rezagados quedaban rechazados
+   * para siempre con "el turno de caja ya está cerrado".
+   */
+flushQueueAsync(): Promise<void> {
+    return this.enFila(() => lastValueFrom(this.flush$().pipe(defaultIfEmpty(null))).then(() => undefined));
+  }
+
+  /**
+   * Fila de un solo carril: cada empuje espera al anterior, ninguno se descarta.
+   *
+   * Con la fila vacía el trabajo arranca **en el acto**, sin diferir un tick: el
+   * push debe salir en el mismo turno en que se pide, como antes de encolarlo.
+   */
+  private cola: Promise<void> | null = null;
+
+  private enFila(trabajo: () => Promise<void>): Promise<void> {
+    const propia = this.cola ? this.cola.catch(() => undefined).then(trabajo) : trabajo();
+    let seguimiento: Promise<void>;
+    seguimiento = propia.catch(() => undefined).then(() => {
+      // Solo el último de la fila la libera; si ya hay otro detrás, es suyo.
+      if (this.cola === seguimiento) {
+        this.cola = null;
+      }
+    });
+    this.cola = seguimiento;
+    return propia;
   }
 
   private flush$(): Observable<unknown> {
-    if (this.flushing) {
-      return EMPTY;
-    }
     this.flushing = true;
     return from(this.api().sales.getPendingPush(pushOwnerFilter(this.auth)))
       .pipe(
@@ -511,13 +573,30 @@ export class SaleService {
                 });
                 return forkJoin(marks);
               }),
-              catchError(() => of(null)),
+              catchError((error: unknown) => this.markBulkHttpFailure(pending, error)),
             );
         }),
-        tap(() => {
-          this.pushVoidedSales();
-          this.reconcileRemoteVoids();
-        }),
+        /**
+         * Las anulaciones van **dentro** de la cadena, no en un `tap`.
+         *
+         * Disparadas y olvidadas, corrían por fuera del orden del sincronizador
+         * y podían adelantarlas el cierre del turno. Las dos formas de anulación
+         * mueren si el cierre gana:
+         *
+         * - la venta anulada que nunca llegó al servidor se crea con `POST
+         *   /sales`, que rechaza con "el turno de caja ya está cerrado": ni el
+         *   asiento ni su reversa entran al libro de control;
+         * - la anulación remota pendiente rechaza con "solo un administrador
+         *   puede anularla" (un turno cerrado tiene su arqueo firmado), y el
+         *   servidor conserva como **activa** una venta que la caja anuló.
+         */
+        concatMap((resultado) =>
+          concat(this.pushVoidedSales$(), this.reconcileRemoteVoids$()).pipe(
+            defaultIfEmpty(null),
+            last(null, null),
+            map(() => resultado),
+          ),
+        ),
         finalize(() => {
           this.flushing = false;
           this.refreshPending();
@@ -529,17 +608,16 @@ export class SaleService {
    * Qué hacer con una venta que el servidor rechazó.
    *
    * El dinero ya se cobró y el ticket ya se imprimió: la venta **no** puede
-   * quedarse muerta en la caja. Si el motivo es de inventario (stock que no
-   * alcanza allá, producto que no existe), reintentar no la va a arreglar —el
-   * stock remoto no se corrige solo—, así que se registra en
-   * `unreconciledSales`: el movimiento y el importe quedan guardados en el
-   * servidor, el inventario no se descuadra, y alguien concilia a mano.
+   * quedarse muerta en la caja. Si el motivo no se arregla reintentando
+   * (inventario remoto, turno ya cerrado allá), se registra en
+   * `unreconciledSales`: el movimiento y el importe quedan en el servidor, el
+   * inventario no se descuadra, y alguien concilia a mano.
    *
-   * El resto de rechazos (turno cerrado, llave reciclada) sí se marcan como
-   * bloqueados: son decisiones que el cajero puede corregir y reintentar.
+   * El resto de rechazos (llave reciclada, etc.) sí se marcan como bloqueados:
+   * el cajero puede corregir y reintentar.
    */
   private handleRejected(item: PendingSale, error: string): Observable<unknown> {
-    if (!this.isInventoryRejection(error)) {
+    if (!this.isUnreconcileableRejection(error)) {
       return from(this.api().sales.markPushFailed(item.id, error));
     }
 
@@ -562,6 +640,11 @@ export class SaleService {
       );
   }
 
+  /** Rechazos que no se arreglan reintentando el mismo push → unreconciled. */
+  private isUnreconcileableRejection(error: string): boolean {
+    return this.isInventoryRejection(error) || this.isClosedShiftRejection(error);
+  }
+
   /** Rechazo por inventario: no se resuelve reintentando el mismo push. */
   private isInventoryRejection(error: string): boolean {
     const normalized = error.toLowerCase();
@@ -573,17 +656,50 @@ export class SaleService {
     );
   }
 
+  /** El turno remoto ya cerró: reintentar el POST /sales no la va a registrar. */
+  private isClosedShiftRejection(error: string): boolean {
+    const normalized = error.toLowerCase();
+    return normalized.includes('turno') && normalized.includes('cerrado');
+  }
+
+  /**
+   * Fallo HTTP del lote entero (antes se tragaba y las ventas quedaban
+   * `pendingPush` sin `pushError`: el aviso hablaba de "sin red" con red).
+   * Un 4xx estable se marca rechazado para que el cajero lo vea; 5xx/red se
+   * dejan en cola para el próximo ciclo.
+   */
+  private markBulkHttpFailure(pending: PendingSale[], error: unknown): Observable<null> {
+    const status = getApiErrorStatus(error);
+    const permanent =
+      status !== null &&
+      status >= 400 &&
+      status < 500 &&
+      status !== 401 &&
+      status !== 408 &&
+      status !== 429;
+    if (!permanent || pending.length === 0) {
+      return of(null);
+    }
+    const message = getApiErrorMessage(error);
+    return forkJoin(
+      pending.map((item) => from(this.api().sales.markPushFailed(item.id, message))),
+    ).pipe(
+      catchError(() => of(null)),
+      map(() => null),
+    );
+  }
+
   /**
    * Ventas anuladas que **nunca** llegaron al servidor: se crean y se anulan
    * allá, en dos pasos. Sin esto el backend no se entera de que esa venta
    * ocurrió, y el libro de control se queda sin el asiento ni su reversa.
    */
-  private pushVoidedSales(): void {
+  private pushVoidedSales$(): Observable<unknown> {
     const api = window.electronAPI;
     if (!api) {
-      return;
+      return of(null);
     }
-    from(api.sales.getPendingVoided())
+    return from(api.sales.getPendingVoided())
       .pipe(
         catchError(() => of([])),
         switchMap((pending) => {
@@ -618,8 +734,8 @@ export class SaleService {
           return forkJoin(pushes);
         }),
         catchError(() => of(null)),
-      )
-      .subscribe(() => this.refreshPending());
+        tap(() => this.refreshPending()),
+      );
   }
 
   /**
@@ -628,12 +744,12 @@ export class SaleService {
    * darlas por sincronizadas sin más): el servidor las tiene activas, hace
    * falta el `POST /sales/:id/void` remoto explícito para cerrarlas.
    */
-  private reconcileRemoteVoids(): void {
+  private reconcileRemoteVoids$(): Observable<unknown> {
     const api = window.electronAPI;
     if (!api) {
-      return;
+      return of(null);
     }
-    from(api.sales.getNeedingRemoteVoid())
+    return from(api.sales.getNeedingRemoteVoid())
       .pipe(
         switchMap((pending) => {
           if (!pending.length) {
@@ -648,17 +764,22 @@ export class SaleService {
                 ...(item.voidedBy ? { voidedBy: item.voidedBy } : {}),
               })
               .pipe(
-              switchMap(() => from(api.sales.markRemoteVoided(item.id))),
-              // Un fallo aquí (red, 404 si ya se anuló por otra vía) se reintenta en
-              // el próximo sync: el flag `needsRemoteVoid` no se limpia solo.
-              catchError(() => of(undefined)),
-            ),
+                switchMap(() => from(api.sales.markRemoteVoided(item.id))),
+                catchError((error: unknown) => {
+                  const message = getApiErrorMessage(error).toLowerCase();
+                  // Ya estaba anulada allá: el objetivo se cumplió.
+                  if (message.includes('anulad') || message.includes('already void')) {
+                    return from(api.sales.markRemoteVoided(item.id));
+                  }
+                  // Red / 5xx: se reintenta en el próximo sync.
+                  return of(undefined);
+                }),
+              ),
           );
           return forkJoin(voids);
         }),
         catchError(() => of(null)),
-      )
-      .subscribe();
+      );
   }
 
   private refreshPending(): void {

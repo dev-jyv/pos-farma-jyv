@@ -97,6 +97,19 @@ describe('SyncScheduler — límite de sincronización manual', () => {
     vi.restoreAllMocks();
   });
 
+  it('al vencer el cooldown emite un tick para que la UI se reactive sola', async () => {
+    vi.useFakeTimers();
+    const inicio = Date.now();
+    await scheduler.syncManually(CAJERO, false);
+    expect(scheduler.canSyncManually(CAJERO, false)).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 100);
+
+    expect(scheduler.canSyncManually(CAJERO, false)).toBe(true);
+    expect(scheduler.manualSyncAvailableAt(CAJERO)).toBeNull();
+    vi.useRealTimers();
+  });
+
   it('el admin sincroniza sin límite', async () => {
     const inicio = Date.now();
     vi.spyOn(Date, 'now').mockReturnValue(inicio);
@@ -193,7 +206,9 @@ describe('SyncScheduler — catálogos de servicios contra un backend viejo', ()
   /** Responde el pull de productos y luego los dos de catálogos de servicios. */
   async function correrPull(opciones: { serviciosStatus?: number } = {}): Promise<void> {
     const promesa = scheduler.syncNow();
-    await flush();
+    // `syncNow` ahora espera el push completo antes del pull: varios
+    // `flushQueueAsync` encadenados + la cola `pushChain`.
+    await flush(40);
 
     http.expectOne((req) => req.url.endsWith('/products/sync')).flush({ data: [] });
     await flush();
@@ -214,8 +229,8 @@ describe('SyncScheduler — catálogos de servicios contra un backend viejo', ()
     await promesa;
   }
 
-  async function flush(): Promise<void> {
-    for (let i = 0; i < 12; i += 1) {
+  async function flush(veces = 12): Promise<void> {
+    for (let i = 0; i < veces; i += 1) {
       await Promise.resolve();
     }
   }
@@ -253,5 +268,452 @@ describe('SyncScheduler — catálogos de servicios contra un backend viejo', ()
 
     const entidades = recordRun.mock.calls.map(([run]) => run.entity);
     expect(new Set(entidades)).toEqual(new Set(['products', 'pharmacyServices', 'serviceProviders']));
+  });
+});
+
+/**
+ * **Un solo empuje a la vez.**
+ *
+ * `pushPending` sube en orden —turno, catálogo, entradas, movimientos, ventas y
+ * al final los cierres— porque un turno cerrado no acepta movimientos ni ventas.
+ * Ese orden solo vale dentro de una corrida, y cuatro sitios pueden arrancar una
+ * (el horario, el botón de sincronizar, el cierre de turno y la salida de
+ * sesión). Con dos corridas solapadas, el ciclo A ya subió el cierre cuando el B
+ * llega a su paso de movimientos, y el servidor rechaza con "el turno de caja ya
+ * está cerrado" un gasto que estaba en cola desde antes de cerrar.
+ *
+ * Se vio en producción: un `POST /movements` en rojo justo después del `close`.
+ */
+async function flushMicrotareas(): Promise<void> {
+  for (let i = 0; i < 12; i += 1) {
+    await Promise.resolve();
+  }
+}
+
+describe('SyncScheduler — los empujes no se solapan', () => {
+  let scheduler: SyncScheduler;
+  /** Orden real en que se ejecutaron los pasos de todas las corridas. */
+  let pasos: string[];
+  /** Compuerta que detiene **solo** el paso de movimientos de la primera corrida. */
+  let puerta: { activa: boolean; abrir: () => void; espera: Promise<void> };
+
+  const paso = (nombre: string) => vi.fn(async () => {
+    pasos.push(nombre);
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    pasos = [];
+    let abrir!: () => void;
+    const espera = new Promise<void>((resolve) => {
+      abrir = resolve;
+    });
+    puerta = { activa: false, abrir, espera };
+    window.electronAPI = {
+      catalog: {},
+      sales: {},
+      sync: { getStatus: vi.fn().mockResolvedValue([]), recordRun: vi.fn().mockResolvedValue({ id: 'r1' }) },
+      cashSessions: {},
+      cashMovements: {},
+    } as unknown as Window['electronAPI'];
+
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ApiHealthService, useValue: { checkNow: vi.fn() } },
+        {
+          provide: AuthService,
+          useValue: { user: () => ({ uid: 'uid-cajero' }), isAdmin: () => false },
+        },
+        { provide: SaleService, useValue: { flushQueue: vi.fn(), flushQueueAsync: paso('ventas') } },
+        { provide: StockEntryService, useValue: { flushQueue: vi.fn(), flushQueueAsync: paso('entradas') } },
+        { provide: ProductCatalogService, useValue: { flushQueue: vi.fn(), flushQueueAsync: paso('catalogo') } },
+        {
+          provide: CashSessionService,
+          useValue: {
+            flushQueue: vi.fn(),
+            flushQueueAsync: paso('turnos'),
+            flushClosesAsync: paso('cierres'),
+            pullAdjustmentStatus: vi.fn(),
+          },
+        },
+        {
+          provide: CashMovementService,
+          useValue: {
+            flushQueue: vi.fn(),
+            // Se puede dejar colgando para provocar el solapamiento.
+            flushQueueAsync: vi.fn(async () => {
+              pasos.push('movimientos');
+              if (puerta.activa) {
+                // Solo la primera: después queda abierta para las siguientes.
+                puerta.activa = false;
+                await puerta.espera;
+              }
+            }),
+          },
+        },
+      ],
+    });
+    scheduler = TestBed.inject(SyncScheduler);
+  });
+
+  it('los cierres van después de los hijos y antes de las altas', async () => {
+    await scheduler.flushPendingNow();
+
+    // Cerrar antes que los hijos los condena ("el turno de caja ya está
+    // cerrado"); abrir antes de cerrar el anterior choca con el único turno
+    // abierto que admite el backend. Por eso los cierres van en medio.
+    expect(pasos).toEqual([
+      'catalogo',
+      'entradas',
+      'movimientos',
+      'ventas',
+      'cierres',
+      'turnos',
+      'movimientos',
+      'ventas',
+    ]);
+  });
+
+  it('la segunda corrida espera: ningún movimiento sale después de un cierre', async () => {
+    // La primera se queda atorada en los movimientos; la segunda llega mientras.
+    puerta.activa = true;
+    const primera = scheduler.flushPendingNow();
+    await flushMicrotareas();
+    const segunda = scheduler.flushPendingNow();
+    await flushMicrotareas();
+
+    // Con las corridas solapadas, aquí ya habría un segundo 'movimientos'.
+    expect(pasos).toEqual(['catalogo', 'entradas', 'movimientos']);
+
+    puerta.abrir();
+    await Promise.all([primera, segunda]);
+
+    // Lo que importa ya no es "ningún movimiento después de un cierre" —el orden
+    // nuevo termina con una segunda pasada de hijos, la de los turnos recién
+    // creados—, sino que las corridas **no se entrelacen**: la segunda empieza
+    // cuando la primera terminó entera.
+    const ORDEN = [
+      'catalogo',
+      'entradas',
+      'movimientos',
+      'ventas',
+      'cierres',
+      'turnos',
+      'movimientos',
+      'ventas',
+    ];
+    expect(pasos).toEqual([...ORDEN, ...ORDEN]);
+  });
+
+  it('la segunda corrida sí ocurre: no se descarta, se encadena', async () => {
+    // Puede traer trabajo que la primera ya no alcanzó a ver.
+    await Promise.all([scheduler.flushPendingNow(), scheduler.flushPendingNow()]);
+
+    expect(pasos.filter((p) => p === 'turnos')).toHaveLength(2);
+  });
+
+  it('una corrida que falla no deja atorada a la siguiente', async () => {
+    const cashSessions = TestBed.inject(CashSessionService) as unknown as {
+      flushQueueAsync: Mock;
+    };
+    cashSessions.flushQueueAsync.mockRejectedValueOnce(new Error('sin red'));
+
+    await scheduler.flushPendingNow().catch(() => undefined);
+    await scheduler.flushPendingNow();
+
+    expect(pasos).toContain('cierres');
+  });
+});
+
+
+/**
+ * Turno que quedó abierto de un día anterior. Sustituye al auto-cierre de
+ * medianoche, que cerraba el turno con sus gastos y ventas todavía en cola y los
+ * condenaba a "el turno de caja ya está cerrado" sin nadie delante.
+ *
+ * Lo que se fija aquí es el **orden**: cierre local primero, luego el empuje
+ * completo —movimientos y ventas antes, el cierre al final—, y solo cuando eso
+ * termina la promesa resuelve, que es lo que deja pasar el modal de apertura.
+ */
+describe('SyncScheduler — liquidación del turno rezagado', () => {
+  let scheduler: SyncScheduler;
+  let pasos: string[];
+  let autoCloseStale: Mock;
+
+  const paso = (nombre: string) => vi.fn(async () => {
+    pasos.push(nombre);
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    pasos = [];
+    autoCloseStale = vi.fn(async () => {
+      pasos.push('cierre-local');
+      return true;
+    });
+    window.electronAPI = {
+      catalog: {},
+      sales: {},
+      sync: { getStatus: vi.fn().mockResolvedValue([]), recordRun: vi.fn().mockResolvedValue({ id: 'r1' }) },
+      cashSessions: {},
+      cashMovements: {},
+    } as unknown as Window['electronAPI'];
+
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ApiHealthService, useValue: { checkNow: vi.fn() } },
+        {
+          provide: AuthService,
+          useValue: { user: () => ({ uid: 'uid-cajero' }), isAdmin: () => false },
+        },
+        { provide: SaleService, useValue: { flushQueue: vi.fn(), flushQueueAsync: paso('ventas') } },
+        { provide: StockEntryService, useValue: { flushQueue: vi.fn(), flushQueueAsync: paso('entradas') } },
+        { provide: ProductCatalogService, useValue: { flushQueue: vi.fn(), flushQueueAsync: paso('catalogo') } },
+        {
+          provide: CashSessionService,
+          useValue: {
+            flushQueue: vi.fn(),
+            flushQueueAsync: paso('turnos'),
+            flushClosesAsync: paso('cierres'),
+            pullAdjustmentStatus: vi.fn(),
+            autoCloseStale,
+          },
+        },
+        { provide: CashMovementService, useValue: { flushQueue: vi.fn(), flushQueueAsync: paso('movimientos') } },
+      ],
+    });
+    scheduler = TestBed.inject(SyncScheduler);
+  });
+
+  it('cierra en local y después sube todo, con el cierre al final', async () => {
+    const habia = await scheduler.settleStaleShift('uid-cajero', 'caja@farmajyv.mx');
+
+    expect(habia).toBe(true);
+    expect(pasos).toEqual([
+      'cierre-local',
+      'catalogo',
+      'entradas',
+      'movimientos',
+      'ventas',
+      // El cierre del turno rezagado sale aquí, ya con sus gastos y ventas
+      // arriba; después las altas y la segunda pasada de hijos.
+      'cierres',
+      'turnos',
+      'movimientos',
+      'ventas',
+    ]);
+  });
+
+  it('los movimientos y las ventas suben ANTES que el cierre', async () => {
+    await scheduler.settleStaleShift('uid-cajero');
+
+    expect(pasos.indexOf('movimientos')).toBeLessThan(pasos.indexOf('cierres'));
+    expect(pasos.indexOf('ventas')).toBeLessThan(pasos.indexOf('cierres'));
+  });
+
+  it('sin turno rezagado no mueve nada: no hay por qué bloquear la pantalla', async () => {
+    autoCloseStale.mockResolvedValue(false);
+
+    expect(await scheduler.settleStaleShift('uid-cajero')).toBe(false);
+    // Ni un solo paso de empuje: el mock reemplaza la implementación, así que
+    // `pasos` queda vacío y eso es justo lo que se comprueba.
+    expect(pasos).toEqual([]);
+  });
+
+  /**
+   * El caso normal —no hay turno rezagado— es el 99 % de las entradas a Ventas.
+   * Encender el bloqueo al **empezar** a averiguarlo hacía parpadear el modal
+   * en cada una: un pantallazo sin motivo.
+   */
+  it('sin turno rezagado el bloqueo NUNCA se enciende', async () => {
+    /**
+     * Se mira **dentro** de `autoCloseStale`, que es el único instante en que un
+     * encendido prematuro sería visible: entre encenderlo y apagarlo solo hay
+     * microtareas, así que un observador por temporizador nunca lo vería y la
+     * prueba pasaría en verde con el parpadeo puesto.
+     */
+    let encendidoAlAveriguar: boolean | null = null;
+    autoCloseStale.mockImplementation(async () => {
+      encendidoAlAveriguar = scheduler.settlingStaleShift();
+      return false;
+    });
+
+    await scheduler.settleStaleShift('uid-cajero');
+
+    expect(encendidoAlAveriguar).toBe(false);
+    expect(scheduler.settlingStaleShift()).toBe(false);
+  });
+
+  it('con turno rezagado el bloqueo se enciende mientras sube y se apaga al terminar', async () => {
+    let abrirCierres!: () => void;
+    const enVuelo = new Promise<void>((resolve) => {
+      abrirCierres = resolve;
+    });
+    const cashSessions = TestBed.inject(CashSessionService) as unknown as { flushClosesAsync: Mock };
+    cashSessions.flushClosesAsync.mockImplementation(() => enVuelo);
+
+    const promesa = scheduler.settleStaleShift('uid-cajero');
+    await flushMicrotareas();
+    expect(scheduler.settlingStaleShift()).toBe(true);
+
+    abrirCierres();
+    await promesa;
+    expect(scheduler.settlingStaleShift()).toBe(false);
+  });
+
+  it('si el empuje falla, el bloqueo se apaga igual', async () => {
+    // Si no, la caja se queda con el modal puesto y sin salida.
+    const cashSessions = TestBed.inject(CashSessionService) as unknown as { flushClosesAsync: Mock };
+    cashSessions.flushClosesAsync.mockRejectedValue(new Error('sin red'));
+
+    await scheduler.settleStaleShift('uid-cajero').catch(() => undefined);
+
+    expect(scheduler.settlingStaleShift()).toBe(false);
+  });
+
+  it('sin usuario resuelto no intenta nada', async () => {
+    expect(await scheduler.settleStaleShift('')).toBe(false);
+    expect(autoCloseStale).not.toHaveBeenCalled();
+  });
+
+  it('la promesa no resuelve hasta que subió el cierre', async () => {
+    // Es lo que sostiene el bloqueo de la pantalla: si resolviera antes, el
+    // modal de apertura saldría con el turno de ayer todavía subiendo.
+    let abrirCierres!: () => void;
+    const cierreEnVuelo = new Promise<void>((resolve) => {
+      abrirCierres = resolve;
+    });
+    const cashSessions = TestBed.inject(CashSessionService) as unknown as { flushClosesAsync: Mock };
+    cashSessions.flushClosesAsync.mockImplementation(async () => {
+      pasos.push('cierres');
+      await cierreEnVuelo;
+    });
+    let resuelta = false;
+
+    void scheduler.settleStaleShift('uid-cajero').then(() => {
+      resuelta = true;
+    });
+    await flushMicrotareas();
+
+    expect(pasos).toContain('cierres');
+    expect(resuelta).toBe(false);
+
+    abrirCierres();
+    await flushMicrotareas();
+    expect(resuelta).toBe(true);
+  });
+});
+
+
+/**
+ * El aviso de salida ("quedan N movimientos sin sincronizar") tiene que hablar
+ * de lo que **este** cajero puede subir.
+ *
+ * El conteo miraba las colas de todos los cajeros del equipo y el empuje solo
+ * subía las del que está en sesión (`pushOwnerFilter`): el residuo no bajaba
+ * nunca, el aviso salía en cada salida y era imposible de resolver — encima
+ * prometía que se enviarían solos, cosa que para ese cajero no iba a pasar.
+ */
+describe('SyncScheduler — el conteo de pendientes usa el mismo filtro que el empuje', () => {
+  type Colas = {
+    salesPending: Mock; salesVoided: Mock; salesRemoteVoid: Mock;
+    catalogPush: Mock; stockEntries: Mock; movements: Mock; sessions: Mock; closes: Mock;
+  };
+  let colas: Colas;
+
+  function crear(isAdmin: boolean): SyncScheduler {
+    colas = {
+      salesPending: vi.fn().mockResolvedValue([]),
+      salesVoided: vi.fn().mockResolvedValue([]),
+      salesRemoteVoid: vi.fn().mockResolvedValue([]),
+      catalogPush: vi.fn().mockResolvedValue([]),
+      stockEntries: vi.fn().mockResolvedValue([]),
+      movements: vi.fn().mockResolvedValue([]),
+      sessions: vi.fn().mockResolvedValue([]),
+      closes: vi.fn().mockResolvedValue([]),
+    };
+    window.electronAPI = {
+      catalog: { getPendingCatalogPush: colas.catalogPush, getPendingStockEntries: colas.stockEntries },
+      sales: {
+        getPendingPush: colas.salesPending,
+        getPendingVoided: colas.salesVoided,
+        getNeedingRemoteVoid: colas.salesRemoteVoid,
+      },
+      sync: { getStatus: vi.fn().mockResolvedValue([]), recordRun: vi.fn() },
+      cashSessions: { getPendingPush: colas.sessions, getPendingClosePush: colas.closes },
+      cashMovements: { getPendingPush: colas.movements },
+    } as unknown as Window['electronAPI'];
+
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ApiHealthService, useValue: { checkNow: vi.fn() } },
+        {
+          provide: AuthService,
+          useValue: { user: () => ({ uid: 'uid-cajero' }), isAdmin: () => isAdmin },
+        },
+        { provide: SaleService, useValue: { flushQueue: vi.fn(), flushQueueAsync: vi.fn().mockResolvedValue(undefined) } },
+        { provide: StockEntryService, useValue: { flushQueue: vi.fn(), flushQueueAsync: vi.fn().mockResolvedValue(undefined) } },
+        { provide: ProductCatalogService, useValue: { flushQueue: vi.fn(), flushQueueAsync: vi.fn().mockResolvedValue(undefined) } },
+        {
+          provide: CashSessionService,
+          useValue: {
+            flushQueue: vi.fn(),
+            flushQueueAsync: vi.fn().mockResolvedValue(undefined),
+            flushClosesAsync: vi.fn().mockResolvedValue(undefined),
+            pullAdjustmentStatus: vi.fn(),
+          },
+        },
+        { provide: CashMovementService, useValue: { flushQueue: vi.fn(), flushQueueAsync: vi.fn().mockResolvedValue(undefined) } },
+      ],
+    });
+    return TestBed.inject(SyncScheduler);
+  }
+
+  beforeEach(() => localStorage.clear());
+
+  it('el cajero cuenta solo lo suyo: mismo filtro que el empuje', async () => {
+    const scheduler = crear(false);
+
+    await scheduler.countPending();
+
+    for (const cola of ['salesPending', 'movements', 'sessions', 'closes']) {
+      expect(colas[cola as keyof Colas]).toHaveBeenCalledWith({ ownerUid: 'uid-cajero' });
+    }
+  });
+
+  it('el admin cuenta todo, igual que sube todo', async () => {
+    const scheduler = crear(true);
+
+    await scheduler.countPending();
+
+    for (const cola of ['salesPending', 'movements', 'sessions', 'closes']) {
+      expect(colas[cola as keyof Colas]).toHaveBeenCalledWith({});
+    }
+  });
+
+  it('lo de otro cajero no infla el aviso de salida de este', async () => {
+    const scheduler = crear(false);
+    // El filtro lo aplica SQLite: con él puesto, estas colas vuelven vacías.
+    colas.salesPending.mockResolvedValue([]);
+    colas.movements.mockResolvedValue([]);
+
+    expect(await scheduler.countPending()).toBe(0);
+  });
+
+  it('lo propio sí se cuenta', async () => {
+    const scheduler = crear(false);
+    colas.movements.mockResolvedValue([{ id: 'mov-1' }, { id: 'mov-2' }]);
+    colas.salesPending.mockResolvedValue([{ id: 'venta-1' }]);
+
+    expect(await scheduler.countPending()).toBe(3);
   });
 });

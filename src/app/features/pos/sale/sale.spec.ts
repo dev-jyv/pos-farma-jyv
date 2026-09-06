@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { signal } from '@angular/core';
+import { signal, WritableSignal } from '@angular/core';
 import { provideTranslateService } from '@ngx-translate/core';
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScanSoundService } from '../../../core/audio/scan-sound.service';
 import { ServiceCatalogService } from '../services/service-catalog.service';
 import { AuthService } from '../../../core/auth/auth.service';
+import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import {
   PharmacyService,
@@ -90,6 +91,10 @@ describe('Sale', () => {
   beforeEach(async () => {
     localStorage.clear();
     notifyError = vi.fn();
+    syncSchedulerMock = {
+      settleStaleShift: vi.fn(() => Promise.resolve(false)),
+      settlingStaleShift: signal(false),
+    };
     notifySuccess = vi.fn();
     batches = [batch()];
     servicios = [servicio()];
@@ -114,6 +119,15 @@ describe('Sale', () => {
    * Reconstruible: las pruebas de arranque (qué pasa al ENTRAR sin turno)
    * necesitan fijar `isOpen`/`isAdmin` antes de que corra el constructor.
    */
+  /**
+   * Liquidación del turno rezagado. Por defecto no hay ninguno, que es el caso
+   * normal; las pruebas del bloqueo la reemplazan antes de construir.
+   */
+  let syncSchedulerMock: {
+    settleStaleShift: ReturnType<typeof vi.fn>;
+    settlingStaleShift: WritableSignal<boolean>;
+  };
+
   async function build(): Promise<void> {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
@@ -125,6 +139,7 @@ describe('Sale', () => {
         { provide: ProductService, useValue: { search: () => of([product()]), invalidate: vi.fn() } },
         { provide: BatchService, useValue: { listByProduct: () => of(batches) } },
         { provide: SaleService, useValue: saleServiceMock },
+        { provide: SyncScheduler, useValue: syncSchedulerMock },
         {
           provide: CashSessionService,
           // `cashOnHand` lo consume el diálogo de apertura que monta esta pantalla.
@@ -172,6 +187,93 @@ describe('Sale', () => {
    * El admin entra a consultar, mover efectivo o dar entrada de stock, y para
    * él ese diálogo —que no se puede cerrar— era una puerta tapiada.
    */
+  /**
+   * Turno que quedó abierto de un día anterior. Sustituye al auto-cierre de
+   * medianoche: ahora se liquida al entrar —movimientos y ventas primero, el
+   * cierre al final— con la pantalla bloqueada, y solo cuando termina se ofrece
+   * abrir el turno nuevo.
+   */
+  describe('liquidación del turno rezagado antes de abrir', () => {
+    /** Liquidación que no termina hasta que la prueba lo decide. */
+    function conLiquidacionEnVuelo() {
+      let terminar!: () => void;
+      const enVuelo = new Promise<boolean>((resolve) => {
+        terminar = () => resolve(true);
+      });
+      const bloqueo = signal(false);
+      syncSchedulerMock = {
+        // Enciende el bloqueo solo cuando de verdad hay turno rezagado, igual
+        // que el sincronizador real: si se encendiera antes, el modal
+        // parpadearía en cada entrada a Ventas.
+        settleStaleShift: vi.fn(() => {
+          bloqueo.set(true);
+          return enVuelo.then((valor) => {
+            bloqueo.set(false);
+            return valor;
+          });
+        }),
+        settlingStaleShift: bloqueo,
+      };
+      return () => terminar();
+    }
+
+    it('no ofrece abrir turno mientras se liquida el anterior', async () => {
+      isOpen.set(false);
+      const terminar = conLiquidacionEnVuelo();
+      await build();
+
+      // Abrir un turno nuevo encima del de ayer es justo lo que no debe pasar.
+      expect(component.settlingStaleShift()).toBe(true);
+      expect(component.cashSessionDialogVisible()).toBe(false);
+
+      terminar();
+      // La cadena `finalize` + `switchMap` encadena varios turnos de microtareas.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(component.settlingStaleShift()).toBe(false);
+      expect(component.cashSessionDialogVisible()).toBe(true);
+    });
+
+    /**
+     * El caso normal —no hay turno rezagado— es el 99 % de las entradas a
+     * Ventas. El bloqueo se encendía al **empezar** a averiguarlo, así que el
+     * modal parpadeaba en cada entrada: un pantallazo sin motivo.
+     */
+    it('sin turno rezagado no parpadea el bloqueo al entrar', async () => {
+      isOpen.set(false);
+      await build();
+
+      expect(component.settlingStaleShift()).toBe(false);
+      expect(fixture.nativeElement.querySelector('[data-testid="settling-stale-shift"]')).toBeNull();
+    });
+
+    it('el bloqueo se ve en pantalla y no se puede descartar', async () => {
+      isOpen.set(false);
+      conLiquidacionEnVuelo();
+      await build();
+
+      const bloqueo = fixture.nativeElement.querySelector('[data-testid="settling-stale-shift"]');
+      expect(bloqueo).not.toBeNull();
+    });
+
+    it('si la liquidación falla, la caja no se queda bloqueada', async () => {
+      // Lo que no subió queda en cola o en bloqueados, visible en la barra.
+      isOpen.set(false);
+      syncSchedulerMock = {
+        settleStaleShift: vi.fn(() => Promise.reject(new Error('sin red'))),
+        settlingStaleShift: signal(false),
+      };
+      await build();
+
+      expect(component.settlingStaleShift()).toBe(false);
+      expect(component.cashSessionDialogVisible()).toBe(true);
+    });
+  });
+
   describe('entrar sin turno abierto', () => {
     it('al cajero se le abre el diálogo de apertura', async () => {
       isOpen.set(false);

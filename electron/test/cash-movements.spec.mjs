@@ -9,6 +9,7 @@ const {
   listForSession,
   listAllLocal,
   getPendingPush,
+  assertPushable,
   listBlocked,
   discard,
   updateExpense,
@@ -152,6 +153,113 @@ describe('cola de push de movimientos', () => {
     expect(await getPendingPush(prisma)).toHaveLength(0);
 
     await clearPushError(prisma, creado.id);
+    expect(await getPendingPush(prisma)).toHaveLength(1);
+  });
+});
+
+/**
+ * **Ninguna petición de movimiento después del cierre.**
+ *
+ * Un movimiento de un turno que ya cerró en el servidor no puede subir: el
+ * backend responde 400 "el turno de caja ya está cerrado". Mandarlo igual es la
+ * petición en rojo que aparecía justo después del `close`.
+ */
+describe('movimientos de un turno ya cerrado en el servidor', () => {
+  /** Deja el turno cerrado **y con su cierre ya subido**. */
+  async function cerrarYSincronizar() {
+    await cashSessions.markCreateSynced(prisma, turno.id, 'remote-turno-1');
+    await cashSessions.closeLocal(prisma, turno.id, { countedCashAmount: 0, closedBy: CAJERO });
+    await cashSessions.markCloseSynced(prisma, turno.id, {});
+  }
+
+  it('no se entrega en la cola: la petición no llega a salir', async () => {
+    const creado = await addMovement(prisma, turno.id, gasto());
+    await cerrarYSincronizar();
+
+    expect(await getPendingPush(prisma)).toHaveLength(0);
+    expect(creado.id).toBeTruthy();
+  });
+
+  it('queda bloqueado con el motivo, no desaparece', async () => {
+    // Sacarlo de la cola sin más escondería dinero: el contador de pendientes
+    // diría 0 con un gasto real sin registrar en el servidor.
+    const creado = await addMovement(prisma, turno.id, gasto());
+    await cerrarYSincronizar();
+    await getPendingPush(prisma);
+
+    const bloqueados = await listBlocked(prisma);
+    expect(bloqueados.map((item) => item.id)).toContain(creado.id);
+    expect(prisma.cashMovement.rows[0].pushError).toMatch(/turno ya se cerró en el servidor/i);
+  });
+
+  /**
+   * El caso que NO hay que bloquear: el turno se cerró en la caja pero su
+   * cierre sigue en cola, así que el movimiento todavía llega a tiempo. De que
+   * suba antes se encarga el orden de `SyncScheduler`.
+   */
+  it('un turno cerrado cuyo cierre AÚN no sube conserva sus movimientos en cola', async () => {
+    await addMovement(prisma, turno.id, gasto());
+    await cashSessions.markCreateSynced(prisma, turno.id, 'remote-turno-1');
+    await cashSessions.closeLocal(prisma, turno.id, { countedCashAmount: 0, closedBy: CAJERO });
+
+    expect(await getPendingPush(prisma)).toHaveLength(1);
+  });
+
+  /**
+   * Cerrojo del **momento del envío**, el que se consulta justo antes del POST.
+   * El filtro de la cola mira el estado cuando se lee; entre esa lectura y el
+   * envío de cada movimiento cabe un cierre, y esto corta esa ventana.
+   */
+  describe('assertPushable', () => {
+    it('deniega y bloquea cuando el turno ya cerró en el servidor', async () => {
+      const creado = await addMovement(prisma, turno.id, gasto());
+      await cerrarYSincronizar();
+
+      expect(await assertPushable(prisma, creado.id)).toBe(false);
+      expect(prisma.cashMovement.rows[0].pushError).toMatch(/turno ya se cerró en el servidor/i);
+    });
+
+    it('permite si el cierre todavía está en cola: el movimiento llega a tiempo', async () => {
+      const creado = await addMovement(prisma, turno.id, gasto());
+      await cashSessions.markCreateSynced(prisma, turno.id, 'remote-turno-1');
+      await cashSessions.closeLocal(prisma, turno.id, { countedCashAmount: 0, closedBy: CAJERO });
+
+      expect(await assertPushable(prisma, creado.id)).toBe(true);
+      expect(prisma.cashMovement.rows[0].pushError).toBeNull();
+    });
+
+    it('permite con el turno abierto', async () => {
+      const creado = await addMovement(prisma, turno.id, gasto());
+      await cashSessions.markCreateSynced(prisma, turno.id, 'remote-turno-1');
+
+      expect(await assertPushable(prisma, creado.id)).toBe(true);
+    });
+
+    it('permite el de la caja de la farmacia: no cuelga de ningún turno', async () => {
+      const creado = await addMovement(prisma, null, {
+        type: 'withdrawal', amount: 50, reason: 'Banco', createdBy: CAJERO,
+      });
+      await cerrarYSincronizar();
+
+      expect(await assertPushable(prisma, creado.id)).toBe(true);
+    });
+
+    it('un movimiento que ya no existe no bloquea el ciclo', async () => {
+      expect(await assertPushable(prisma, 'no-existe')).toBe(true);
+    });
+  });
+
+  it('un turno abierto conserva sus movimientos en cola', async () => {
+    await addMovement(prisma, turno.id, gasto());
+    await cashSessions.markCreateSynced(prisma, turno.id, 'remote-turno-1');
+
+    expect(await getPendingPush(prisma)).toHaveLength(1);
+  });
+
+  it('no toca los de la caja de la farmacia, que no cuelgan de ningún turno', async () => {
+    await addMovement(prisma, null, { type: 'withdrawal', amount: 50, reason: 'Banco', createdBy: CAJERO });
+    await cerrarYSincronizar();
+
     expect(await getPendingPush(prisma)).toHaveLength(1);
   });
 });

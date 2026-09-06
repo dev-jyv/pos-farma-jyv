@@ -389,6 +389,11 @@ function registrarIPCHandlers() {
     cashMovementsDb.listAllLocal(await getPrisma(), filters));
   ipcMain.handle('cashMovements:countAllLocal', async (_event, filters) =>
     cashMovementsDb.countAllLocal(await getPrisma(), filters));
+  // Cerrojo consultado justo antes de emitir el POST de un movimiento: un turno
+  // ya cerrado en el servidor no admite movimientos, y la petición saldría
+  // condenada a 400.
+  ipcMain.handle('cashMovements:assertPushable', async (_event, id) =>
+    cashMovementsDb.assertPushable(await getPrisma(), id));
   ipcMain.handle('cashMovements:getPendingPush', async (_event, filters) =>
     cashMovementsDb.getPendingPush(await getPrisma(), filters));
   ipcMain.handle('cashMovements:markSynced', async (_event, localId, remoteId) =>

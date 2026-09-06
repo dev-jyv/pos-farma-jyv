@@ -330,6 +330,7 @@ function ownerFilter(ownerUid) {
 }
 
 async function getPendingPush(prisma, { ownerUid } = {}) {
+  await healRemoteOpenConflicts(prisma);
   const rows = await prisma.cashSession.findMany({
     where: { pendingPush: true, pushError: null, ...ownerFilter(ownerUid) },
     orderBy: { openedAt: 'asc' },
@@ -349,6 +350,7 @@ async function getPendingPush(prisma, { ownerUid } = {}) {
  * Esos turnos se cierran en la pasada final, cuando sus hijos ya subieron.
  */
 async function getPendingClosePush(prisma, { ownerUid, sinHijosPendientes = false } = {}) {
+  await healRemoteOpenConflicts(prisma);
   const rows = await prisma.cashSession.findMany({
     where: {
       remoteId: { not: null },
@@ -365,11 +367,21 @@ async function getPendingClosePush(prisma, { ownerUid, sinHijosPendientes = fals
 
   const conHijos = new Set();
   for (const row of rows) {
-    const [ventas, movimientos] = await Promise.all([
+    const [ventas, movimientos, anulacionesRemotas] = await Promise.all([
       prisma.sale.count({ where: { cashSessionId: row.id, pendingPush: true } }),
       prisma.cashMovement.count({ where: { cashSessionId: row.id, pendingPush: true } }),
+      /**
+       * Ventas que el servidor ya tiene **activas** y que aquí se anularon: les
+       * falta el `POST /sales/:id/void`. No llevan `pendingPush` —su alta sí
+       * subió—, así que no las veía ninguno de los dos conteos de arriba, y el
+       * cierre se les adelantaba. Después de cerrar, el backend responde "solo
+       * un administrador puede anularla" (un turno cerrado tiene su arqueo
+       * firmado) y el cajero se queda sin poder aplicarla: el servidor conserva
+       * como buena una venta que en la caja no existe.
+       */
+      prisma.sale.count({ where: { cashSessionId: row.id, needsRemoteVoid: true } }),
     ]);
-    if (ventas > 0 || movimientos > 0) {
+    if (ventas > 0 || movimientos > 0 || anulacionesRemotas > 0) {
       conHijos.add(row.id);
     }
   }
@@ -388,11 +400,23 @@ async function markCreateSynced(prisma, localId, remoteId) {
   // `remoteId` es único. Adoptar uno que ya es de otro turno local reventaba
   // con P2002 (visto en producción): pasa cuando el turno anterior sigue
   // ABIERTO en el backend —su cierre no ha subido— y `GET /cash-sessions/current`
-  // devuelve ese mismo id para el turno nuevo. Fusionar dos turnos distintos
-  // sería peor que fallar: se marca el conflicto para que un admin lo resuelva
-  // y el turno nuevo deja de reintentar solo.
+  // devolvía ese mismo id para el turno nuevo.
   const duenoActual = await prisma.cashSession.findFirst({ where: { remoteId } });
   if (duenoActual && duenoActual.id !== localId) {
+    // El dueño ya cerró en local: el hueco en el servidor se libera subiendo
+    // ese cierre. Reencolarlo y dejar el alta nueva en cola (sin pushError)
+    // para el próximo ciclo: closes → creates.
+    if (duenoActual.closedAtLocal) {
+      await prisma.cashSession.update({
+        where: { id: duenoActual.id },
+        data: { pendingClosePush: true, closePushError: null },
+      });
+      await prisma.cashSession.update({
+        where: { id: localId },
+        data: { pushError: null },
+      });
+      return { conflict: true, requeuedClose: true };
+    }
     await prisma.cashSession.update({
       where: { id: localId },
       data: {
@@ -414,6 +438,36 @@ async function markCreateSynced(prisma, localId, remoteId) {
     },
   });
   return { conflict: false };
+}
+
+/**
+ * Desatranca altas bloqueadas por un `remoteId` que aún es el `current` remoto
+ * de un turno ya cerrado en local: reencola ese cierre y limpia el pushError
+ * del alta nueva para que el ciclo closes → creates las suba solas.
+ */
+async function healRemoteOpenConflicts(prisma) {
+  const bloqueadas = await prisma.cashSession.findMany({
+    where: { pushError: { not: null }, pendingPush: true },
+  });
+  for (const fila of bloqueadas) {
+    const match = String(fila.pushError).match(/turno remoto (\S+)/i);
+    if (!match) {
+      continue;
+    }
+    const remoteId = match[1];
+    const dueno = await prisma.cashSession.findFirst({ where: { remoteId } });
+    if (!dueno?.closedAtLocal) {
+      continue;
+    }
+    await prisma.cashSession.update({
+      where: { id: dueno.id },
+      data: { pendingClosePush: true, closePushError: null },
+    });
+    await prisma.cashSession.update({
+      where: { id: fila.id },
+      data: { pushError: null },
+    });
+  }
 }
 
 /** El cierre ya subió; se guardan los valores autoritativos que regresó el backend. */
@@ -505,6 +559,7 @@ module.exports = {
   getPendingPush,
   getPendingClosePush,
   markCreateSynced,
+  healRemoteOpenConflicts,
   markCloseSynced,
   listBlocked,
   markPushFailed,
