@@ -1,6 +1,6 @@
 {
   "name": "farma-jyv-pos",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "FarmaJyV Venta — punto de venta de escritorio (Angular + Electron)",
   "main": "electron/main.js",
   "author": "FarmaJyV",
