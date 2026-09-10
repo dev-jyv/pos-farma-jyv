@@ -37,6 +37,7 @@ import {
   lineUnitPrice,
 } from '../../../shared/utils/cart-line';
 import { getControlledRule } from '../../../shared/utils/controlled';
+import { roundMoney } from '../../../shared/utils/money';
 import { BatchService } from '../services/batch.service';
 import { CartStorageService } from '../services/cart-storage.service';
 import { CashSessionService } from '../services/cash-session.service';
@@ -56,6 +57,13 @@ import { SubstitutesDialog } from './substitutes-dialog';
  * leyendo hasta 500 productos y filtrando en memoria, así que cada pulsación
  * cuesta; con menos de dos caracteres el resultado además no discrimina nada.
  */
+/**
+ * Tope de descuento para quien no es administrador. Espejo de
+ * `MAX_NON_ADMIN_DISCOUNT_RATE` en el backend: si el POS deja pasar más, la venta
+ * se cobra y el servidor la rechaza con 403 al sincronizar.
+ */
+const MAX_CASHIER_DISCOUNT_RATE = 0.2;
+
 const MIN_SEARCH_LENGTH = 2;
 
 function startOfToday(): Date {
@@ -145,7 +153,6 @@ export class Sale {
    * en cada entrada a Ventas.
    */
   readonly settlingStaleShift = this.syncScheduler.settlingStaleShift;
-  readonly blockedDialogVisible = signal(false);
   readonly pendingDialogVisible = signal(false);
   readonly lastSale = signal<SaleModel | null>(null);
   readonly substitutesVisible = signal(false);
@@ -158,7 +165,6 @@ export class Sale {
   readonly cashSession = this.cashSessionService.current;
   readonly pendingOfflineSales = this.saleService.pendingCount;
   readonly pendingSales = this.saleService.pendingSales;
-  readonly blockedSales = this.saleService.blockedSales;
 
   readonly subtotal = computed(() =>
     this.cart().reduce((sum, line) => sum + lineUnitPrice(line) * line.quantity, 0),
@@ -302,7 +308,6 @@ export class Sale {
     return (
       this.checkoutVisible() ||
       this.cashSessionDialogVisible() ||
-      this.blockedDialogVisible() ||
       this.pendingDialogVisible() ||
       this.substitutesVisible() ||
       // El selector de doctor también cuenta: se abre desde el escáner con el
@@ -537,6 +542,9 @@ export class Sale {
     this.setCart(
       this.cart().map((item) => (lineKey(item) === productId ? { ...item, quantity } : item)),
     );
+    // El descuento es absoluto y sobrevive al cambio de cantidad: al bajarla, su
+    // peso porcentual sube y puede rebasar lo que el rol autoriza.
+    this.recortarDescuentoAlTope(productId);
   }
 
   /* ── Servicios ────────────────────────────────────────────────────────── */
@@ -667,6 +675,39 @@ export class Sale {
    * aquí se reescribe `inputEl.value` a mano en cada rama, sin depender de que
    * el binding detecte un cambio.
    */
+  /**
+   * Recorta el descuento manual de una línea al tope que el rol permite.
+   *
+   * El descuento se guarda como **importe absoluto** y se reaplica en cada
+   * cambio del carrito, así que bajar la cantidad sube el porcentaje sin que
+   * nadie lo revise: 5 piezas de $100 con $100 de descuento son el 20% exacto,
+   * pero al dejarlo en 3 piezas pasa a ser el 33%. El cobro salía adelante y el
+   * backend rechazaba la venta con 403 al sincronizar — dinero cobrado que no
+   * quedaba registrado. Se recorta en vez de bloquear: el cajero ya tiene al
+   * cliente enfrente, y el importe que se cobra es el que el rol autoriza.
+   */
+  private recortarDescuentoAlTope(productId: string): void {
+    if (this.isAdmin()) {
+      return;
+    }
+    const line = this.cart().find((item) => lineKey(item) === productId);
+    if (!line) {
+      return;
+    }
+    const lineTotal = lineUnitPrice(line) * line.quantity;
+    const tope = roundMoney(lineTotal * MAX_CASHIER_DISCOUNT_RATE);
+    if (lineTotal === 0 || line.discountAmount <= tope) {
+      return;
+    }
+    const promo = this.promoService.promoOnlyDiscount(line);
+    const manual = Math.max(0, roundMoney(tope - promo));
+    this.manualDiscounts.update((map) => ({ ...map, [productId]: manual }));
+    this.setCart(this.cart());
+    this.notifications.error(
+      `El descuento se ajustó a $${tope.toFixed(2)} (20% de la línea): más requiere autorización de un administrador.`,
+    );
+  }
+
   updateLineDiscount(productId: string, rawAmount: number, inputEl?: HTMLInputElement): void {
     const line = this.cart().find((item) => lineKey(item) === productId);
     if (!line) {
@@ -677,7 +718,7 @@ export class Sale {
     const totalDiscount = Math.min(Math.max(0, rawAmount), lineTotal);
     const manual = Math.max(0, totalDiscount - promo);
     const percentage = lineTotal === 0 ? 0 : (totalDiscount / lineTotal) * 100;
-    if (percentage > 20 && !this.isAdmin()) {
+    if (percentage > MAX_CASHIER_DISCOUNT_RATE * 100 && !this.isAdmin()) {
       this.notifications.error('Descuento mayor a 20% requiere autorización de un administrador.');
       if (inputEl) {
         inputEl.value = String(line.discountAmount);
@@ -789,26 +830,6 @@ export class Sale {
   }
 
   /**
-   * Ventas offline que el servidor rechazó (turno cerrado, sin stock, order Point ya
-   * usada). No se reintentan solas: el cajero corrige la causa y reintenta, o descarta
-   * explícitamente. Descartar en silencio sería perder una venta ya cobrada.
-   */
-  reviewBlockedSales(): void {
-    if (this.blockedSales().length === 0) {
-      return;
-    }
-    this.blockedDialogVisible.set(true);
-  }
-
-  retryBlockedSale(queueId: string): void {
-    this.saleService.retryBlockedSale(queueId);
-    this.notifications.success('Reintentando el envío de la venta.');
-    if (this.blockedSales().length === 0) {
-      this.blockedDialogVisible.set(false);
-    }
-  }
-
-  /**
    * Descarta una venta que sigue en cola (sin folio del servidor). **Solo admin**:
    * a diferencia de una rechazada —donde el servidor ya dijo que no la acepta—,
    * esta subiría sola en la próxima sincronización, así que borrarla es tirar una
@@ -830,16 +851,6 @@ export class Sale {
     this.notifications.success('Venta pendiente descartada.');
     if (this.pendingOfflineSales() === 0) {
       this.pendingDialogVisible.set(false);
-    }
-  }
-
-  discardBlockedSale(queueId: string): void {
-    if (!window.confirm('¿Descartar esta venta? Ya no se enviará al servidor.')) {
-      return;
-    }
-    this.saleService.discardBlockedSale(queueId);
-    if (this.blockedSales().length === 0) {
-      this.blockedDialogVisible.set(false);
     }
   }
 

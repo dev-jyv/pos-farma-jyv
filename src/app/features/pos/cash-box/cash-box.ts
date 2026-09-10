@@ -8,12 +8,12 @@ import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
 import { SelectModule } from 'primeng/select';
 import { TableModule } from 'primeng/table';
-import { forkJoin, finalize } from 'rxjs';
+import { catchError, finalize, forkJoin, from, of } from 'rxjs';
 
 import { AuthService } from '../../../core/auth/auth.service';
 import { CashOnHand } from '../../../core/electron/window.d';
 import { NotificationService } from '../../../core/notifications/notification.service';
-import { CashMovement } from '../../../shared/models';
+import { CashMovement, CashSession } from '../../../shared/models';
 import { CashMovementService } from '../services/cash-movement.service';
 import { CashSessionService } from '../services/cash-session.service';
 
@@ -60,7 +60,16 @@ export class CashBoxScreen {
   private readonly router = inject(Router);
   private readonly translate = inject(TranslateService);
 
-  readonly cashSessionOpen = this.cashSessionService.isOpen;
+  /**
+   * Turno abierto en **el equipo**, no el del admin que está en pantalla.
+   *
+   * Esta pantalla es solo de admin, así que preguntar por el turno propio
+   * devolvía `null` casi siempre: el retiro se guardaba sin turno, no bajaba el
+   * efectivo esperado, y el cajero cerraba con un faltante a su nombre por un
+   * movimiento que autorizó el admin. El dinero sale del mismo cajón.
+   */
+  readonly turnoDelEquipo = signal<CashSession | null>(null);
+  readonly cashSessionOpen = computed(() => this.turnoDelEquipo() !== null);
 
   readonly type = signal<CashBoxType>('withdrawal');
   readonly amount = signal<number | null>(null);
@@ -119,7 +128,18 @@ export class CashBoxScreen {
     // El turno pudo abrirse en la venta y esta pantalla ser la primera que se
     // visita: refresca en vez de confiar en que `isOpen` ya esté al día.
     this.cashSessionService.refreshCurrent(this.authService.user()?.uid ?? '').subscribe();
+    this.cargarTurnoDelEquipo();
     this.load();
+  }
+
+  private cargarTurnoDelEquipo(): void {
+    const api = window.electronAPI;
+    if (!api) {
+      return;
+    }
+    from(api.cashSessions.getOpenLocalAnyUser())
+      .pipe(catchError(() => of(null)))
+      .subscribe((turno) => this.turnoDelEquipo.set(turno));
   }
 
   /** Carga saldo y la página visible. Tras registrar un movimiento vuelve a la 1ª. */
@@ -176,7 +196,7 @@ export class CashBoxScreen {
     if (!user) {
       return;
     }
-    const cashSessionId = this.cashSessionService.current()?.id ?? null;
+    const cashSessionId = this.turnoDelEquipo()?.id ?? null;
     this.saving.set(true);
     this.cashMovementService
       .create(cashSessionId, {

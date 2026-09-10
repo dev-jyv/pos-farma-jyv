@@ -68,10 +68,20 @@
       <button
         type="submit"
         [disabled]="form.invalid || submitting()"
+        [attr.aria-describedby]="disabledHint() ? 'login-hint' : null"
         class="w-full rounded-xl bg-emerald-700 px-4 py-3.5 text-base font-semibold text-white shadow-lg shadow-emerald-700/25 transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {{ (submitting() ? 'common.loading' : 'auth.login.submit') | translate }}
       </button>
+
+      @if (disabledHint(); as hint) {
+        <!-- Un botón gris sin motivo deja al cajero probando clics. El aviso
+             dice qué falta; `aria-live` para que el lector lo anuncie al pasar
+             de "falta capturar" a "el correo no es válido". -->
+        <p id="login-hint" aria-live="polite" class="text-center text-xs text-slate-600">
+          {{ hint | translate }}
+        </p>
+      }
     </form>
   </div>
 </div>

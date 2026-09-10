@@ -123,4 +123,26 @@ function isSafePrinterTarget(name, platform = process.platform) {
   return !/[\\/:]/.test(trimmed) && !trimmed.includes('..');
 }
 
-module.exports = { isAllowedNavigation, isSafePrinterTarget };
+/**
+ * Atajos que abren las herramientas de desarrollo.
+ *
+ * Con DevTools abierto, la consola del renderer llama `window.electronAPI` a
+ * mano, y ningún handler de IPC comprueba quién es el usuario: desde ahí se
+ * listan los cortes de todo el equipo, se firma una anulación con el uid de
+ * otro o se reescribe el precio de un producto. Es decir, se salta **todos** los
+ * guards de rol de la caja. En un equipo de mostrador, al alcance de cualquiera.
+ */
+function isDevToolsShortcut(input) {
+  if (!input || input.type !== 'keyDown') {
+    return false;
+  }
+  const key = typeof input.key === 'string' ? input.key.toLowerCase() : '';
+  if (key === 'f12') {
+    return true;
+  }
+  // ⌘⌥I (macOS) y Ctrl+Shift+I / Ctrl+Shift+J / Ctrl+Shift+C (Windows y Linux).
+  const conModificador = input.meta ? input.alt : input.control && input.shift;
+  return Boolean(conModificador) && ['i', 'j', 'c'].includes(key);
+}
+
+module.exports = { isAllowedNavigation, isSafePrinterTarget, isDevToolsShortcut };

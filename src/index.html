@@ -6,13 +6,24 @@
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!--
-    El POS no incrusta plugins ni marcos: negarlos quita de en medio los dos
-    vectores clásicos por los que un XSS se convierte en ejecución de código
-    ajeno dentro de la ventana con acceso al IPC de la caja. `script-src` y
-    `connect-src` faltan a propósito — atarlos requiere pasar antes el arranque
-    real contra Firebase y la API (ver reporte de auditoría).
+    Lo que de verdad convierte un XSS en ejecución de código dentro de la ventana
+    con acceso al IPC de la caja es `script-src`: sin él, `object-src`/`frame-src`
+    solos tapaban dos vectores y dejaban abierto el principal. Ahora el script
+    solo puede venir del bundle (`'self'` en el dev server, `file:` en el
+    empaquetado, que carga `index.html` por `file://` y ahí `'self'` no aplica).
+
+    `style-src` lleva `'unsafe-inline'` porque Angular incrusta el CSS crítico en
+    el propio `index.html` y PrimeNG inyecta estilos en tiempo de ejecución; es
+    un vector de exfiltración, no de ejecución.
+
+    **`connect-src` sigue fuera, y a propósito**: habría que enumerar la API, los
+    dos dominios de Firebase Auth, el dev server y el emulador — y un host que
+    falte no da error visible, deja la caja sin vender. Sin `default-src` no hay
+    herencia, así que su ausencia no bloquea nada. `script-src` es lo que cierra
+    la ejecución; `connect-src` solo acotaría a dónde puede hablar código que ya
+    no debería poder ejecutarse.
   -->
-  <meta http-equiv="Content-Security-Policy" content="object-src 'none'; frame-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob:; font-src 'self' file: data:; media-src 'self' file: data:; object-src 'none'; frame-src 'none'; form-action 'none'">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
 </head>
 <body>

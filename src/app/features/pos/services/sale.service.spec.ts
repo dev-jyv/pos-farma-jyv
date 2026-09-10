@@ -31,7 +31,9 @@ function totals(overrides: Partial<SaleTotals> = {}): SaleTotals {
   return { subtotal: 100, discountTotal: 0, total: 100, cashDue: 100, cardAmount: null, ...overrides };
 }
 
-function localSale(overrides: Partial<Sale & { payload: unknown }> = {}): PendingSale {
+function localSale(
+  overrides: Partial<Sale & { payload: unknown; esperandoPor: PendingSale['esperandoPor'] }> = {},
+): PendingSale {
   return {
     id: 'local-1',
     remoteId: null,
@@ -175,6 +177,26 @@ describe('SaleService', () => {
   });
 
   describe('list', () => {
+    /**
+     * Regresión (QA-16): `api()` lanzaba al **construir** el observable, así que
+     * la excepción salía fuera del stream y el `catchError` del historial no la
+     * veía: tabla vacía, "Actualizar" deshabilitado y el error solo en la
+     * consola — indistinguible de "no hay ventas".
+     */
+    it('sin electronAPI el fallo viaja por el canal de error, no como excepción suelta', () => {
+      const guardado = window.electronAPI;
+      delete (window as { electronAPI?: Window['electronAPI'] }).electronAPI;
+
+      let error: Error | undefined;
+      // Construir el observable no debe lanzar…
+      const listado = service.list();
+      // …y suscribirse debe entregar el error a la pantalla.
+      listado.subscribe({ error: (fallo: Error) => (error = fallo) });
+
+      window.electronAPI = guardado;
+      expect(error?.message).toMatch(/necesita la app de escritorio/i);
+    });
+
     it('pide al catálogo local con los filtros presentes', () => {
       service.list({ cashSessionId: 's1', includeVoided: false, search: 'V-1' }).subscribe();
       expect(sales.list).toHaveBeenCalledWith({
@@ -590,6 +612,10 @@ describe('SaleService', () => {
       });
     });
 
+    /**
+     * Un 4xx que afecta de verdad a las dos: al bisecar, cada mitad de una venta
+     * vuelve a fallar y ambas acaban marcadas, igual que antes.
+     */
     it('un 4xx del lote entero deja las ventas bloqueadas con el motivo', async () => {
       sales.getPendingPush.mockResolvedValue([
         localSale({ id: 'local-1', payload: { idempotencyKey: 'key-1' } }),
@@ -599,14 +625,95 @@ describe('SaleService', () => {
       service.flushQueue();
       await flushMicrotasks();
 
-      http.expectOne(BULK_URL).flush(
-        { error: { message: 'Turno de caja no encontrado' } },
-        { status: 400, statusText: 'Bad Request' },
-      );
+      const rechazar = () =>
+        http.expectOne(BULK_URL).flush(
+          { error: { message: 'Turno de caja no encontrado' } },
+          { status: 400, statusText: 'Bad Request' },
+        );
+
+      // Lote completo, y luego cada mitad al bisecar.
+      rechazar();
+      await flushMicrotasks();
+      rechazar();
+      await flushMicrotasks();
+      rechazar();
       await flushMicrotasks();
 
       expect(sales.markPushFailed).toHaveBeenCalledWith('local-1', 'Turno de caja no encontrado');
       expect(sales.markPushFailed).toHaveBeenCalledWith('local-2', 'Turno de caja no encontrado');
+    });
+
+    /**
+     * Lo que motivó la bisección: `POST /sales/bulk` valida el arreglo entero, así
+     * que una sola venta mal formada tumbaba el lote y arrastraba a las buenas —
+     * dinero cobrado que quedaba bloqueado sin haber hecho nada mal.
+     */
+    it('una venta mal formada no arrastra a las buenas: se aísla bisecando', async () => {
+      sales.getPendingPush.mockResolvedValue([
+        localSale({ id: 'buena-1', payload: { idempotencyKey: 'k1' } }),
+        localSale({ id: 'mala', payload: { idempotencyKey: 'k2' } }),
+      ]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+
+      // El lote de 2 falla por culpa de "mala".
+      http.expectOne(BULK_URL).flush(
+        { error: { message: 'El monto debe tener máximo 2 decimales' } },
+        { status: 400, statusText: 'Bad Request' },
+      );
+      await flushMicrotasks();
+
+      // Primera mitad (la buena): pasa.
+      http.expectOne(BULK_URL).flush({ data: [{ ok: true, sale: { id: 'remote-1', folio: 'V-1' } }] });
+      await flushMicrotasks();
+
+      // Segunda mitad (la culpable): vuelve a fallar y solo ella se marca.
+      http.expectOne(BULK_URL).flush(
+        { error: { message: 'El monto debe tener máximo 2 decimales' } },
+        { status: 400, statusText: 'Bad Request' },
+      );
+      await flushMicrotasks();
+
+      expect(sales.markSynced).toHaveBeenCalledWith('buena-1', 'remote-1', 'V-1');
+      expect(sales.markPushFailed).toHaveBeenCalledWith(
+        'mala',
+        'El monto debe tener máximo 2 decimales',
+      );
+      expect(sales.markPushFailed).not.toHaveBeenCalledWith('buena-1', expect.anything());
+    });
+
+    /**
+     * El backend rechaza el arreglo completo si pasa de 200
+     * (`bulkCreateSalesSchema`). Un fin de semana sin red con 210 ventas en cola
+     * devolvía 400 y las condenaba todas — y reintentar volvía a mandar las 210.
+     */
+    it('trocea la cola: 210 ventas se mandan en peticiones de 100', async () => {
+      sales.getPendingPush.mockResolvedValue(
+        Array.from({ length: 210 }, (_, indice) =>
+          localSale({ id: `local-${indice}`, payload: { idempotencyKey: `key-${indice}` } }),
+        ),
+      );
+
+      service.flushQueue();
+      await flushMicrotasks();
+
+      const tamanos: number[] = [];
+      for (let peticion = 0; peticion < 3; peticion += 1) {
+        const req = http.expectOne(BULK_URL);
+        const items = (req.request.body as { items: unknown[] }).items;
+        tamanos.push(items.length);
+        req.flush({
+          data: items.map((_, indice) => ({
+            ok: true,
+            sale: { id: `remote-${peticion}-${indice}`, folio: `V-${peticion}-${indice}` },
+          })),
+        });
+        await flushMicrotasks();
+      }
+
+      expect(tamanos).toEqual([100, 100, 10]);
+      expect(sales.markSynced).toHaveBeenCalledTimes(210);
     });
 
     it('un 5xx del lote deja las ventas en cola para reintentar', async () => {
@@ -661,6 +768,53 @@ describe('SaleService', () => {
       sales.getPendingPush.mockResolvedValue([]);
       service.flushQueue();
       http.expectNone(BULK_URL);
+    });
+
+    /**
+     * Las que esperan a su turno llegan sin `payload` a las lecturas de la UI
+     * (QA-14). Si por un descuido el push recibiera una, mandarla sería un 400
+     * seguro que la condena por algo que se resuelve solo en el sync siguiente.
+     */
+    it('no manda una venta sin payload aunque venga en la cola', () => {
+      sales.getPendingPush.mockResolvedValue([
+        localSale({ id: 'esperando', payload: null }),
+      ]);
+      service.flushQueue();
+      http.expectNone(BULK_URL);
+    });
+  });
+
+  describe('ventas que todavía no se pueden enviar (QA-14)', () => {
+    it('las publica como pendientes, con el motivo de la espera', async () => {
+      sales.getPendingPush.mockResolvedValue([
+        localSale({ id: 'esperando', total: 25, payload: null, esperandoPor: 'turno' }),
+      ]);
+
+      // El refresco corre en el constructor: se instancia con la cola ya puesta.
+      const recien = TestBed.runInInjectionContext(() => new SaleService());
+      await flushMicrotasks();
+
+      // Antes se omitían: la cajera no veía nada y el conteo del corte mentía.
+      expect(recien.pendingSales()).toEqual([
+        {
+          queueId: 'esperando',
+          folioHint: '0 art. · $25.00',
+          total: 25,
+          waitingFor: 'Espera a que suba el turno',
+        },
+      ]);
+      expect(recien.pendingCount()).toBe(1);
+    });
+
+    it('una venta lista para enviar no lleva motivo de espera', async () => {
+      sales.getPendingPush.mockResolvedValue([
+        localSale({ id: 'lista', total: 40, payload: { idempotencyKey: 'k' } }),
+      ]);
+
+      const recien = TestBed.runInInjectionContext(() => new SaleService());
+      await flushMicrotasks();
+
+      expect(recien.pendingSales()[0].waitingFor).toBeNull();
     });
   });
 

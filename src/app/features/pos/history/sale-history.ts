@@ -247,9 +247,13 @@ export class SaleHistory {
     const session = this.cashSession();
     const today = new Date();
     const from = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
+    // El cajero ve **lo suyo**; el admin, todo el equipo. La caja es compartida:
+    // sin esto un cajero leía las ventas del turno anterior y, con `sales:write`
+    // o `pos:write`, podía anularlas desde el detalle.
+    const cashierId = this.isAdmin() ? undefined : (this.authService.user()?.uid ?? undefined);
     const params = session
-      ? { cashSessionId: session.id, includeVoided: true }
-      : { from, includeVoided: true };
+      ? { cashSessionId: session.id, cashierId, includeVoided: true }
+      : { from, cashierId, includeVoided: true };
 
     return this.saleService.list({ ...params, search: term || undefined, limit: PAGE_LIMIT }).pipe(
       tap(() => this.loading.set(false)),

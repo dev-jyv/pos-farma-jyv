@@ -51,6 +51,18 @@ export class InvoiceList {
    * paginador aparecía casi de inmediato para algo que se lee de un vistazo.
    * El backend acota a 100, así que ese es el tope de las opciones.
    */
+  /**
+   * Ventana visible desde la caja: **dos meses**.
+   *
+   * No es solo una regla de pantalla, es lo que hace la consulta barata. El
+   * backend traduce `from` a un `where('invoiceDate', '>=', …)` de Firestore, y
+   * Firestore cobra por documento leído: sin la ventana, cada página del
+   * mostrador leía el histórico completo de facturas para devolver 50 filas. Lo
+   * anterior se consulta desde el panel de administración, que sí tiene por qué
+   * ver todo.
+   */
+  private static readonly MESES_VISIBLES = 2;
+
   readonly rows = 50;
   readonly rowsPerPageOptions = [50, 100];
   /** Tamaño de página vigente: cambia si el usuario elige otro en el paginador. */
@@ -93,12 +105,31 @@ export class InvoiceList {
     this.fetch();
   }
 
+  /**
+   * Primer día visible, en formato `YYYY-MM-DD` y en hora local.
+   *
+   * `setMonth` con un día que el mes destino no tiene (31 de marzo → "31 de
+   * enero" pedido como mes 0) desborda al mes siguiente; se ancla al día 1 para
+   * que la ventana sea siempre "este mes y los dos anteriores completos", una
+   * frontera que el cajero puede predecir y que además no cambia de un día para
+   * otro —lo que mantiene la consulta cacheable.
+   */
+  private windowStart(): string {
+    const hoy = new Date();
+    const desde = new Date(hoy.getFullYear(), hoy.getMonth() - InvoiceList.MESES_VISIBLES, 1);
+    const mes = String(desde.getMonth() + 1).padStart(2, '0');
+    return `${desde.getFullYear()}-${mes}-01`;
+  }
+
   private fetch(): void {
     this.loading.set(true);
     this.invoicesService
       .list({
         search: this.search() || undefined,
         supplierId: this.supplierId() ?? undefined,
+        // La ventana va SIEMPRE, también con búsqueda o filtro de proveedor: es
+        // lo que acota los documentos que Firestore lee y cobra.
+        from: this.windowStart(),
         page: this.page,
         limit: this.pageSize,
       })

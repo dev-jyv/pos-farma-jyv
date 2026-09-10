@@ -140,6 +140,10 @@ function toCashSessionDto(row) {
     id: row.id,
     remoteId: row.remoteId ?? null,
     openedBy: row.openedBy,
+    // Nombre de quien lo abrió: la caja de la farmacia (solo admin) necesita
+    // decir a qué corte le va a cambiar el efectivo esperado, y un uid crudo no
+    // le dice nada a nadie.
+    openedByLabel: row.openedByLabel ?? null,
     openingAmount: row.openingAmount,
     expectedCashAmount: row.expectedCashAmount ?? null,
     expectedServicesCashAmount: row.expectedServicesCashAmount ?? null,
@@ -162,6 +166,23 @@ function toCashSessionDto(row) {
 async function getOpenLocal(prisma, userId) {
   const row = await prisma.cashSession.findFirst({
     where: { openedBy: userId, closedAtLocal: null },
+    orderBy: { openedAt: 'desc' },
+  });
+  return row ? toCashSessionDto(row) : null;
+}
+
+/**
+ * Turno abierto en **este equipo**, de quien sea.
+ *
+ * Para las pantallas que mueven el efectivo del cajón físico sin ser el cajero
+ * que lo abrió: la caja de la farmacia es solo de admin, así que preguntar por
+ * `openedBy: adminUid` devolvía `null` y el retiro se registraba sin turno. Ese
+ * dinero salía del mismo cajón, y el cajero cerraba con un faltante a su nombre
+ * por algo que autorizó el admin.
+ */
+async function getOpenLocalAnyUser(prisma) {
+  const row = await prisma.cashSession.findFirst({
+    where: { closedAtLocal: null },
     orderBy: { openedAt: 'desc' },
   });
   return row ? toCashSessionDto(row) : null;
@@ -367,9 +388,19 @@ async function getPendingClosePush(prisma, { ownerUid, sinHijosPendientes = fals
 
   const conHijos = new Set();
   for (const row of rows) {
+    /**
+     * Solo hijos **recuperables** (`pushError: null`). Uno ya rechazado espera
+     * intervención del admin (reintentar, corregir o descartar): contarlo aquí
+     * dejaría el turno abierto en el servidor para siempre, y con él el hueco
+     * del cajero, que es peor — su corte nunca aparecería en la auditoría.
+     */
     const [ventas, movimientos, anulacionesRemotas] = await Promise.all([
-      prisma.sale.count({ where: { cashSessionId: row.id, pendingPush: true } }),
-      prisma.cashMovement.count({ where: { cashSessionId: row.id, pendingPush: true } }),
+      prisma.sale.count({
+        where: { cashSessionId: row.id, pendingPush: true, pushError: null },
+      }),
+      prisma.cashMovement.count({
+        where: { cashSessionId: row.id, pendingPush: true, pushError: null },
+      }),
       /**
        * Ventas que el servidor ya tiene **activas** y que aquí se anularon: les
        * falta el `POST /sales/:id/void`. No llevan `pendingPush` —su alta sí
@@ -552,6 +583,7 @@ module.exports = {
   buildSummary,
   toCashSessionDto,
   getOpenLocal,
+  getOpenLocalAnyUser,
   createLocal,
   getLiveSummary,
   getCashOnHand,

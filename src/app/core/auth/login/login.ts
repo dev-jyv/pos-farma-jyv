@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { TranslatePipe, TranslateService } from '@ngx-translate/core';
@@ -34,6 +35,32 @@ export class Login {
   readonly form = this.fb.nonNullable.group({
     email: ['', [Validators.required, Validators.email]],
     password: ['', Validators.required],
+  });
+
+  /**
+   * Por qué "Entrar" está deshabilitado. Un botón gris sin motivo deja al cajero
+   * probando clics sin saber si la app se colgó; el aviso dice qué falta.
+   *
+   * Depende del **valor**, no de `statusChanges`: teclear un correo mal escrito
+   * no cambia el estado (sigue `INVALID`), así que con `statusChanges` el aviso
+   * nunca pasaba de "falta capturar" a "el correo no es válido".
+   */
+  private readonly formValue = toSignal(this.form.valueChanges, {
+    initialValue: this.form.getRawValue(),
+  });
+
+  readonly disabledHint = computed<string | null>(() => {
+    const valor = this.formValue() ?? {};
+    if (this.submitting()) {
+      return null;
+    }
+    if (!(valor.email ?? '').trim() || !(valor.password ?? '')) {
+      return 'auth.login.hintEmpty';
+    }
+    if (this.form.controls.email.hasError('email')) {
+      return 'auth.login.hintEmail';
+    }
+    return null;
   });
 
   togglePassword(): void {

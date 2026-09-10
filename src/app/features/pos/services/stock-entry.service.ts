@@ -149,7 +149,20 @@ flushQueueAsync(): Promise<void> {
       .pipe(
         concatMap((pending) => from(pending)),
         concatMap((item) =>
-          this.http.post<unknown>(`${this.apiUrl}/stock-entries`, item.payload).pipe(
+          this.http
+            .post<unknown>(`${this.apiUrl}/stock-entries`, {
+              ...(item.payload as Record<string, unknown>),
+              /**
+               * Llave estable por entrada: el id local, que no cambia entre
+               * reintentos. Sin ella, un alta que sí se aplicó pero cuya
+               * respuesta se perdió volvía a mandarse en el flush siguiente y
+               * creaba un segundo lote con el mismo número y la misma factura
+               * —existencias que no existen—. El backend la usa igual que en las
+               * ventas y en el reintento devuelve la entrada ya registrada.
+               */
+              idempotencyKey: item.id,
+            })
+            .pipe(
             concatMap((response) => {
               const result = unwrapEntity<StockEntryResult>(response);
               return from(this.api().markStockEntrySynced(item.id, result.product?.id ?? null));

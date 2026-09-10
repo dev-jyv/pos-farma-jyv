@@ -53,3 +53,9 @@ Thumbs.db
 
 # Caché de despliegue de Firebase Hosting (feed de actualizaciones)
 /.firebase/
+
+# Base local de desarrollo (la real vive en userData de Electron).
+# Estuvo versionada por error: un esqueleto de `prisma migrate dev` que además
+# se quedaba atrás del schema.
+electron/prisma/*.sqlite
+electron/prisma/*.sqlite-journal

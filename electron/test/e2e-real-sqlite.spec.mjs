@@ -660,8 +660,10 @@ describe('sincronización: la cola contra el backend', () => {
       cashSessionId: turno.id,
     });
 
+    // `contarIntentos`: son ciclos de push, no refrescos de pantalla — solo el
+    // push consume el cupo (ver `getPendingPush` en electron/db/sales.js).
     for (let ciclo = 0; ciclo < 6; ciclo += 1) {
-      expect(await ventas.getPendingPush(prisma)).toHaveLength(0);
+      expect(await ventas.getPendingPush(prisma, { contarIntentos: true })).toHaveLength(0);
     }
 
     const [fila] = await prisma.sale.findMany();

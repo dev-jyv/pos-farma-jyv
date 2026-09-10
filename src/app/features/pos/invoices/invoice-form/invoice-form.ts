@@ -159,7 +159,7 @@ export class InvoiceForm implements OnDestroy {
      * sería un viaje de red y un objeto huérfano en el Storage.
      */
     const fileUrl$: Observable<string | undefined> = file
-      ? this.uploadsService.upload(file).pipe(map((upload) => upload.storagePath))
+      ? this.uploadsService.uploadInvoice(file).pipe(map((upload) => upload.storagePath))
       : of(undefined);
 
     fileUrl$

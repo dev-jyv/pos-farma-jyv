@@ -71,6 +71,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   cashSessions: {
     getOpenLocal: (userId) => ipcRenderer.invoke('cashSessions:getOpenLocal', userId),
+    /** Turno abierto en el equipo, de quien sea: para el efectivo del cajón físico. */
+    getOpenLocalAnyUser: () => ipcRenderer.invoke('cashSessions:getOpenLocalAnyUser'),
     listBlocked: () => ipcRenderer.invoke('cashSessions:listBlocked'),
     createLocal: (input) => ipcRenderer.invoke('cashSessions:createLocal', input),
     getLiveSummary: (sessionId) => ipcRenderer.invoke('cashSessions:getLiveSummary', sessionId),

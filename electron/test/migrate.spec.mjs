@@ -235,4 +235,41 @@ describe('aplicación de migraciones', () => {
 
     expect(applied).not.toContain('20260907000000_pharmacy_services');
   });
+
+  /**
+   * Guardián: `@@index` en el schema no crea nada por sí solo — las migraciones
+   * de esta app son SQL a mano. `pendingCatalogPush` vivió declarado y sin crear,
+   * así que la cola de catálogo escaneaba `Product` completo en cada barrido y
+   * nadie lo notaba: el schema decía que el índice existía.
+   */
+  it('todo `@@index` del schema tiene su CREATE INDEX en alguna migración', () => {
+    const raiz = path.join(import.meta.dirname, '..', 'prisma');
+    const schema = fs.readFileSync(path.join(raiz, 'schema.prisma'), 'utf8');
+    const sql = fs
+      .readdirSync(path.join(raiz, 'migrations'), { withFileTypes: true })
+      .filter((entrada) => entrada.isDirectory())
+      .map((carpeta) =>
+        fs.readFileSync(path.join(raiz, 'migrations', carpeta.name, 'migration.sql'), 'utf8'),
+      )
+      .join('\n');
+
+    const faltantes = [];
+    let modelo = null;
+    for (const linea of schema.split('\n')) {
+      const encabezado = linea.match(/^model (\w+)/);
+      if (encabezado) {
+        modelo = encabezado[1];
+      }
+      const indice = linea.match(/@@index\(\[([^\]]+)\]/);
+      if (indice) {
+        const columnas = indice[1].split(',').map((columna) => columna.trim());
+        const nombre = `${modelo}_${columnas.join('_')}_idx`;
+        if (!sql.includes(nombre)) {
+          faltantes.push(nombre);
+        }
+      }
+    }
+
+    expect(faltantes).toEqual([]);
+  });
 });

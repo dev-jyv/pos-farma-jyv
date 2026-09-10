@@ -269,9 +269,18 @@ export class CashSessionService {
     userLabel?: string,
   ): Promise<void> {
     const api = this.api();
-    const { expectedCashAmount } = await api.getLiveSummary(open.id);
+    const { expectedCashAmount, expectedServicesCashAmount } = await api.getLiveSummary(open.id);
+    /**
+     * Los dos esperados, no solo el de farmacia: el cajón es **uno**, y
+     * `closeLocal` mide la diferencia contra la suma. Cerrando con solo el de
+     * farmacia, el corte salía con un faltante exactamente igual al efectivo
+     * cobrado por servicios — y al ser cierre automático no genera ajuste
+     * pendiente, así que nadie lo revisaba. Peor: el turno siguiente heredaba ese
+     * contado como fondo y el cajero de hoy firmaba un sobrante inexplicable.
+     */
+    const contado = expectedCashAmount + (expectedServicesCashAmount ?? 0);
     await api.closeLocal(open.id, {
-      countedCashAmount: expectedCashAmount,
+      countedCashAmount: contado,
       closedBy: userId,
       closedByLabel: userLabel,
       autoClosedByExpiry: true,
@@ -351,7 +360,17 @@ flushQueueAsync(owner: PushOwner = {}): Promise<void> {
     // Misma fila que las altas: las dos escriben sobre `CashSession`.
     return this.enFila(() =>
       lastValueFrom(
-        this.pushPendingCloses$(new Set<string>(), owner).pipe(defaultIfEmpty(null)),
+        /**
+         * `sinHijosPendientes` también aquí, aunque esta pasada corra después de
+         * subir gastos y ventas: si uno de ellos falló por red (502, timeout),
+         * sigue en cola y cerrar el turno lo condena — el backend lo rechazará
+         * con "el turno de caja ya está cerrado" y no habrá forma de subirlo.
+         * El turno espera al ciclo siguiente; el hueco del cajero se libera igual
+         * cuando sus hijos suban.
+         */
+        this.pushPendingCloses$(new Set<string>(), owner, { sinHijosPendientes: true }).pipe(
+          defaultIfEmpty(null),
+        ),
       ).then(() => undefined),
     );
   }
@@ -401,11 +420,28 @@ flushQueueAsync(owner: PushOwner = {}): Promise<void> {
         }),
       );
 
-    // Ya no hace falta filtrar por hijos pendientes: el sincronizador sube los
-    // hijos ANTES de llamar a los cierres (paso 2 de `runPush`). Filtrarlos aquí
-    // aplazaba el cierre y el alta del turno siguiente chocaba con el turno que
-    // seguía abierto en el servidor.
-    return this.pushPendingCloses$(cerradosEnEsteCiclo, owner).pipe(
+    /**
+     * El filtro de hijos pendientes se decide por **necesidad**, no por posición.
+     *
+     * Cerrar un turno que aún tiene un gasto o una venta en cola los condena: el
+     * backend los rechaza con "el turno de caja ya está cerrado". Cerrarlo igual
+     * solo se justifica cuando hay un alta esperando el hueco — el backend admite
+     * un turno abierto por cajero, y con el viejo abierto allá el alta de hoy
+     * choca por `remoteId` (P2002, visto en producción) y la caja no puede
+     * vender. Entre condenar un gasto y dejar la caja sin abrir, se elige lo
+     * segundo... pero solo cuando toca elegir.
+     *
+     * Sin altas en cola no hay prisa ni hueco que liberar: se filtra, y el hijo
+     * que falló por red en el paso 2 de `runPush` se salva y sube en el ciclo
+     * siguiente con su cierre detrás.
+     */
+    return from(this.api().getPendingPush(owner)).pipe(
+      catchError(() => of([] as PendingCashSession[])),
+      switchMap((altasEnEspera) =>
+        this.pushPendingCloses$(cerradosEnEsteCiclo, owner, {
+          sinHijosPendientes: altasEnEspera.length === 0,
+        }),
+      ),
       switchMap(() => pushCreates$()),
       // Solo si un alta reencoló un cierre: súbelo y reintenta altas. Sin el
       // guard, una segunda pasada siempre volvería a empujar el mismo alta

@@ -310,6 +310,33 @@ describe('la cola de push es de cada cajero, no del equipo', () => {
     ).toHaveLength(0);
   });
 
+  /**
+   * Un hijo ya rechazado espera intervención del admin (reintentar, corregir o
+   * descartar). Si retuviera el cierre, el turno quedaría abierto en el servidor
+   * para siempre y su corte nunca aparecería en la auditoría — peor que el mal
+   * que el filtro venía a evitar.
+   */
+  it('un gasto ya rechazado no retiene el cierre del turno', async () => {
+    const turno = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 400 });
+    await markCreateSynced(prisma, turno.id, 'remote-1');
+    await prisma.cashMovement.create({
+      data: {
+        cashSessionId: turno.id,
+        type: 'expense',
+        amount: 100,
+        reason: 'Proveedor',
+        createdBy: CAJERO,
+        pendingPush: true,
+        pushError: 'El turno de caja ya está cerrado',
+      },
+    });
+    await closeLocal(prisma, turno.id, { countedCashAmount: 300, closedBy: CAJERO });
+
+    expect(
+      await getPendingClosePush(prisma, { ownerUid: CAJERO, sinHijosPendientes: true }),
+    ).toHaveLength(1);
+  });
+
   it('la primera pasada sí cierra un turno sin nada en cola: es lo que libera el hueco', async () => {
     const turno = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 500 });
     await markCreateSynced(prisma, turno.id, 'remote-1');
@@ -471,7 +498,19 @@ describe('efectivo que queda en caja (fondo del turno siguiente)', () => {
       return turno;
     }
 
-    async function movimientoSuelto(type, amount, createdAt = new Date('2026-09-06T09:00:00Z')) {
+    /**
+     * `createdAt` se calcula **relativo al reloj**, no a una fecha fija.
+     *
+     * Estaba clavado en `2026-09-06T09:00:00Z` como "después del cierre", y el
+     * cierre se sella con `now()`: el día que el reloj real pasó esa fecha, el
+     * movimiento quedó ANTES del cierre y las tres pruebas se cayeron sin que
+     * nadie tocara el código. Una prueba que depende de qué día se corre no
+     * prueba nada el resto del año.
+     */
+    const DESPUES_DEL_CIERRE = () => new Date(Date.now() + 60_000);
+    const ANTES_DEL_CIERRE = () => new Date(Date.now() - 60_000);
+
+    async function movimientoSuelto(type, amount, createdAt = DESPUES_DEL_CIERRE()) {
       const creado = await cashMovements.addMovement(prisma, null, {
         type,
         amount,
@@ -497,7 +536,7 @@ describe('efectivo que queda en caja (fondo del turno siguiente)', () => {
     });
 
     it('ignora los movimientos ANTERIORES al cierre: ya están en lo contado', async () => {
-      await movimientoSuelto('deposit', 999, new Date('2026-09-01T09:00:00Z'));
+      await movimientoSuelto('deposit', 999, ANTES_DEL_CIERRE());
       await cajaCerradaCon(500);
 
       expect((await getCashOnHand(prisma)).amount).toBe(500);

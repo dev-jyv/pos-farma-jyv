@@ -140,4 +140,68 @@ describe('InvoiceList', () => {
     expect(notifyError).toHaveBeenCalled();
     expect(component.loading()).toBe(false);
   });
+
+  /**
+   * La caja ve **dos meses**, no el histórico. No es solo una regla de
+   * pantalla: el backend traduce `from` a un `where('invoiceDate','>=',…)` y
+   * Firestore cobra por documento leído, así que sin la ventana cada página del
+   * mostrador leía todas las facturas de la farmacia para devolver 50 filas.
+   */
+  describe('ventana de dos meses', () => {
+    /** Inicio esperado: el día 1 del mes de hace dos meses, en hora local. */
+    const inicioEsperado = () => {
+      const hoy = new Date();
+      const desde = new Date(hoy.getFullYear(), hoy.getMonth() - 2, 1);
+      return `${desde.getFullYear()}-${String(desde.getMonth() + 1).padStart(2, '0')}-01`;
+    };
+
+    it('la primera consulta ya llega acotada', async () => {
+      await build();
+
+      expect(ultimaConsulta().from).toBe(inicioEsperado());
+    });
+
+    it('la ventana viaja también al buscar', async () => {
+      // Si la búsqueda soltara la ventana, teclear en el buscador volvería a
+      // leer el histórico completo — el caso más caro de todos.
+      await build();
+      // El reloj falso se instala DESPUÉS de construir: instalarlo antes cuelga
+      // `build()`, que espera estabilidad y esa espera pasa por temporizadores.
+      vi.useFakeTimers();
+      try {
+        component.onSearch('ACME');
+        // El buscador va con `debounceTime`: sin avanzar el reloj no se dispara.
+        vi.advanceTimersByTime(500);
+
+        expect(ultimaConsulta().search).toBe('ACME');
+        expect(ultimaConsulta().from).toBe(inicioEsperado());
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('la ventana viaja también al filtrar por proveedor', async () => {
+      await build();
+
+      component.onSupplierChange('s1');
+
+      expect(ultimaConsulta().from).toBe(inicioEsperado());
+    });
+
+    it('la ventana viaja también al paginar', async () => {
+      await build();
+
+      component.onLazyLoad({ first: 50, rows: 50 } as TableLazyLoadEvent);
+
+      expect(ultimaConsulta().from).toBe(inicioEsperado());
+      expect(ultimaConsulta().limit).toBe(50);
+    });
+
+    it('el inicio es el día 1: un mes corto no desborda la frontera', () => {
+      // `setMonth` con día 31 pedido sobre un mes de 30 se va al siguiente; al
+      // anclar en el día 1 la frontera es predecible y no cambia a diario, lo
+      // que además mantiene la consulta cacheable.
+      expect(inicioEsperado()).toMatch(/^\d{4}-\d{2}-01$/);
+    });
+  });
 });

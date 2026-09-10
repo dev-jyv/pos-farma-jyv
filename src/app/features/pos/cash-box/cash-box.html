@@ -52,8 +52,14 @@
               : 'border border-slate-200 bg-slate-50 text-slate-700'
           "
         >
-          @if (cashSessionOpen()) {
+          @if (turnoDelEquipo(); as turno) {
             {{ 'cashBox.appliesToShift' | translate }}
+            <!-- De quién es el turno: el admin necesita saber a qué corte le va a
+                 cambiar el efectivo esperado antes de sacar el dinero. -->
+            <span class="block font-medium">
+              {{ 'cashBox.shiftOwner' | translate }}:
+              {{ turno.openedByLabel || turno.openedBy }}
+            </span>
           } @else {
             {{ 'cashBox.noShift' | translate }}
           }

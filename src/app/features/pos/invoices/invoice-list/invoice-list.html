@@ -1,6 +1,11 @@
 <div class="flex h-full min-h-0 flex-col bg-white">
   <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-(--pos-border) px-4 py-3">
-    <h1 class="text-lg font-bold text-slate-900">{{ 'invoices.title' | translate }}</h1>
+    <div>
+      <h1 class="text-lg font-bold text-slate-900">{{ 'invoices.title' | translate }}</h1>
+      <!-- Sin esto, no encontrar una factura de hace medio año se lee como que
+           el listado está roto, no como que la caja ve una ventana. -->
+      <p class="text-xs text-slate-500">{{ 'invoices.windowHint' | translate }}</p>
+    </div>
 
     <div class="relative min-w-48 flex-1 max-w-xs">
       <label for="invoice-search" class="sr-only">{{ 'invoices.searchLabel' | translate }}</label>
@@ -91,6 +96,7 @@
             <div class="flex flex-col items-center gap-3">
               <i class="pi pi-file text-4xl text-slate-300"></i>
               <p class="text-sm text-slate-500">{{ 'invoices.empty' | translate }}</p>
+              <p class="text-xs text-slate-400">{{ 'invoices.windowHint' | translate }}</p>
               <p-button icon="pi pi-plus" [label]="'invoices.new' | translate" [outlined]="true" (onClick)="create()" />
             </div>
           </td>

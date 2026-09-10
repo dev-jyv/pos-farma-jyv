@@ -588,6 +588,8 @@ export type CashAdjustmentStatus = 'pending' | 'approved' | 'rejected';
 export interface CashSession {
   id: string;
   openedBy: string;
+  /** Nombre o correo de quien abrió el turno; `null` en turnos viejos. */
+  openedByLabel?: string | null;
   openingAmount: number;
   /** Esperado de FARMACIA. El del cajón completo es este más el de servicios. */
   expectedCashAmount: number | null;

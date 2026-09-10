@@ -67,6 +67,11 @@ describe('CashBoxScreen', () => {
   let notifySuccess: Mock;
 
   async function build(session: CashSession | null = TURNO): Promise<void> {
+    // La caja de la farmacia es solo de admin: pregunta por el turno abierto del
+    // equipo (de quien sea), no por el del usuario en pantalla.
+    (window as unknown as { electronAPI?: unknown }).electronAPI = {
+      cashSessions: { getOpenLocalAnyUser: () => Promise.resolve(session) },
+    };
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [

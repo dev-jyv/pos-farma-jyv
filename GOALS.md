@@ -16,6 +16,27 @@ Operar la caja de FarmaJyV de punta a punta: escanear/buscar, ticket, cobro (efe
 
 Todo lo que sigue **no** está en el POS. Lo marcado `B*` ya existe en la API (`backend-farma-jyv`): es deuda de integración, no diseño nuevo.
 
+### Auditoría de QA como tester de POS (`QA-*`) — residuo
+
+Los 16 hallazgos de la pasada están **cerrados**: 13 corregidos (ver "Hecho") y 3 anulados
+con motivo (abajo). Lo que queda es operación, no código.
+
+#### Anuladas, con motivo
+
+| # | Era | Por qué no se arregla |
+|---|-----|-----------------------|
+| QA-2 | `catalogUnitPrice` se escribe y nadie lo lee: el backend marca la partida cobrada a un precio distinto del catálogo (`sales.service.ts:419,497`) y ninguna pantalla la muestra | **Fuera de alcance de este repo.** El vigilante natural es un reporte del panel (`farma-jyv-admin`), no la caja: el POS es justo la parte interesada —es quien manda el precio cobrado—, así que enseñarle ahí la señal no vigila a nadie. El dato ya está en Firestore por partida; falta la pantalla, y va en el panel |
+| QA-6 | "El cursor del pull nunca converge" | **Diagnóstico erróneo mío.** El cursor se sella con el `updatedAt` máximo que devuelve el **servidor** (`sync-scheduler.service.ts:536-541`), no con la hora del cliente. El backend compara con `>=` (`products.repository.ts:67`), así que cada pull retrae la fila del propio cursor: un solapamiento de 1 fila, deliberado — con `>` se perderían las filas escritas en el mismo milisegundo que el corte |
+| QA-10 | SQLite local sin cifrar con recetas, folios y RFC | **No es viable en código y ya hay control compensatorio.** Prisma no habla SQLCipher, y cifrar campos con una llave que vive en el mismo equipo no protege de quien tiene ese equipo: solo del archivo copiado o del respaldo, que es exactamente lo que cubre el cifrado de disco. FileVault está activo en el equipo de desarrollo (`fdesetup status: On`), y eso es lo que hay que **verificar equipo por equipo** en cada caja antes de instalar. Queda como requisito de instalación, no como tarea de código |
+
+#### Operación pendiente
+
+- **Desplegar el backend.** Sin desplegar quedan: el `unitPrice` de la partida de servicio (arreglo #2), el redondeo del efectivo esperado (QA-4) y la idempotencia del alta de stock (QA-5). Hasta que suban, el POS manda `unitPrice` e `idempotencyKey` y la API en producción los ignora — sin romper nada, pero sin arreglar nada. Recordar `npm run build` antes de `firebase deploy`: `firebase.json` no tiene `predeploy` y despliega `functions/lib` tal cual.
+- Publicar el 1.0.0 real (`npm run release:mac`). La actualización automática en macOS sigue bloqueada sin Apple Developer ID (`identity: null` firma ad-hoc, y `electron-updater` rechaza el paquete).
+- Commitear el trabajo del backend que ya está en producción (~53 archivos sin commitear).
+- Quitar de `.claude/settings.local.json` las dos reglas `Bash` temporales de la limpieza de datos.
+- Sigue sin ejercitarse un rol **sin** `inventory:read` y el pago mixto con TPV física (no hay terminal vinculada).
+
 ### Módulo de edición de catálogo (`/pos/productos`, 2026-09-03)
 
 Nuevo módulo: alta y edición de producto **sin** lote/factura (a diferencia de "Entrada de
@@ -442,12 +463,59 @@ Lo que **no** falló: la aritmética del cobro cuadra al centavo (incluido el mi
 - ~~Catálogo real: que los productos traigan `controlledGroup` y banderas fiscales capturadas.~~ **Confirmado como problema (2026-08-07)**: `GET /products` no devuelve `controlledGroup` en **ningún** producto y todo llega con `hasIva: false, hasIvaZero: false, hasIeps: false`. Consecuencia observada en vivo: el desglose fiscal de una venta real muestra "Base gravable $201.67 / IVA $0.00". Sin grupo, el POS cae al flag viejo `requiresPrescription` y **no** exige folio ni retención — y con AUD-50, el libro de control imprimiría esos movimientos como "Grupo VI (venta libre)". Se arregla capturando el grupo en el catálogo (admin), no en el POS.
 - Smoke test en Electron con TPV física: pago mixto punta a punta (tarjeta parcial + efectivo) y el corte resultante. Sigue pendiente: `GET /payments/mercadopago/devices` responde sin terminales vinculadas, así que la auditoría no pudo ejercitar `cardOrderApproved()`, el polling, `cardAmountLocked()` ni el reintento.
 - **Desplegar `backend-farma-jyv`.** La API en producción está **atrasada respecto a su repositorio**: `GET /inventory/controlled-ledger?limit=101` responde `400 — "El límite no puede ser mayor a 100"`, mensaje que `parsePagination` solo emite cuando no recibe `maxLimit`, y el código commiteado sí pasa `CONTROLLED_LEDGER_MAX_LIMIT = 1000`. Hasta desplegar, no se puede dar por bueno ningún comportamiento observado contra la API — y varias funciones que el POS aún no consume (recibos, devoluciones, lectura X, reportes) pueden estar en la misma situación. **Ojo**: el repo del backend tiene trabajo sin commitear en `feature/medic-changes` (clinic/appointments/medical-records) más los cambios de esta pasada; hay que separar qué se despliega.
-- Prueba con un rol **sin** `sales:write` y sin `inventory:read`: toda la auditoría corrió como `admin`. Las ramas por rol (bloqueo de venta, ausencia del botón de anular, tope de descuento del 20 %) se leyeron en código pero no se ejercitaron con credenciales reales.
+- ~~Prueba con un rol **sin** `sales:write`~~ **Hecho (2026-09-07)** con la cuenta `cashier` real, en Electron y contra la API de producción en modo solo lectura. Verificado en vivo: los 403 del backend (`GET /cash-sessions`, `/cash-sessions/movements`, `/reports/*`, `/users`, `/roles`, `/audit-logs`) y los 200 de lo suyo; el menú sin Reportes, Efectivo, Cortes ni Libro; el recorte del descuento al 20 % al bajar la cantidad, con aviso; el rechazo de una cantidad mayor al stock; el corte con efectivo esperado correcto ($0 de fondo + $25 de venta) y el aviso de movimientos sin sincronizar; y el diálogo de rechazados con Reintentar/Descartar. Sigue sin ejercitarse un rol sin `inventory:read` y el mixto con TPV física.
 - Rango de fechas del libro contra el backend (AUD-48): con el libro real vacío no se pudo medir el corrimiento. Requiere leer el parseo en `backend-farma-jyv` o un entorno con datos.
 
 ---
 
 ## Hecho
+
+### El residuo de la auditoría de QA (2026-09-07)
+
+Diez arreglos, cada uno con prueba que falla sin él. **942 pruebas del POS, 238 de Electron,
+679 del backend.** La CSP y el aviso del login se verificaron además en el empaquetado real
+(`file://`), no solo en el dev server.
+
+| # | Era | Arreglo |
+|---|-----|---------|
+| QA-1 | El cierre podía condenar un hijo: la primera pasada omitía `sinHijosPendientes` **siempre**, para liberar el hueco del cajero | El filtro se decide por **necesidad**, no por posición: solo se cierra con hijos en cola si hay un alta esperando el hueco (sin él, el alta choca por `remoteId`, P2002 visto en producción). Sin altas en cola no hay prisa: se filtra y el gasto que falló por red se salva. Deja de ser un compromiso permanente y pasa a ser el precio de un caso concreto |
+| QA-3 | `/pos/historial` mostraba las ventas de todos los cajeros que usaron el equipo, y con permiso permitía anularlas | `list()` acepta `cashierId` (`electron/db/sales.js`) y la pantalla lo manda salvo para `admin`, que sigue viendo todo para auditar |
+| QA-4 | `expectedCashAmount` sin redondear: el `round` se añadió con la rama de servicios y la de farmacia se quedó fuera | Redondeo a centavos en el efectivo esperado, el neto del cajón, el gran total y las devoluciones. Es la cifra contra la que el cajero cuenta el dinero a mano, y el cajón no tiene milésimas |
+| QA-5 | Alta de stock sin idempotencia: un reintento de la cola tras un timeout duplicaba el lote — existencias que no existen y que nadie cuadra contra la factura | Mismo patrón que las ventas: `stockEntryIdempotencyKeys` con documento por `usuario:llave`, reservado antes de tocar catálogo e inventario; el reintento devuelve la entrada ya registrada. El POS manda como llave el id local de la entrada, estable entre reintentos. Una llave reservada sin terminar responde 409 y pide revisión humana: duplicar stock es peor que pedir que alguien mire |
+| QA-7 | Aviso y diálogo de "ventas rechazadas" duplicados en la pantalla de venta, alimentados por una señal que `getPendingPush` nunca llena (filtra `pushError: null`) | Borrados de `sale.html`/`sale.ts`, y `blockedSales` fuera del servicio. Las rechazadas las lleva el shell (`BlockedSyncService`), que además abarca gastos y catálogo |
+| QA-8 | `reviewPendingSales()` existía sin botón: el diálogo para forzar el envío era inalcanzable | El chip de la barra de venta —donde estaba el duplicado de QA-7— ahora dice "N venta(s) sin sincronizar" y abre ese diálogo. Reparto claro: la pantalla de venta muestra **su** cola (se puede empujar), el shell muestra lo **rechazado** (hay que decidir) |
+| QA-9 | El botón "Entrar" se deshabilitaba sin decir por qué | Aviso bajo el botón, con `aria-describedby` y `aria-live`. Depende del **valor** del formulario y no de `statusChanges`: teclear un correo mal escrito no cambia el estado, así que con `statusChanges` el aviso nunca pasaba de "falta capturar" a "el correo no es válido" |
+| QA-11 | CSP sin `script-src`: tapaba `object-src`/`frame-src` y dejaba abierto el vector que convierte un XSS en ejecución dentro de la ventana con acceso al IPC | CSP con `script-src 'self' file:` (el empaquetado carga por `file://`, donde `'self'` no aplica) más `style-src`/`img-src`/`font-src`/`media-src` y `form-action 'none'`. `connect-src` sigue fuera **a propósito**: habría que enumerar API, Firebase, dev server y emulador, y un host que falte no da error visible, deja la caja sin vender |
+| — | **Efecto secundario que encontró la CSP:** Angular inyectaba el CSS crítico con `<link media="print" onload="this.media='all'">`, un manejador inline. Con `script-src` puesto, ese `onload` no corre y la hoja se queda en `media="print"`: **la app sin estilos en producción** | `inlineCritical: false` en las configuraciones `production` y `electron`. En una app de escritorio el CSS ya es local: el truco no ganaba nada y era incompatible con cualquier CSP decente. Verificado en `file://`: estilos completos, diálogos de PrimeNG bien, cero violaciones |
+| QA-12 | `@@index([pendingCatalogPush])` declarado en el schema y sin migración: la cola de catálogo escaneaba `Product` completo en cada barrido | Migración con su `CREATE INDEX`, más un **guardián** en `migrate.spec.mjs` que compara los `@@index` del schema contra los `CREATE INDEX` de todas las migraciones. Comprobado que falla al renombrar el índice: si vuelve a pasar, lo dice una prueba y no una auditoría |
+| QA-13 | `electron/prisma/dev-tmp.sqlite` versionado (un esqueleto de `prisma migrate dev`, además desactualizado del schema) | Fuera del índice de git y en `.gitignore`, junto con cualquier `*.sqlite` de esa carpeta. El archivo local se conserva |
+
+### QA-14, QA-15 y QA-16 (2026-09-07)
+
+Los tres verificados en Electron con la cuenta `cashier` real, base SQLite temporal y el
+proxy que bloquea toda escritura. 940 pruebas del POS y 235 de Electron.
+
+| # | Era | Arreglo |
+|---|-----|---------|
+| QA-14 | Una venta cobrada cuyo turno todavía no subía **no se veía en ningún sitio**: `getPendingPush` la omitía también en las lecturas de UI, así que no salía en la barra de pendientes, no entraba en `countPending` y el aviso del corte decía "Quedan 1" con dos movimientos sin subir. Solo aparecía al agotar los seis intentos, ya bloqueada | Las lecturas de UI ahora la devuelven con `payload: null` y `esperandoPor: 'turno' \| 'catalogo'`; el push sigue omitiéndola (no se puede enviar) y el contador de intentos no cambió. La pantalla muestra el motivo en español ("Espera a que suba el turno"), y `flush$` filtra por si acaso las que no traen payload. Verificado punta a punta: el aviso del corte pasó de "Quedan 1" a **"Quedan 2"** con los mismos dos movimientos, y el indicador aparece en la barra |
+| QA-15 | El campo de cantidad del ticket no tenía nombre accesible, y el de descuento decía "Desc." en todas las líneas: con lector de pantalla no se sabía de qué producto era el descuento que se teclea | `aria-label` por línea: "Cantidad de CINTA MICROPORO", "Descuento de CINTA MICROPORO" (verificado en vivo). La insignia de rechazados ya tenía `aria-label` correcto —ese hallazgo era falso—; lo que le faltaba era la palabra a la vista: era "⚠ 1" y ahora es "Rechazados 1", oculta bajo `sm` para no empujar la barra en una caja de 1024 px |
+| QA-16 | El historial fallaba en silencio fuera de Electron: tabla vacía, "Actualizar" deshabilitado y el error solo en consola — indistinguible de "no hay ventas". La pantalla **sí** tenía manejo de error; `api()` lanzaba al construir el observable, así que la excepción salía fuera del stream y el `catchError` no la veía | `defer()` en `list`, `movements`, `create` y `void`: el fallo viaja por el canal de error y cada pantalla lo muestra. Y el mensaje quedó redactado para quien está en la caja, no para el desarrollador. Verificado en el navegador: sale un aviso con botón Reintentar |
+
+### Auditoría de QA: los ocho que rompían dinero o acceso (2026-09-04)
+
+Corregidos en el orden acordado, con prueba que falla sin el arreglo. Total tras la pasada:
+936 tests del POS, 233 de Electron, 675 del backend.
+
+| # | Era | Arreglo |
+|---|-----|---------|
+| 9 | DevTools abría la consola en producción: desde ahí se podía reescribir el rol en memoria y saltarse los permisos | `isDevToolsShortcut()` (F12, ⌘⌥I, Ctrl+Shift+I/J/C), `devtools-opened` que cierra por si algo más lo abre, y **menú propio** en producción — el de Electron trae "View → Toggle Developer Tools", así que bloquear el atajo no bastaba. Se conservan appMenu/Edición/Ventana: sin ellos macOS pierde ⌘Q/⌘C/⌘V y el cajero no puede ni pegar un código |
+| 4 | `getPendingPush` escribía el contador de intentos dentro de una **consulta de lectura**, y esa consulta la llaman 14 sitios de UI: abrir una pantalla gastaba reintentos de las ventas en cola hasta agotarlas | Solo el push real pasa `contarIntentos: true`. Y `clearPushError` repone el contador: antes "Reintentar" no servía porque la venta se rebloqueaba en el push siguiente con el contador en el tope |
+| 3 | Un `400` sobre el lote condenaba las hasta 200 ventas que iban en él: una venta mal formada arrastraba a las 40 buenas | Troceo en peticiones de 100 + **bisección**: si un lote se rechaza en bloque se parte en dos y se reintenta cada mitad hasta aislar la venta culpable |
+| 6 | El filtro `sinHijosPendientes` existía, bien escrito, y **ningún llamador lo pasaba**: el cierre se subía dejando gastos del turno atrás | Activo en la pasada final. El conteo mira solo hijos **recuperables**: un gasto ya rechazado espera al admin, y si retuviera el cierre el turno quedaría abierto en el servidor para siempre y su corte nunca llegaría a la auditoría |
+| 5 | El auto-cierre a las 24:00 inventaba un faltante: comparaba el efectivo contado contra el esperado **solo de farmacia**, ignorando el de servicios, aunque el cajón es uno | Cierra con la suma de ambos. El test que debía atraparlo no lo hacía porque el doble de `getLiveSummary` no definía `expectedServicesCashAmount`; con el campo puesto, el test viejo falló hasta corregir el código |
+| 7 | En `/pos/efectivo` (pantalla de admin) el retiro se registraba **sin turno**: se preguntaba por el turno propio del admin, que no tiene ninguno abierto. El cajero cerraba con un faltante por dinero que autorizó otro | Canal nuevo `getOpenLocalAnyUser()`: el turno abierto **del equipo**, sea de quien sea. Y el aviso dice de quién es el turno al que se va a cargar (`openedByLabel`, que la fila tenía y el DTO no propagaba) |
+| 1 | Bajar la cantidad de una línea dejaba el descuento del cajero por encima del tope del 20 % que el backend impone | **Recorta** al tope del rol y lo avisa, en vez de bloquear: el cajero tiene al cliente enfrente y lo cobrado debe ser lo que su rol autoriza. El 20 % quedó en una constante que refleja `MAX_NON_ADMIN_DISCOUNT_RATE` |
+| 2 | Los servicios se retarifaban al sincronizar: una consulta de las 11:00 se rechazaba con "el monto recibido es menor al total" si el admin subía el precio a la 13:00, y quedaba bloqueada con el dinero ya en el cajón | La partida de servicio manda `unitPrice`, igual que la mercancía, y el backend respeta el precio cobrado anotando `catalogUnitPrice` si difiere. **Requiere desplegar el backend** para surtir efecto |
 
 ### Baseline
 

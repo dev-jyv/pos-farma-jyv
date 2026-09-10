@@ -125,6 +125,10 @@
           [attr.aria-label]="blockedCount() + ' registros rechazados al sincronizar'"
         >
           <i class="pi pi-exclamation-triangle text-[11px]" aria-hidden="true"></i>
+          <!-- El número solo ("⚠ 1") no dice de qué: a la vista puede leerse como
+               un contador de avisos cualquiera. La palabra se oculta bajo `sm`
+               para no empujar la barra en una caja de 1024 px. -->
+          <span class="hidden sm:inline">Rechazados</span>
           {{ blockedCount() }}
         </button>
       }

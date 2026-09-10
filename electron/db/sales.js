@@ -224,6 +224,12 @@ async function list(prisma, filters = {}) {
   if (filters.cashSessionId) {
     where.cashSessionId = filters.cashSessionId;
   }
+  // La SQLite es del **equipo**, no del cajero: sin este filtro el historial
+  // mostraba —y con permiso permitía anular— las ventas del turno de otro que
+  // usó la misma caja. El admin no lo manda: para auditar necesita verlas todas.
+  if (filters.cashierId) {
+    where.cashierId = filters.cashierId;
+  }
   if (filters.from || filters.to) {
     where.createdAt = {};
     if (filters.from) where.createdAt.gte = new Date(filters.from);
@@ -414,8 +420,21 @@ async function healClosedShiftBlocks(prisma) {
   }
 }
 
-/** `ownerUid`: solo las ventas de ese cajero (ver `ownerFilter` en cash-sessions). */
-async function getPendingPush(prisma, { ownerUid } = {}) {
+/**
+ * Ventas listas para subir.
+ *
+ * `ownerUid`: solo las de ese cajero (ver `ownerFilter` en cash-sessions).
+ *
+ * `contarIntentos`: **solo el push real debe pasarlo en `true`**. El contador de
+ * `payloadResolveAttempts` existe para que una venta cuyo producto o turno nunca
+ * sincronice acabe visible en el panel de rechazadas en vez de quedar invisible
+ * para siempre; pero esta misma consulta la usan la barra de pendientes y el
+ * conteo del shell, que se refrescan al cobrar, al descartar y al reintentar.
+ * Contando ahí, el cupo se gastaba en ~6 refrescos de pantalla en vez de 6
+ * ciclos de sync: con el turno todavía sin `remoteId` (caja sin red), a la sexta
+ * venta cobrada la primera ya estaba bloqueada y salía de la cola.
+ */
+async function getPendingPush(prisma, { ownerUid, contarIntentos = false } = {}) {
   await healClosedShiftBlocks(prisma);
   const rows = await prisma.sale.findMany({
     // Una venta anulada que nunca llegó a existir en el servidor va por otro
@@ -443,6 +462,20 @@ async function getPendingPush(prisma, { ownerUid } = {}) {
       // siempre. Antes esto era un `continue` sin memoria: una venta cuyo
       // producto nunca sincronizara quedaba invisible, sin aparecer como
       // pendiente ni como bloqueada, y nadie se enteraba.
+      if (!contarIntentos) {
+        // Lectura para la UI: no consume cupo, pero **sí** se reporta. Omitirla
+        // dejaba a la cajera sin señal alguna: una venta cobrada cuyo turno
+        // todavía no sube no salía en la barra de pendientes ni en el conteo,
+        // así que el aviso del corte decía "Quedan 1" con dos movimientos sin
+        // subir. Solo se hacía visible al agotar los intentos, ya bloqueada.
+        // Va sin `payload` a propósito: todavía no se puede enviar.
+        pending.push({
+          ...toSaleDto(row),
+          payload: null,
+          esperandoPor: conProductos ? 'turno' : 'catalogo',
+        });
+        continue;
+      }
       const attempts = (row.payloadResolveAttempts ?? 0) + 1;
       await prisma.sale.update({
         where: { id: row.id },
@@ -459,7 +492,7 @@ async function getPendingPush(prisma, { ownerUid } = {}) {
       });
       continue;
     }
-    if (row.payloadResolveAttempts) {
+    if (contarIntentos && row.payloadResolveAttempts) {
       await prisma.sale.update({ where: { id: row.id }, data: { payloadResolveAttempts: 0 } });
     }
     pending.push({ ...toSaleDto(row), payload });
@@ -613,8 +646,16 @@ async function requeueOrphanRemoteVoids(prisma) {
   });
 }
 
+/**
+ * Reintentar de verdad: además del error, repone el cupo de intentos. Sin esto,
+ * una venta bloqueada por "su turno o su producto no sincroniza" volvía a
+ * bloquearse en el primer push siguiente, porque el contador seguía en el tope.
+ */
 async function clearPushError(prisma, localId) {
-  await prisma.sale.update({ where: { id: localId }, data: { pushError: null } });
+  await prisma.sale.update({
+    where: { id: localId },
+    data: { pushError: null, payloadResolveAttempts: 0 },
+  });
 }
 
 /** Descarta una venta que el servidor rechazó (nunca sincronizó): repone stock y borra. */

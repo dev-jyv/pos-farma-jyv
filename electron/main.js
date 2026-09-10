@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, session, shell } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -17,7 +17,7 @@ function withTimeout(promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 const { getPrisma } = require('./db/client');
-const { isAllowedNavigation, isSafePrinterTarget } = require('./security');
+const { isAllowedNavigation, isSafePrinterTarget, isDevToolsShortcut } = require('./security');
 const productsDb = require('./db/products');
 const salesDb = require('./db/sales');
 const syncRunsDb = require('./db/sync-runs');
@@ -63,6 +63,7 @@ function createWindow() {
 
   mainWindow = new BrowserWindow(windowOptions);
   blindarNavegacion(mainWindow.webContents);
+  blindarDevTools(mainWindow.webContents);
 
   if (isDev) {
     mainWindow.loadURL(DEV_SERVER_URL);
@@ -131,6 +132,7 @@ function cerrarVentana() {
 
 app.whenReady().then(() => {
   configurarPermisos();
+  instalarMenu();
   registrarIPCHandlers();
   // Arranca migraciones ya (no bloquea la ventana): las llamadas IPC que
   // lleguen antes de terminar esperan la misma promesa dentro de `getPrisma()`.
@@ -155,6 +157,71 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (!mainWindow) createWindow();
 });
+
+/**
+ * En producción, DevTools queda fuera de alcance.
+ *
+ * No es paranoia de configuración: la consola del renderer puede llamar
+ * `window.electronAPI` directo, y los handlers de IPC reciben el `userId` como
+ * argumento sin verificarlo. Un cajero con DevTools lista los cortes de todo el
+ * equipo (reservados a admin por `permissionGuard('cashSessions','read')`),
+ * firma una anulación con el uid de otro o pone un producto a $0.01.
+ *
+ * Se cierran las tres vías: el atajo de teclado, la reapertura por cualquier
+ * otro camino, y el menú "View → Toggle Developer Tools" (ver `instalarMenu`).
+ */
+function blindarDevTools(webContents) {
+  if (isDev) {
+    return;
+  }
+  webContents.on('before-input-event', (event, input) => {
+    if (isDevToolsShortcut(input)) {
+      event.preventDefault();
+    }
+  });
+  // Cinturón y tirantes: si algo más lo abre (menú del sistema, extensión), se
+  // cierra en el acto.
+  webContents.on('devtools-opened', () => webContents.closeDevTools());
+}
+
+/**
+ * Menú propio en producción. El de Electron trae "View → Toggle Developer
+ * Tools", así que no basta con bloquear el atajo.
+ *
+ * No se quita el menú entero: sin él, macOS se queda sin ⌘Q, ⌘C y ⌘V, y el
+ * cajero no podría ni pegar un código ni cerrar la app. Se conservan esos
+ * elementos y se elimina todo lo de desarrollo.
+ */
+function instalarMenu() {
+  if (isDev) {
+    return;
+  }
+  const esMac = process.platform === 'darwin';
+  const plantilla = [
+    ...(esMac ? [{ role: 'appMenu' }] : []),
+    {
+      label: 'Edición',
+      submenu: [
+        { role: 'undo', label: 'Deshacer' },
+        { role: 'redo', label: 'Rehacer' },
+        { type: 'separator' },
+        { role: 'cut', label: 'Cortar' },
+        { role: 'copy', label: 'Copiar' },
+        { role: 'paste', label: 'Pegar' },
+        { role: 'selectAll', label: 'Seleccionar todo' },
+      ],
+    },
+    {
+      label: 'Ventana',
+      submenu: [
+        { role: 'minimize', label: 'Minimizar' },
+        { role: 'zoom', label: 'Zoom' },
+        ...(esMac ? [] : [{ role: 'quit', label: 'Salir' }]),
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(plantilla));
+}
 
 function verificarActualizaciones() {
   if (isDev) return;
@@ -314,6 +381,8 @@ function registrarIPCHandlers() {
   // Turnos de caja locales.
   ipcMain.handle('cashSessions:listBlocked', async () =>
     cashSessionsDb.listBlocked(await getPrisma()));
+  ipcMain.handle('cashSessions:getOpenLocalAnyUser', async () =>
+    cashSessionsDb.getOpenLocalAnyUser(await getPrisma()));
   ipcMain.handle('cashSessions:getOpenLocal', async (_event, userId) =>
     cashSessionsDb.getOpenLocal(await getPrisma(), userId));
   ipcMain.handle('cashSessions:createLocal', async (_event, input) =>

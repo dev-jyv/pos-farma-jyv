@@ -60,6 +60,9 @@ describe('CashSessionService (local-first)', () => {
       createLocal: vi.fn().mockResolvedValue(localSession()),
       getLiveSummary: vi.fn().mockResolvedValue({
         expectedCashAmount: 700,
+        // El cajón es uno: sin este campo en el doble, el auto-cierre parecía
+        // correcto cerrando solo con el esperado de farmacia.
+        expectedServicesCashAmount: 300,
         summary: {
           salesCount: 1,
           voidedCount: 0,
@@ -180,15 +183,46 @@ describe('CashSessionService (local-first)', () => {
       expect(cashSessions.closeLocal).not.toHaveBeenCalled();
     });
 
-    it('con turno abierto cierra con el esperado — nunca deja ajuste pendiente', async () => {
+    /**
+     * Regresión: cerraba con solo `expectedCashAmount` mientras `closeLocal` mide
+     * la diferencia contra farmacia + servicios (un solo cajón). El corte salía
+     * con un faltante igual al efectivo de servicios, sin ajuste pendiente que
+     * nadie revisara, y el turno siguiente heredaba ese contado como fondo.
+     */
+    it('cierra con el efectivo de farmacia MÁS el de servicios: el cajón es uno', async () => {
       cashSessions.getOpenLocal.mockResolvedValue(localSession());
       await service.autoCloseForExpiry('u1', 'cajero@test.com');
       expect(cashSessions.closeLocal).toHaveBeenCalledWith('local-1', {
-        countedCashAmount: 700,
+        countedCashAmount: 1000,
         closedBy: 'u1',
         closedByLabel: 'cajero@test.com',
         autoClosedByExpiry: true,
       });
+    });
+
+    it('un turno sin servicios cierra con el esperado de farmacia', async () => {
+      cashSessions.getOpenLocal.mockResolvedValue(localSession());
+      cashSessions.getLiveSummary.mockResolvedValue({
+        expectedCashAmount: 700,
+        expectedServicesCashAmount: 0,
+        summary: null,
+      });
+      await service.autoCloseForExpiry('u1');
+      expect(cashSessions.closeLocal).toHaveBeenCalledWith(
+        'local-1',
+        expect.objectContaining({ countedCashAmount: 700 }),
+      );
+    });
+
+    /** Backend viejo o resumen incompleto: sin el campo, no debe salir NaN. */
+    it('tolera que el resumen no traiga el esperado de servicios', async () => {
+      cashSessions.getOpenLocal.mockResolvedValue(localSession());
+      cashSessions.getLiveSummary.mockResolvedValue({ expectedCashAmount: 700, summary: null });
+      await service.autoCloseForExpiry('u1');
+      expect(cashSessions.closeLocal).toHaveBeenCalledWith(
+        'local-1',
+        expect.objectContaining({ countedCashAmount: 700 }),
+      );
     });
 
     it('un error no se propaga: nunca debe bloquear el logout por expiración', async () => {
@@ -223,8 +257,9 @@ describe('CashSessionService (local-first)', () => {
       const cerrado = await service.autoCloseStale('u1', 'cajero@test.com');
 
       expect(cerrado).toBe(true);
+      // 700 de farmacia + 300 de servicios: un solo cajón (ver `autoCloseForExpiry`).
       expect(cashSessions.closeLocal).toHaveBeenCalledWith('local-1', {
-        countedCashAmount: 700,
+        countedCashAmount: 1000,
         closedBy: 'u1',
         closedByLabel: 'cajero@test.com',
         autoClosedByExpiry: true,
@@ -368,6 +403,44 @@ describe('CashSessionService (local-first)', () => {
 
       http.expectNone(`${BASE}/remote-1/close`);
       expect(cashSessions.markCloseSynced).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * QA-1: el filtro de hijos pendientes se decide por necesidad. Cerrar un
+     * turno con un gasto en cola lo condena ("el turno de caja ya está
+     * cerrado"), y eso solo se justifica cuando un alta espera el hueco — el
+     * backend admite un turno abierto por cajero.
+     */
+    it('sin altas en cola exige que el turno no tenga hijos pendientes', async () => {
+      cashSessions.getPendingPush.mockResolvedValue([]);
+      cashSessions.getPendingClosePush.mockResolvedValue([]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+
+      expect(cashSessions.getPendingClosePush).toHaveBeenCalledWith(
+        expect.objectContaining({ sinHijosPendientes: true }),
+      );
+    });
+
+    it('con un alta esperando el hueco cierra igual, aunque queden hijos', async () => {
+      cashSessions.getPendingPush.mockResolvedValue([
+        { id: 'hoy', openingAmount: 300, pushError: null },
+      ]);
+      cashSessions.getPendingClosePush.mockResolvedValue([]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+
+      // Entre condenar un gasto y dejar la caja sin poder abrir, se elige lo
+      // segundo: sin el hueco libre el alta choca por `remoteId`.
+      expect(cashSessions.getPendingClosePush).toHaveBeenCalledWith(
+        expect.objectContaining({ sinHijosPendientes: false }),
+      );
+      http.expectOne(`${BASE}/current`).flush({ data: null });
+      await flushMicrotasks();
+      http.expectOne(BASE).flush({ data: { id: 'remote-hoy' } });
+      await flushMicrotasks();
     });
   });
 

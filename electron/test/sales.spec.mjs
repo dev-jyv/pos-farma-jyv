@@ -3,8 +3,16 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import sales from '../db/sales.js';
 import { createFakePrisma } from './fake-prisma.mjs';
 
-const { createLocal, voidLocal, discard, getPendingPush, markPushFailed, clearPushError, getNeedingRemoteVoid } =
-  sales;
+const {
+  createLocal,
+  voidLocal,
+  discard,
+  getPendingPush,
+  markPushFailed,
+  clearPushError,
+  getNeedingRemoteVoid,
+  list,
+} = sales;
 
 const CAJERO = 'uid-cajero';
 
@@ -238,7 +246,41 @@ describe('traducción del turno al empujar', () => {
     }));
 
     // Mandarla ahora sería condenarla: el backend no conoce ese uuid local.
-    expect(await getPendingPush(prisma)).toHaveLength(0);
+    expect(await getPendingPush(prisma, { contarIntentos: true })).toHaveLength(0);
+  });
+
+  /**
+   * Regresión (QA-14): no enviarla es correcto; **ocultarla** no. La lectura de
+   * la UI la omitía, así que una venta ya cobrada no salía en la barra de
+   * pendientes ni en el conteo del shell, y el aviso del corte decía "Quedan 1"
+   * con dos movimientos sin subir. La cajera solo se enteraba cuando agotaba los
+   * seis intentos y aparecía como rechazada.
+   */
+  it('la lectura de la UI sí la reporta, marcada como que espera a su turno', async () => {
+    await producto('p1', { remoteId: 'P-REMOTO' });
+    await prisma.cashSession.create({ data: { id: 'cs-local', openedBy: CAJERO, remoteId: null } });
+    await createLocal(prisma, venta([partidaProducto('p1')], {
+      cashSessionId: 'cs-local',
+      payload: { items: [partidaProducto('p1')], cashSessionId: 'cs-local' },
+    }));
+
+    const [esperando] = await getPendingPush(prisma);
+
+    expect(esperando).toBeDefined();
+    expect(esperando.esperandoPor).toBe('turno');
+    // Sin payload: es la señal de que todavía no se puede enviar.
+    expect(esperando.payload).toBeNull();
+    expect(esperando.pushError).toBeNull();
+  });
+
+  it('distingue cuando lo que falta es un producto nuevo, no el turno', async () => {
+    await producto('p1', { remoteId: null });
+    await createLocal(prisma, venta([partidaProducto('p1')], { cashSessionId: 'YA-REMOTO' }));
+
+    const [esperando] = await getPendingPush(prisma);
+
+    expect(esperando.esperandoPor).toBe('catalogo');
+    expect(esperando.payload).toBeNull();
   });
 
   it('manda el id remoto del turno, no el local', async () => {
@@ -308,7 +350,7 @@ describe('cola de push', () => {
     await producto('p-1', { remoteId: null });
     await createLocal(prisma, venta([partidaProducto('p-1')]));
 
-    expect(await getPendingPush(prisma)).toHaveLength(0);
+    expect(await getPendingPush(prisma, { contarIntentos: true })).toHaveLength(0);
     expect(prisma.sale.rows[0].payloadResolveAttempts).toBe(1);
     expect(prisma.sale.rows[0].pushError).toBeNull();
   });
@@ -323,7 +365,7 @@ describe('cola de push', () => {
     await createLocal(prisma, venta([partidaProducto('p-1')]));
 
     for (let ciclo = 0; ciclo < 6; ciclo += 1) {
-      await getPendingPush(prisma);
+      await getPendingPush(prisma, { contarIntentos: true });
     }
 
     expect(prisma.sale.rows[0].pushError).toMatch(/espera a que su turno o alguno de sus productos sincronice/i);
@@ -333,14 +375,50 @@ describe('cola de push', () => {
   it('si el producto sincroniza a tiempo, el contador se reinicia', async () => {
     const creado = await producto('p-1', { remoteId: null });
     await createLocal(prisma, venta([partidaProducto('p-1')]));
-    await getPendingPush(prisma);
+    await getPendingPush(prisma, { contarIntentos: true });
     expect(prisma.sale.rows[0].payloadResolveAttempts).toBe(1);
 
     prisma.product.rows.find((row) => row.id === creado.id).remoteId = 'remote-p1';
-    const pendientes = await getPendingPush(prisma);
+    const pendientes = await getPendingPush(prisma, { contarIntentos: true });
 
     expect(pendientes).toHaveLength(1);
     expect(prisma.sale.rows[0].payloadResolveAttempts).toBe(0);
+  });
+
+  /**
+   * Regresión: el contador vivía dentro de una consulta que también usa la UI
+   * (barra de pendientes, conteo del shell, refresco al cobrar/descartar). El
+   * cupo se gastaba en ~6 refrescos de pantalla en vez de 6 ciclos de sync: con
+   * el turno aún sin `remoteId`, a la sexta venta cobrada la primera ya estaba
+   * bloqueada y salía de la cola.
+   */
+  it('las lecturas de la UI no consumen el cupo de reintentos', async () => {
+    await producto('p-1', { remoteId: null });
+    await createLocal(prisma, venta([partidaProducto('p-1')]));
+
+    for (let refresco = 0; refresco < 10; refresco += 1) {
+      await getPendingPush(prisma);
+    }
+
+    expect(prisma.sale.rows[0].payloadResolveAttempts ?? 0).toBe(0);
+    expect(prisma.sale.rows[0].pushError).toBeNull();
+  });
+
+  /** Reintentar tiene que servir: si no repone el cupo, se rebloquea al instante. */
+  it('destrabar una venta repone su cupo de intentos', async () => {
+    await producto('p-1', { remoteId: null });
+    const creada = await createLocal(prisma, venta([partidaProducto('p-1')]));
+    for (let ciclo = 0; ciclo < 6; ciclo += 1) {
+      await getPendingPush(prisma, { contarIntentos: true });
+    }
+    expect(prisma.sale.rows[0].pushError).toBeTruthy();
+
+    await clearPushError(prisma, creada.id);
+
+    expect(prisma.sale.rows[0].payloadResolveAttempts).toBe(0);
+    // Un solo push posterior no la vuelve a bloquear.
+    await getPendingPush(prisma, { contarIntentos: true });
+    expect(prisma.sale.rows[0].pushError).toBeNull();
   });
 
   it('una venta bloqueada no se reintenta sola hasta que alguien la destraba', async () => {
@@ -352,5 +430,32 @@ describe('cola de push', () => {
 
     await clearPushError(prisma, creada.id);
     expect(await getPendingPush(prisma)).toHaveLength(1);
+  });
+});
+
+describe('historial local: la caja es del equipo, la venta es del cajero', () => {
+  /**
+   * Regresión (QA-3): `list()` no aceptaba `cashierId`, así que el historial —que
+   * lee la SQLite del equipo, no `GET /sales`— mostraba las ventas del turno
+   * anterior de otra persona, y con `sales:write` o `pos:write` se podían anular
+   * desde el detalle.
+   */
+  it('con cashierId solo devuelve las de ese cajero', async () => {
+    await producto('p-1');
+    await createLocal(prisma, venta([partidaProducto('p-1')], { cashierId: CAJERO }));
+    await createLocal(prisma, venta([partidaProducto('p-1')], { cashierId: 'uid-otro-cajero' }));
+
+    const propias = await list(prisma, { cashierId: CAJERO });
+
+    expect(propias).toHaveLength(1);
+    expect(propias[0].cashierId).toBe(CAJERO);
+  });
+
+  it('sin cashierId devuelve las de todo el equipo (el admin audita)', async () => {
+    await producto('p-1');
+    await createLocal(prisma, venta([partidaProducto('p-1')], { cashierId: CAJERO }));
+    await createLocal(prisma, venta([partidaProducto('p-1')], { cashierId: 'uid-otro-cajero' }));
+
+    expect(await list(prisma, {})).toHaveLength(2);
   });
 });

@@ -74,12 +74,21 @@ export interface LocalSaleInput {
 }
 
 export interface PendingSale extends Sale {
+  /**
+   * `null` cuando la venta todavía no se puede enviar: su turno o alguno de sus
+   * productos no tiene `remoteId`. Solo las lecturas de UI reciben estas filas
+   * (para que la cajera las vea y el conteo no mienta); el push las omite.
+   */
   payload: unknown;
   pushError: string | null;
+  /** Qué falta para poder enviarla. Solo viene si `payload` es `null`. */
+  esperandoPor?: 'turno' | 'catalogo';
 }
 
 export interface ListSalesLocalFilters {
   cashSessionId?: string;
+  /** Solo las de este cajero. Sin él vienen las de todos los que usaron el equipo. */
+  cashierId?: string;
   includeVoided?: boolean;
   from?: string;
   to?: string;
@@ -240,7 +249,13 @@ declare global {
         createLocal: (sale: LocalSaleInput) => Promise<Sale>;
         list: (filters?: ListSalesLocalFilters) => Promise<Sale[]>;
         /** `ownerUid`: solo lo del cajero indicado. Sin él (admin) sube todo. */
-        getPendingPush: (filters?: { ownerUid?: string }) => Promise<PendingSale[]>;
+        /**
+         * `contarIntentos`: solo el push real. Las lecturas de la UI no deben
+         * consumir el cupo de `payloadResolveAttempts`.
+         */
+        getPendingPush: (
+          filters?: { ownerUid?: string; contarIntentos?: boolean },
+        ) => Promise<PendingSale[]>;
         listBlocked: () => Promise<BlockedSyncRecord[]>;
         /**
          * Anuladas que nunca llegaron al servidor: se crean y se anulan allá,
@@ -278,6 +293,12 @@ declare global {
       cashSessions: {
         /** El único turno sin cerrar de este cajero, si existe. */
         getOpenLocal: (userId: string) => Promise<CashSession | null>;
+        /**
+         * Turno abierto en este equipo sin importar quién lo abrió. Para las
+         * pantallas que mueven el efectivo del cajón sin ser su cajero (la caja
+         * de la farmacia es solo de admin).
+         */
+        getOpenLocalAnyUser: () => Promise<CashSession | null>;
         createLocal: (input: LocalCashSessionInput) => Promise<CashSession>;
         /** Efectivo esperado en vivo, sin red — recalculado en cada llamada. */
         getLiveSummary: (

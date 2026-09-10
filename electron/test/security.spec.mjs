@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const { isAllowedNavigation, isSafePrinterTarget } = require('../security.js');
+const { isAllowedNavigation, isSafePrinterTarget, isDevToolsShortcut } = require('../security.js');
 
 const DIST_INDEX = path.resolve('/opt/farmajyv/dist/farma-jyv-pos/browser/index.html');
 const DEV = 'http://localhost:4200';
@@ -101,5 +101,48 @@ describe('isSafePrinterTarget', () => {
     expect(isSafePrinterTarget('TICKETS\u0000/etc/passwd', 'darwin')).toBe(false);
     expect(isSafePrinterTarget('TICKETS\nlp -d otra', 'darwin')).toBe(false);
     expect(isSafePrinterTarget('T'.repeat(256), 'darwin')).toBe(false);
+  });
+});
+
+/**
+ * DevTools en un equipo de mostrador es un bypass de todos los guards de rol:
+ * desde la consola se llama `window.electronAPI` a mano y los handlers de IPC
+ * no verifican quién es el usuario.
+ */
+describe('isDevToolsShortcut', () => {
+  const keyDown = (extra) => ({ type: 'keyDown', ...extra });
+
+  it('reconoce F12', () => {
+    expect(isDevToolsShortcut(keyDown({ key: 'F12' }))).toBe(true);
+  });
+
+  it('reconoce ⌘⌥I de macOS', () => {
+    expect(isDevToolsShortcut(keyDown({ key: 'I', meta: true, alt: true }))).toBe(true);
+  });
+
+  it('reconoce Ctrl+Shift+I / J / C de Windows y Linux', () => {
+    for (const key of ['i', 'j', 'c']) {
+      expect(isDevToolsShortcut(keyDown({ key, control: true, shift: true }))).toBe(true);
+    }
+  });
+
+  it('deja pasar los atajos que el cajero sí usa', () => {
+    // ⌘C y Ctrl+C son copiar: bloquearlos rompería la caja.
+    expect(isDevToolsShortcut(keyDown({ key: 'c', meta: true }))).toBe(false);
+    expect(isDevToolsShortcut(keyDown({ key: 'c', control: true }))).toBe(false);
+    // ⌘I sin Alt es cursiva, no DevTools.
+    expect(isDevToolsShortcut(keyDown({ key: 'i', meta: true }))).toBe(false);
+    // F9 cobra.
+    expect(isDevToolsShortcut(keyDown({ key: 'F9' }))).toBe(false);
+  });
+
+  it('ignora keyUp: bloquear en la bajada basta y evita comerse la tecla dos veces', () => {
+    expect(isDevToolsShortcut({ type: 'keyUp', key: 'F12' })).toBe(false);
+  });
+
+  it('tolera entradas basura sin reventar', () => {
+    expect(isDevToolsShortcut(null)).toBe(false);
+    expect(isDevToolsShortcut({})).toBe(false);
+    expect(isDevToolsShortcut(keyDown({}))).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import {
   concat,
   concatMap,
   defaultIfEmpty,
+  defer,
   finalize,
   lastValueFrom,
   forkJoin,
@@ -77,6 +78,8 @@ export interface CreateSalePayload {
         serviceId: string;
         quantity: number;
         discountAmount: number;
+        /** Precio cobrado por unidad; el backend no debe retarifar al sincronizar. */
+        unitPrice: number;
         providerId: string | null;
       }
   >;
@@ -110,6 +113,8 @@ export interface SaleTotals {
 
 export interface ListSalesParams {
   cashSessionId?: string;
+  /** Solo las de este cajero; sin él, las de todo el equipo (uso de admin). */
+  cashierId?: string;
   includeVoided?: boolean;
   from?: string;
   to?: string;
@@ -223,6 +228,36 @@ function mapRemoteSale(dto: SaleDto): Sale {
  * por `SyncScheduler` en los horarios fijos, o a mano desde la pantalla) es lo
  * único que de verdad manda `POST /sales`.
  */
+/**
+ * Tope de ventas por petición. El backend rechaza el arreglo completo si pasa de
+ * 200 (`bulkCreateSalesSchema`), así que se manda con margen: un lote de 100
+ * también acota lo que hay que bisecar cuando una venta viene mal formada.
+ */
+const BULK_MAX_ITEMS = 100;
+
+/**
+ * Por qué una venta de la cola todavía no se puede enviar. En español y en
+ * términos de caja: la cajera no sabe qué es un `remoteId`, pero sí entiende que
+ * primero tiene que subir su turno.
+ */
+function motivoDeEspera(esperandoPor: 'turno' | 'catalogo' | undefined): string | null {
+  if (esperandoPor === 'turno') {
+    return 'Espera a que suba el turno';
+  }
+  if (esperandoPor === 'catalogo') {
+    return 'Espera a que suba un producto nuevo';
+  }
+  return null;
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const trozos: T[][] = [];
+  for (let inicio = 0; inicio < items.length; inicio += size) {
+    trozos.push(items.slice(inicio, inicio + size));
+  }
+  return trozos;
+}
+
 @Injectable({ providedIn: 'root' })
 export class SaleService {
   private readonly http = inject(HttpClient);
@@ -234,9 +269,9 @@ export class SaleService {
   /** Cuántas ventas locales siguen sin subir (sin contar las bloqueadas). */
   readonly pendingCount = signal(0);
   /** Ventas locales pendientes de enviar, para que el cajero las vea. */
-  readonly pendingSales = signal<Array<{ queueId: string; folioHint: string; total: number }>>([]);
-  /** Ventas que el servidor rechazó en el último intento; no se reintentan solas. */
-  readonly blockedSales = signal<Array<{ queueId: string; folioHint: string; reason: string }>>([]);
+  readonly pendingSales = signal<
+    Array<{ queueId: string; folioHint: string; total: number; waitingFor: string | null }>
+  >([]);
   /** Se conserva por compatibilidad con pantallas que lo leen; local ya no trunca. */
   readonly lastListTruncated = signal(false);
 
@@ -291,6 +326,11 @@ export class SaleService {
               serviceId: line.service.id,
               quantity: line.quantity,
               discountAmount: line.discountAmount,
+              // Igual que la mercancía: el precio **cobrado**. Una consulta de
+              // las 11:00 no puede retarifarse porque el admin subió el precio a
+              // la 13:00 — se rechazaba con "el monto recibido es menor al
+              // total" y quedaba bloqueada con el dinero ya en el cajón.
+              unitPrice: lineUnitPrice(line),
               providerId: line.provider?.id ?? null,
             },
       ),
@@ -312,10 +352,19 @@ export class SaleService {
     };
   }
 
+  /**
+   * `defer` y no `from(...)` directo: `api()` lanza si no hay `electronAPI`, y
+   * lanzándolo al construir el observable la excepción salía **fuera** del
+   * stream, así que el `catchError` de la pantalla no la veía. El historial
+   * quedaba con la tabla vacía y el error solo en la consola — indistinguible
+   * de "no hay ventas". Dentro de `defer` el fallo viaja por el canal de error
+   * y cada pantalla lo muestra con su propio mensaje.
+   */
   list(params: ListSalesParams = {}): Observable<Sale[]> {
-    return from(
+    return defer(() =>
       this.api().sales.list({
         cashSessionId: params.cashSessionId,
+        cashierId: params.cashierId,
         includeVoided: params.includeVoided,
         from: params.from,
         to: params.to,
@@ -380,7 +429,11 @@ export class SaleService {
       payload,
     };
 
-    return from(this.api().sales.createLocal(input)).pipe(tap(() => this.refreshPending()));
+    // `defer` por lo mismo que `list()`: si no hay `electronAPI`, el cobro debe
+    // fallar por el canal de error del observable y no como excepción suelta.
+    return defer(() => this.api().sales.createLocal(input)).pipe(
+      tap(() => this.refreshPending()),
+    );
   }
 
   /**
@@ -397,7 +450,7 @@ export class SaleService {
     const voidedBy = this.auth.user()?.uid ?? '';
     const voidedByLabel = this.auth.user()?.email ?? undefined;
     if (!sale.remoteId) {
-      return from(this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel)).pipe(
+      return defer(() => this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel)).pipe(
         switchMap((voided) =>
           voided ? of(voided) : throwError(() => new Error('Venta no encontrada.')),
         ),
@@ -451,7 +504,8 @@ export class SaleService {
 
   /** Bitácora de la venta: cobro y anulación, con quién y cuándo. */
   movements(saleId: string): Observable<SaleMovement[]> {
-    return from(this.api().sales.listMovements(saleId));
+    // Mismo motivo que en `list()`: el fallo tiene que viajar por el stream.
+    return defer(() => this.api().sales.listMovements(saleId));
   }
 
   /** Descarta una venta rechazada por el servidor (decisión explícita del cajero). */
@@ -545,36 +599,35 @@ flushQueueAsync(): Promise<void> {
 
   private flush$(): Observable<unknown> {
     this.flushing = true;
-    return from(this.api().sales.getPendingPush(pushOwnerFilter(this.auth)))
+    // `contarIntentos`: este es el push real. Las lecturas de la UI
+    // (`refreshPending`, el conteo del shell) NO deben gastar el cupo.
+    return from(
+      this.api().sales.getPendingPush({ ...pushOwnerFilter(this.auth), contarIntentos: true }),
+    )
       .pipe(
         // Un fallo del propio IPC (p. ej. SQLite bloqueada) no debe tumbar la
         // suscripción sin dejar rastro: se degrada a "nada pendiente" en este
         // intento y se reintenta en el siguiente sync.
         catchError(() => of([] as never[])),
-        switchMap((pending) => {
+        switchMap((cola) => {
+          // Con `contarIntentos` estas no vienen, pero se filtra igual: una venta
+          // sin `payload` no se puede enviar, y mandarla sería un 400 que la
+          // condenaría por algo que se resuelve solo en el sync siguiente.
+          const pending = cola.filter((venta) => venta.payload);
           if (!pending.length) {
             return of(null);
           }
-          return this.http
-            .post<unknown>(`${this.apiUrl}/sales/bulk`, {
-              items: pending.map((item) => item.payload),
-            })
-            .pipe(
-              switchMap((response) => {
-                const results = unwrapEntity<BulkSaleResult[]>(response);
-                const marks = pending.map((item, index) => {
-                  const result = results[index];
-                  if (!result) {
-                    return of(undefined);
-                  }
-                  return result.ok
-                    ? from(this.api().sales.markSynced(item.id, result.sale.id, result.sale.folio))
-                    : this.handleRejected(item, result.error);
-                });
-                return forkJoin(marks);
-              }),
-              catchError((error: unknown) => this.markBulkHttpFailure(pending, error)),
-            );
+          // En trozos y **en serie**: el backend rechaza el arreglo entero si pasa
+          // de 200 (`bulkCreateSalesSchema`), así que un fin de semana sin red con
+          // 210 ventas en cola devolvía 400 y las condenaba todas — y reintentar
+          // volvía a mandar las mismas 210. En serie, además, el orden de folios
+          // sigue el de cobro.
+          const trozos = chunk(pending, BULK_MAX_ITEMS);
+          return from(trozos).pipe(
+            concatMap((trozo) => this.pushBatch$(trozo)),
+            defaultIfEmpty(null),
+            last(null, null),
+          );
         }),
         /**
          * Las anulaciones van **dentro** de la cadena, no en un `tap`.
@@ -663,21 +716,71 @@ flushQueueAsync(): Promise<void> {
   }
 
   /**
+   * Sube un trozo de la cola. Si el servidor lo rechaza en bloque con un 4xx,
+   * **parte el trozo en dos y reintenta cada mitad** hasta aislar la venta
+   * culpable.
+   *
+   * `POST /sales/bulk` valida el arreglo completo antes de procesar nada
+   * (`bulkCreateSalesSchema` con `ZodValidationPipe`), así que una sola venta mal
+   * formada —un `prescription` de una versión anterior del POS, un descuento con
+   * tres decimales— tumbaba el lote entero y arrastraba a las 40 ventas buenas
+   * que iban con ella. Bisecando, la culpable queda marcada sola y el resto sube.
+   */
+  private pushBatch$(pending: PendingSale[]): Observable<unknown> {
+    if (!pending.length) {
+      return of(null);
+    }
+    return this.http
+      .post<unknown>(`${this.apiUrl}/sales/bulk`, { items: pending.map((item) => item.payload) })
+      .pipe(
+        switchMap((response) => {
+          const results = unwrapEntity<BulkSaleResult[]>(response);
+          const marks = pending.map((item, index) => {
+            const result = results[index];
+            if (!result) {
+              return of(undefined);
+            }
+            return result.ok
+              ? from(this.api().sales.markSynced(item.id, result.sale.id, result.sale.folio))
+              : this.handleRejected(item, result.error);
+          });
+          return forkJoin(marks).pipe(defaultIfEmpty([] as unknown[]));
+        }),
+        catchError((error: unknown) => {
+          if (!this.isBulkRejection(error) || pending.length === 1) {
+            // Una sola venta (o un fallo de red/5xx): el marcado de siempre.
+            return this.markBulkHttpFailure(pending, error);
+          }
+          const mitad = Math.ceil(pending.length / 2);
+          return concat(
+            this.pushBatch$(pending.slice(0, mitad)),
+            this.pushBatch$(pending.slice(mitad)),
+          ).pipe(defaultIfEmpty(null), last(null, null));
+        }),
+      );
+  }
+
+  /** 4xx estable: reintentar el mismo cuerpo no lo va a arreglar. */
+  private isBulkRejection(error: unknown): boolean {
+    const status = getApiErrorStatus(error);
+    return (
+      status !== null &&
+      status >= 400 &&
+      status < 500 &&
+      status !== 401 &&
+      status !== 408 &&
+      status !== 429
+    );
+  }
+
+  /**
    * Fallo HTTP del lote entero (antes se tragaba y las ventas quedaban
    * `pendingPush` sin `pushError`: el aviso hablaba de "sin red" con red).
    * Un 4xx estable se marca rechazado para que el cajero lo vea; 5xx/red se
    * dejan en cola para el próximo ciclo.
    */
   private markBulkHttpFailure(pending: PendingSale[], error: unknown): Observable<null> {
-    const status = getApiErrorStatus(error);
-    const permanent =
-      status !== null &&
-      status >= 400 &&
-      status < 500 &&
-      status !== 401 &&
-      status !== 408 &&
-      status !== 429;
-    if (!permanent || pending.length === 0) {
+    if (!this.isBulkRejection(error) || pending.length === 0) {
       return of(null);
     }
     const message = getApiErrorMessage(error);
@@ -790,29 +893,36 @@ flushQueueAsync(): Promise<void> {
       // instancia igual con solo abrir el shell aunque el cajero nunca cobre.
       return;
     }
+    // Las rechazadas no llegan por aquí: `getPendingPush` filtra `pushError:
+    // null`. Las lleva `BlockedSyncService` (insignia "Rechazados N" del shell),
+    // que además abarca gastos y catálogo. Este servicio partía la lista en
+    // "bloqueadas" y "no bloqueadas" y publicaba una señal que siempre estaba
+    // vacía, con su propio aviso y diálogo inalcanzables.
     from(api.sales.getPendingPush(pushOwnerFilter(this.auth))).subscribe((pending) => {
-      const notBlocked = pending.filter((item) => !item.pushError);
-      const blocked = pending.filter((item) => item.pushError);
       const hint = (sale: { items: unknown[]; total: number }) =>
         `${sale.items.length} art. · $${sale.total.toFixed(2)}`;
       this.pendingSales.set(
-        notBlocked.map((sale) => ({ queueId: sale.id, folioHint: hint(sale), total: sale.total })),
-      );
-      this.blockedSales.set(
-        blocked.map((sale) => ({
+        pending.map((sale) => ({
           queueId: sale.id,
           folioHint: hint(sale),
-          reason: sale.pushError ?? '',
+          total: sale.total,
+          waitingFor: motivoDeEspera(sale.esperandoPor),
         })),
       );
-      this.pendingCount.set(notBlocked.length);
+      this.pendingCount.set(pending.length);
     });
   }
 
   private api() {
     const api = window.electronAPI;
     if (!api) {
-      throw new Error('electronAPI no disponible: las ventas requieren correr dentro de Electron.');
+      // Redactado para el cajero, no para el desarrollador: este texto llega a
+      // la pantalla (el historial lo muestra vía `getApiErrorMessage`), y
+      // "electronAPI no disponible" no le dice nada a quien está en la caja.
+      throw new Error(
+        'La caja local no está disponible: esta pantalla necesita la app de escritorio ' +
+          'FarmaJyV Venta (electronAPI ausente).',
+      );
     }
     return api;
   }

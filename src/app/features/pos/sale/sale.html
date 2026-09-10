@@ -36,13 +36,17 @@
         <span class="text-[11px] text-slate-600">Qty</span>
         <span class="pos-kbd">Esc</span>
         <span class="text-[11px] text-slate-600">Limpiar</span>
-        @if (blockedSales().length > 0) {
+        <!-- Las **rechazadas** las lleva el shell (insignia "Rechazados N"), que
+             abarca ventas, gastos y catálogo. Aquí van solo las de esta pantalla
+             que siguen en cola: es el único sitio desde donde se puede forzar el
+             envío, y sin este botón el diálogo era inalcanzable. -->
+        @if (pendingSales().length > 0) {
           <button
             type="button"
-            class="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800 transition hover:bg-red-200"
-            (click)="reviewBlockedSales()"
+            class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900 transition hover:bg-amber-200"
+            (click)="reviewPendingSales()"
           >
-            {{ blockedSales().length }} venta(s) rechazada(s) al sincronizar
+            {{ pendingSales().length }} venta(s) sin sincronizar
           </button>
         }
         <!-- Sin turno: el aviso sí vive aquí, porque bloquea la venta y hay que
@@ -375,6 +379,7 @@
                         type="number"
                         min="1"
                         class="w-10 border-0 bg-transparent text-center outline-none"
+                        [attr.aria-label]="'Cantidad de ' + nameOf(line)"
                         [ngModel]="line.quantity"
                         (ngModelChange)="updateQuantity(keyOf(line), $event)"
                       />
@@ -394,11 +399,15 @@
 
                 <label class="flex items-center gap-1 text-xs text-slate-500">
                   Desc.
+                  <!-- El `<label>` ya nombra el campo, pero dice "Desc." en las
+                       cinco líneas del ticket: con lector de pantalla no se sabe
+                       de cuál producto es el descuento que se está tecleando. -->
                   <input
                     type="number"
                     min="0"
                     step="0.01"
                     class="w-16 rounded-md border border-slate-200 bg-white px-1.5 py-1 text-right text-sm tabular-nums outline-none focus:border-emerald-500"
+                    [attr.aria-label]="'Descuento de ' + nameOf(line)"
                     [value]="line.discountAmount"
                     (change)="updateLineDiscount(keyOf(line), $any($event.target).valueAsNumber || 0, $any($event.target))"
                   />
@@ -539,7 +548,14 @@
   <ul class="space-y-2">
     @for (item of pendingSales(); track item.queueId) {
       <li class="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2">
-        <span class="text-sm text-slate-700">{{ item.folioHint }}</span>
+        <span class="text-sm text-slate-700">
+          {{ item.folioHint }}
+          @if (item.waitingFor) {
+            <!-- Sin esto la venta salía en la lista sin explicación de por qué
+                 "Enviar ahora" no la mueve: le falta que suba su turno. -->
+            <span class="mt-0.5 block text-xs text-amber-800">{{ item.waitingFor }}</span>
+          }
+        </span>
         <div class="flex shrink-0 items-center gap-2">
           <span class="text-sm font-semibold tabular-nums text-slate-900">
             ${{ item.total | number: '1.2-2' }}
@@ -583,52 +599,6 @@
       />
     </div>
   </ng-template>
-</p-dialog>
-
-<p-dialog
-  [visible]="blockedDialogVisible()"
-  [modal]="true"
-  [draggable]="false"
-  [style]="{ width: '34rem', maxWidth: '95vw' }"
-  header="Ventas rechazadas al sincronizar"
-  [closeAriaLabel]="'Cerrar'"
-  (onHide)="blockedDialogVisible.set(false)"
->
-  <p class="mb-3 text-sm text-slate-600">
-    El servidor rechazó estas ventas de la cola. Corrige la causa y reintenta, o descártalas
-    si ya no deben registrarse.
-  </p>
-
-  <ul class="space-y-2">
-    @for (item of blockedSales(); track item.queueId) {
-      <li class="rounded-xl border border-red-200 bg-red-50/60 p-3">
-        <p class="text-sm font-semibold text-slate-900">{{ item.folioHint }}</p>
-        <p class="mt-0.5 text-xs leading-relaxed text-red-800">{{ item.reason }}</p>
-        <div class="mt-2 flex gap-2">
-          <p-button
-            label="Reintentar"
-            icon="pi pi-refresh"
-            size="small"
-            styleClass="flex-1"
-            (onClick)="retryBlockedSale(item.queueId)"
-          />
-          <p-button
-            label="Descartar"
-            icon="pi pi-trash"
-            size="small"
-            severity="danger"
-            [outlined]="true"
-            styleClass="flex-1"
-            (onClick)="discardBlockedSale(item.queueId)"
-          />
-        </div>
-      </li>
-    } @empty {
-      <li class="rounded-xl bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">
-        No hay ventas rechazadas.
-      </li>
-    }
-  </ul>
 </p-dialog>
 
 <app-substitutes-dialog

@@ -9,7 +9,9 @@
       "showPassword": "Show password",
       "hidePassword": "Hide password",
       "submit": "Sign in",
-      "error": "Incorrect email or password"
+      "error": "Incorrect email or password",
+      "hintEmpty": "Enter your email and password to sign in.",
+      "hintEmail": "That email doesn't look valid: check the @ and domain."
     },
     "logout": "Sign out"
   },
@@ -434,7 +436,8 @@
     "back": "Back",
     "cancel": "Cancel",
     "save": "Save",
-    "empty": "No invoices registered."
+    "empty": "No invoices registered.",
+    "windowHint": "Last two months only. The full history is in the admin panel."
   },
   "products": {
     "title": "Product catalog",
@@ -556,6 +559,7 @@
     "savedToShift": "Movement recorded and applied to the open shift.",
     "savedToBox": "Movement recorded in the pharmacy cash box.",
     "saveError": "Could not record the movement.",
-    "loadError": "Could not read the cash box balance."
+    "loadError": "Could not read the cash box balance.",
+    "shiftOwner": "Shift of"
   }
 }

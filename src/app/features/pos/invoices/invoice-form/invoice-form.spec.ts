@@ -21,7 +21,7 @@ describe('InvoiceForm', () => {
   let fixture: ComponentFixture<InvoiceForm>;
   let component: InvoiceForm;
   let create: Mock;
-  let upload: Mock;
+  let uploadInvoice: Mock;
   let navigate: Mock;
   let notifyError: Mock;
 
@@ -34,7 +34,9 @@ describe('InvoiceForm', () => {
 
   beforeEach(async () => {
     create = vi.fn(() => of({ id: 'inv-1' }));
-    upload = vi.fn(() => of({ storagePath: 'uploads/u-1/factura.pdf' }));
+    // `uploadInvoice`, no `upload`: el comprobante va a Cloudflare R2 por su
+    // propia ruta (`POST /uploads/facturas`).
+    uploadInvoice = vi.fn(() => of({ storagePath: 'facturas/u-1/factura.pdf' }));
     navigate = vi.fn(() => Promise.resolve(true));
     notifyError = vi.fn();
 
@@ -45,7 +47,7 @@ describe('InvoiceForm', () => {
         providePrimeNG({}),
         MessageService,
         { provide: InvoiceService, useValue: { create } },
-        { provide: UploadsService, useValue: { upload } },
+        { provide: UploadsService, useValue: { uploadInvoice } },
         { provide: SupplierService, useValue: { listActive: () => of([]) } },
         { provide: Router, useValue: { navigate } },
         { provide: NotificationService, useValue: { success: vi.fn(), error: notifyError } },
@@ -77,7 +79,7 @@ describe('InvoiceForm', () => {
     // Una subida vacía sería un viaje de red y un objeto huérfano en el Storage.
     component.save();
 
-    expect(upload).not.toHaveBeenCalled();
+    expect(uploadInvoice).not.toHaveBeenCalled();
   });
 
   it('con comprobante lo sube primero y manda la ruta', () => {
@@ -88,8 +90,9 @@ describe('InvoiceForm', () => {
 
     component.save();
 
-    expect(upload).toHaveBeenCalledTimes(1);
-    expect(ultimaAlta().fileUrl).toBe('uploads/u-1/factura.pdf');
+    expect(uploadInvoice).toHaveBeenCalledTimes(1);
+    // La ruta que se registra es la de R2: `facturas/…`.
+    expect(ultimaAlta().fileUrl).toBe('facturas/u-1/factura.pdf');
   });
 
   it('el tipo "Ticket" también se guarda sin archivo', () => {

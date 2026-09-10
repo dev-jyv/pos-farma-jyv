@@ -81,7 +81,6 @@ describe('Sale', () => {
   let saleServiceMock: {
     pendingCount: ReturnType<typeof signal<number>>;
     pendingSales: ReturnType<typeof signal<unknown[]>>;
-    blockedSales: ReturnType<typeof signal<unknown[]>>;
     void: ReturnType<typeof vi.fn>;
     flushQueue: ReturnType<typeof vi.fn>;
     retryBlockedSale: ReturnType<typeof vi.fn>;
@@ -105,7 +104,6 @@ describe('Sale', () => {
     saleServiceMock = {
       pendingCount: signal(0),
       pendingSales: signal<unknown[]>([]),
-      blockedSales: signal<unknown[]>([]),
       void: vi.fn(() => of({ id: 'v1', folio: 'V-1' } as SaleModel)),
       flushQueue: vi.fn(),
       retryBlockedSale: vi.fn(),
@@ -425,6 +423,44 @@ describe('Sale', () => {
       );
     });
 
+    /**
+     * Regresión: el descuento se guarda como importe absoluto y se reaplica en
+     * cada cambio del carrito. 5 piezas de $50 con $50 de descuento son el 20%
+     * exacto; al dejarlo en 2 piezas pasaba al 50% sin que nada lo revisara. La
+     * venta se cobraba y el backend la rechazaba con 403 al sincronizar: dinero
+     * cobrado que no quedaba registrado.
+     */
+    it('bajar la cantidad recorta el descuento al 20% de la línea', () => {
+      component.updateQuantity('product:p1', 5);
+      component.updateLineDiscount('product:p1', 50); // 20% de 5 × $50
+      expect(component.cart()[0].discountAmount).toBe(50);
+
+      component.updateQuantity('product:p1', 2);
+
+      // 20% de 2 × $50 = $20.
+      expect(component.cart()[0].discountAmount).toBe(20);
+      expect(component.total()).toBe(80);
+      expect(notifyError).toHaveBeenCalledWith(expect.stringContaining('20% de la línea'));
+    });
+
+    it('el administrador conserva su descuento al cambiar la cantidad', () => {
+      isAdmin.set(true);
+      component.updateQuantity('product:p1', 5);
+      component.updateLineDiscount('product:p1', 200);
+
+      component.updateQuantity('product:p1', 2);
+
+      // Su tope es la línea completa, no el 20%.
+      expect(component.cart()[0].discountAmount).toBe(100);
+    });
+
+    it('subir la cantidad no toca el descuento: el porcentaje baja', () => {
+      component.updateLineDiscount('product:p1', 20); // 20% de 2 × $50
+      component.updateQuantity('product:p1', 4);
+
+      expect(component.cart()[0].discountAmount).toBe(20);
+    });
+
     it('el administrador sí puede forzarlo', () => {
       isAdmin.set(true);
       component.updateLineDiscount('product:p1', 30);
@@ -538,15 +574,22 @@ describe('Sale', () => {
   });
 
   describe('cola offline', () => {
-    it('sin ventas bloqueadas no abre el diálogo de revisión', () => {
-      component.reviewBlockedSales();
-      expect(component.blockedDialogVisible()).toBe(false);
+    /**
+     * Las rechazadas viven en el shell (una sola insignia para ventas, gastos y
+     * catálogo). Esta pantalla solo abre las que siguen en cola, y hasta ahora
+     * ese diálogo no tenía quién lo abriera: el método existía sin botón.
+     */
+    it('sin ventas en cola no abre el diálogo de pendientes', () => {
+      component.reviewPendingSales();
+      expect(component.pendingDialogVisible()).toBe(false);
     });
 
-    it('con ventas bloqueadas abre el diálogo', () => {
-      saleServiceMock.blockedSales.set([{ queueId: 'k1', folioHint: '1 art.', reason: 'Turno cerrado' }]);
-      component.reviewBlockedSales();
-      expect(component.blockedDialogVisible()).toBe(true);
+    it('con ventas en cola abre el diálogo', () => {
+      saleServiceMock.pendingSales.set([
+        { queueId: 'k1', folioHint: '1 art. · $25.00', total: 25, waitingFor: null },
+      ]);
+      component.reviewPendingSales();
+      expect(component.pendingDialogVisible()).toBe(true);
     });
 
     it('forzar el envío delega en el servicio', () => {

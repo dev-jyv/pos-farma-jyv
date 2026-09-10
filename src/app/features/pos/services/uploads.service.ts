@@ -37,10 +37,24 @@ export class UploadsService {
   private readonly apiUrl = environment.apiUrl;
 
   upload(file: File): Observable<UploadResult> {
+    return this.post('uploads', file);
+  }
+
+  /**
+   * Comprobante de factura. Ruta propia porque el destino es otro:
+   * `POST /uploads/facturas` guarda en Cloudflare R2, no en Firebase Storage.
+   * Del lado del cliente no cambia nada más — la respuesta trae el mismo
+   * `storagePath`, que es lo único que se manda al registrar la factura.
+   */
+  uploadInvoice(file: File): Observable<UploadResult> {
+    return this.post('uploads/facturas', file);
+  }
+
+  private post(ruta: string, file: File): Observable<UploadResult> {
     const formData = new FormData();
     formData.append('file', file, file.name);
     return this.http
-      .post<unknown>(`${this.apiUrl}/uploads`, formData)
+      .post<unknown>(`${this.apiUrl}/${ruta}`, formData)
       .pipe(map((response) => unwrapEntity<UploadResult>(response)));
   }
 }
