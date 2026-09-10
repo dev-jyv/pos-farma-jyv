@@ -41,12 +41,18 @@
       "dist/farma-jyv-pos/browser/**/*",
       "package.json",
       "node_modules/@prisma/client/**/*",
-      "node_modules/.prisma/**/*"
+      {
+        "from": "node_modules/.prisma",
+        "to": "node_modules/.prisma",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "asar": true,
     "asarUnpack": [
       "node_modules/@prisma/client/**/*",
-      "node_modules/.prisma/**/*"
+      "**/.prisma/**/*"
     ],
     "publish": {
       "provider": "generic",

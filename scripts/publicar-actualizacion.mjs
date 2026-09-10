@@ -23,6 +23,48 @@ if (!existsSync(ORIGEN)) {
   process.exit(1);
 }
 
+/**
+ * El paquete tiene que llevar el cliente de Prisma generado (`node_modules/.prisma`).
+ *
+ * Los patrones de `files` de electron-builder no entran en carpetas ocultas: con
+ * `node_modules/.prisma/**` el 1.0.0 salió **sin** el cliente y la app abría el
+ * login y moría con `MODULE_NOT_FOUND` al primer acceso a la base. Ninguna
+ * prueba lo veía —solo existe en el `.app` empaquetado—, así que se comprueba
+ * aquí, en el único paso por el que pasa todo lo que se publica.
+ */
+function verificarPrismaEmpaquetado() {
+  const apps = [];
+  for (const carpeta of readdirSync(ORIGEN)) {
+    const ruta = join(ORIGEN, carpeta);
+    if (!statSync(ruta).isDirectory()) {
+      continue;
+    }
+    for (const nombre of readdirSync(ruta)) {
+      if (nombre.endsWith('.app')) {
+        apps.push(join(ruta, nombre));
+      }
+    }
+  }
+  if (!apps.length) {
+    // Un release de Windows no deja `.app`: no hay nada que revisar aquí.
+    return;
+  }
+  const sinPrisma = apps.filter(
+    (app) => !existsSync(join(app, 'Contents/Resources/app.asar.unpacked/node_modules/.prisma')),
+  );
+  if (sinPrisma.length) {
+    console.error('El paquete no lleva el cliente de Prisma; la app moriría al abrir la base:');
+    for (const app of sinPrisma) {
+      console.error(`  ${app}`);
+    }
+    console.error('Revisa `build.files` en package.json (usar la forma from/to, no un glob).');
+    process.exit(1);
+  }
+  console.log(`Prisma empaquetado correctamente en ${apps.length} app(s).`);
+}
+
+verificarPrismaEmpaquetado();
+
 rmSync(DESTINO, { recursive: true, force: true });
 mkdirSync(DESTINO, { recursive: true });
 

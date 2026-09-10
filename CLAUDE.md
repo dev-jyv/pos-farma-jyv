@@ -49,6 +49,9 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 - `electron/main.js` — ventana única (`BrowserWindow`), carga dev server o `dist/farma-jyv-pos/browser/index.html` según `NODE_ENV`/`--dev`. IPC mínimo: `get-app-version`, `get-device-info` (MAC/hostname para identificar el equipo de venta).
 - `electron/preload.js` — expone `window.electronAPI` vía `contextBridge` (`contextIsolation: true`, sin `nodeIntegration`).
 - Empaquetado con `electron-builder`, configuración en la clave `build` de `package.json`.
+- **El cliente de Prisma se declara como `node_modules/.prisma`, sin glob.** Los patrones de `files`/`asarUnpack` no entran en carpetas ocultas, así que `node_modules/.prisma/**/*` no incluye nada y el paquete sale sin el cliente generado: la app abre el login y muere con `MODULE_NOT_FOUND` al primer acceso a la base — un fallo que ninguna prueba ve, porque solo existe en el `.app` empaquetado.
+- Antes de publicar un release, verificar el paquete real (no `electron:start`, que corre contra `node_modules`):
+  `ELECTRON_RUN_AS_NODE=1 "<app>/Contents/MacOS/<bin>" -e "new (require('<app>/Contents/Resources/app.asar/node_modules/@prisma/client').PrismaClient)({datasourceUrl:'file:/tmp/t.sqlite'}).\$queryRawUnsafe('select 1').then(()=>console.log('OK')).catch(e=>console.log('FALLA',e.message))"`
 
 ## Convenciones Angular
 
