@@ -23,24 +23,58 @@ Si el mensaje dice *"Correo o contraseña incorrectos"*, revisa el correo comple
 
 ### La barra de arriba
 
-De izquierda a derecha: el logo, los accesos a las pantallas, y a la derecha tu rol, tu correo y **Cerrar sesión**. La pestaña en la que estás se marca en verde y con una línea debajo.
+De izquierda a derecha: el logo, los accesos a las pantallas y, a la derecha, el
+botón **Sincronizar**, tu rol y tu nombre. La pestaña en la que estás se marca en
+verde.
 
-**No todos ven lo mismo.** La barra solo muestra lo que tu rol puede abrir:
+Las pantallas de catálogo e inventario se agrupan en dos menús desplegables
+—**Inventario** y **Catálogo**— para que la barra no crezca sin fin.
 
-| Rol | Ve |
-|---|---|
-| Cajero | **Venta (F1)**, **Historial (F3)** y **Entrada de stock**. Cobra, consulta y recibe mercancía, pero **no anula**: eso es del administrador |
-| Gerente | Lo anterior más **Cobro directo** y **Libro de control** |
-| Administrador | Todo, incluidos **Reportes** |
+**No todos ven lo mismo.** La barra muestra solo lo que tus permisos abren, y los
+permisos los define el administrador por rol, no hay roles fijos en la caja. Con
+los permisos típicos de un cajero verás:
 
-Si escribes a mano la dirección de una pantalla que no te toca, el sistema te devuelve a Venta con el aviso *"Tu rol no tiene acceso a esta pantalla"*. No es una falla: es el permiso.
-
-Si aparece una franja de color debajo:
-
-| Franja | Significa | Qué hacer |
+| Pantalla | Para qué | Permiso que la abre |
 |---|---|---|
-| Roja: *Sin conexión a internet* | El equipo perdió la red | Puedes seguir vendiendo. Las ventas se guardan y se envían al reconectar |
-| Ámbar: *El servidor no responde* | Hay internet pero el sistema central no contesta | Puedes seguir vendiendo. Avisa al administrador |
+| **Venta** (F1) | Cobrar | `pos:write` |
+| **Historial** (F3) | Tus ventas del turno | `sales:read` |
+| **Gastos** | Registrar un gasto del turno | `pos:write` |
+| **Entrada de stock** | Recibir mercancía | `stockEntry:write` |
+| **Facturas** | Consultar y dar de alta facturas | `invoices:write` |
+| **Productos**, **Categorías**, **Proveedores** | Catálogo | `products` / `categories` / `suppliers` |
+
+Y estas son de administración; si no aparecen, es que tu usuario no las tiene:
+
+| Pantalla | Para qué |
+|---|---|
+| **Reportes** | Ventas del turno o del día |
+| **Efectivo de farmacia** | Movimientos de efectivo sin venta |
+| **Cortes de caja** | Revisar los cortes de todas las cajas |
+| **Auditoría de gastos** | Gastos de todas las cajas |
+| **Libro de control** | Entregable COFEPRIS |
+
+Si escribes a mano la dirección de una pantalla que no te toca, el sistema te
+devuelve a Venta con el aviso *"Tu rol no tiene acceso a esta pantalla"*. No es
+una falla: es el permiso.
+
+### Los avisos de la barra
+
+| Señal | Significa | Qué hacer |
+|---|---|---|
+| Franja roja: *Sin conexión a internet* | El equipo perdió la red | Puedes seguir vendiendo. Las ventas se guardan y se envían al reconectar |
+| Franja ámbar: *El servidor no responde* | Hay internet pero el sistema central no contesta | Puedes seguir vendiendo. Avisa al administrador |
+| Punto sobre **Sincronizar** | Hay ventas o gastos que todavía no suben | Nada urgente: suben solos |
+| Insignia roja **Rechazados N** | El sistema central **rechazó** N registros | Haz clic: cada uno dice por qué. Ver §6 |
+
+### Sincronizar a mano
+
+El botón **Sincronizar** sube lo pendiente y baja el catálogo. No hace falta
+usarlo —la caja sincroniza sola—, pero sirve cuando el administrador acaba de
+cambiar un precio y lo necesitas ya.
+
+**Un cajero puede usarlo una vez cada 15 minutos**; el administrador, sin
+límite. Mientras el tope corre, el botón se ve apagado y al pasar el puntero
+dice a qué hora vuelve a estar disponible.
 
 ---
 
@@ -109,7 +143,12 @@ Notas:
 - No puedes pasar del stock disponible: el sistema avisa y no sube la cantidad.
 - Quitar un renglón con **más de 5 piezas** pide confirmación.
 - Un renglón con **Promo** en ámbar ya trae descuento automático aplicado; lo que escribas en **Desc.** se suma a ese.
-- **Descuentos mayores al 20 % solo los puede aplicar un administrador.** Si no lo eres, el sistema rechaza el cambio y avisa.
+- **Descuentos mayores al 20 % solo los puede aplicar un administrador.** Si no
+  lo eres y escribes más, la caja **lo ajusta al máximo que tu rol permite** y te
+  lo dice: *"El descuento se ajustó a $5.00 (20% de la línea): más requiere
+  autorización de un administrador"*. Lo mismo pasa si bajas la cantidad de un
+  renglón y el descuento se pasa del tope. No se bloquea el cobro: se cobra lo
+  que tu rol autoriza.
 
 ### 3.5 Pausar una venta
 
@@ -120,6 +159,29 @@ Si el cliente se va por algo más y hay fila detrás, presiona **F6** o el botó
 ### 3.6 Imprimir etiqueta de precio
 
 En cualquier renglón de la lista de búsqueda, el icono de etiqueta imprime la etiqueta del producto.
+
+### 3.7 Vender un servicio (consulta, inyección, presión)
+
+La pantalla de venta tiene dos pestañas: **Medicamentos** (**Alt+M**) y
+**Servicios** (**Alt+S**). La de servicios solo aparece si la farmacia tiene
+servicios dados de alta.
+
+1. **Alt+S** y busca el servicio por nombre o código.
+2. Haz clic en la tarjeta. Entra al mismo ticket que los medicamentos.
+3. Si el servicio pide saber **quién lo realizó**, se abre *¿Quién lo realizó?*
+   con la lista de doctores. Elígelo: sin eso no se puede cobrar, porque de ahí
+   sale su comisión.
+
+En el ticket, la partida lleva la etiqueta **Servicio** y, debajo, quién lo
+realizó (se puede cambiar con **Cambiar doctor**).
+
+Un servicio **no descuenta existencias** —no hay nada que sacar del anaquel— y
+puede ir en el mismo ticket que los medicamentos: el cliente paga una sola vez.
+El corte los separa: verás el efectivo de farmacia y el de servicios por
+separado, aunque el cajón sea uno solo.
+
+> Si el aviso dice *"No hay doctores registrados"*, se dan de alta en el panel
+> de administración.
 
 ---
 
@@ -231,20 +293,42 @@ Al confirmar aparece *"Venta … registrada"* y el ticket se imprime automática
 - **Imprimir ticket** — reimprime.
 - **Anular venta** — **solo administradores**, para la última venta.
 
-### Ventas sin conexión
+### Ventas sin conexión, y qué pasa después
 
-Si no hay red al confirmar, la venta se guarda en el equipo y el folio dice **PENDIENTE-…**. El ticket se imprime igual. En la barra de arriba aparece un contador ámbar: *N pendiente(s) de sync*. Cuando vuelve el internet se envían solas, en orden, y el contador baja.
+Esta caja **no necesita internet para cobrar**. Toda venta se guarda primero en
+el equipo y se envía después; si no había red al cobrar, el folio dice
+**PENDIENTE-…** y el ticket se imprime igual.
 
-**Si aparece un botón rojo: *N venta(s) rechazada(s) al sincronizar*** — el sistema central no aceptó esas ventas. Haz clic para verlas: cada una muestra el motivo (turno cerrado, sin stock, cobro ya usado).
+En la barra de la pantalla de venta aparece un botón ámbar:
+**N venta(s) sin sincronizar**. Al hacer clic ves la lista y puedes forzar el
+envío con **Enviar ahora**.
 
-- **Reintentar** — después de corregir la causa. No duplica la venta.
-- **Descartar** — solo si esa venta definitivamente no debe registrarse. Pide confirmación porque el dinero ya se cobró.
+Una venta en esa lista está en uno de dos estados:
+
+| Lo que ves | Significa | Qué hacer |
+|---|---|---|
+| Solo el importe | Lista para subir en cuanto haya red | Nada |
+| *Espera a que suba el turno* (o *un producto nuevo*) | Tu turno o un producto recién creado todavía no existe en el sistema central; la venta no puede subir antes que ellos | Nada: suben en orden y esta va detrás |
+
+**Si aparece la insignia roja *Rechazados N* en la barra de arriba**, es otra
+cosa: el sistema central **no aceptó** esos registros y no se reintentan solos.
+Haz clic para verlos; cada uno dice su motivo (turno cerrado, sin stock, cobro
+ya usado).
+
+- **Reintentar** — después de corregir la causa. No duplica la venta: si el
+  cobro anterior sí llegó, el sistema devuelve el que ya tenía.
+- **Descartar** — solo si esa venta definitivamente no debe registrarse. Pide
+  confirmación porque el dinero ya se cobró.
 
 Si no sabes qué hacer, **no descartes**: avisa al administrador.
 
 ---
 
-## 6 bis. Cobro directo (cobrar sin venta)
+## 7. Cobro directo (cobrar sin venta)
+
+> **Hoy esta pantalla está oculta.** El módulo sigue completo y se puede volver a
+> encender cuando la farmacia lo necesite; mientras tanto no aparece en la barra
+> y esta sección queda como referencia.
 
 Pantalla **Cobro directo** de la barra de arriba. Es para el dinero que entra por Mercado Pago **sin** que haya productos de por medio: un servicio (aplicación de inyección, toma de presión), un abono, un cobro a un tercero.
 
@@ -276,7 +360,7 @@ Mientras el cobro está en curso puedes **Cancelar cobro**. Igual que en la vent
 
 ---
 
-## 6 ter. Entrada de stock (recibir mercancía)
+## 8. Entrada de stock (recibir mercancía)
 
 Pantalla **Entrada de stock** de la barra de arriba. Sirve para meter al sistema la mercancía que acaba de llegar, con su factura enfrente.
 
@@ -302,7 +386,7 @@ Al guardar, la factura **se queda seleccionada**: una factura suele traer varios
 
 ---
 
-## 7. Efectivo de farmacia (solo administradores)
+## 9. Efectivo de farmacia (solo administradores)
 
 Menú **Más › Efectivo de farmacia**. Sirve para dejar registrado el efectivo que entra o sale sin ser una venta:
 
@@ -326,22 +410,103 @@ Los **gastos** (con categoría: sueldo, renta, luz…) siguen capturándose en *
 
 ---
 
-## 8. Cerrar el turno (corte de caja)
+## 10. Gastos del turno
 
-Botón **Cerrar turno** en la barra de arriba.
+Pantalla **Gastos**. Es lo que sale del cajón durante tu turno y no es una venta:
+el agua del garrafón, la comida, un pago a un proveedor que llegó con factura.
 
-1. Revisa el resumen: ventas, anuladas, total por método de pago, depósitos, retiros y gastos.
-2. Compara **Fondo inicial** y **Efectivo esperado** con lo que hay en el cajón.
-3. Cuenta el efectivo real y escríbelo en **Efectivo contado**. El campo viene precargado con el esperado — **cámbialo por lo que realmente contaste.**
-4. La **Diferencia** se muestra en vivo: verde si es cero, ámbar si sobra o falta.
-5. Presiona **Cerrar turno**.
-6. Presiona **Imprimir corte** y luego **Listo**.
+1. **Monto** — cuánto salió.
+2. **Categoría** — sueldo, comida, renta, contingencia, luz, insumos, proveedor
+   u otro. Es obligatoria: sin ella, el gasto no se puede clasificar después.
+3. **Descripción** — en qué se gastó. Escribe algo que se entienda en un mes:
+   "Garrafón de agua" sirve; "varios" no.
+4. **Guardar gasto**.
 
-Después de cerrar no se puede vender hasta abrir un turno nuevo. Antes de cerrar, revisa que **no queden ventas pendientes de sincronizar** — se envían con el turno al que pertenecen.
+Debajo del formulario está **Gastos de este turno**, con lo que ya registraste.
+
+- **Necesitas turno abierto.** Si no lo tienes, el aviso lo dice: *"Abre tu turno
+  de caja antes de registrar un gasto."* Un gasto sin turno no tendría corte al
+  cual restarse.
+- El gasto **baja el efectivo esperado** de tu corte. Es lo correcto: ese dinero
+  ya no está en el cajón, y si no se registra cerrarás con un faltante sin
+  explicación.
+- Para gastos de otras cajas o de otros días, el administrador usa **Auditoría
+  de gastos**.
 
 ---
 
-## 9. Historial (F3)
+## 11. Catálogo desde la caja
+
+Según tus permisos, la barra trae los menús **Inventario** y **Catálogo**:
+
+| Pantalla | Para qué | Ojo |
+|---|---|---|
+| **Productos** | Alta y edición de producto sin recibir mercancía: corregir un precio, un código de barras, el grupo COFEPRIS | Cambiar el precio aquí **no** cambia lo ya cobrado |
+| **Categorías** | Alta y edición de categorías | |
+| **Proveedores** | Alta y edición de proveedores | |
+| **Facturas** | Consultar facturas y darlas de alta | Se necesitan para recibir mercancía (§8) |
+
+Todo lo que captures aquí **también funciona sin internet**: se guarda en el
+equipo y sube con la siguiente sincronización, igual que las ventas. Hasta que
+suba, ese producto nuevo existe solo en esta caja — por eso una venta que lo use
+puede quedar esperando a que el producto suba primero (§6).
+
+---
+
+## 12. Cortes y gastos de todas las cajas (administradores)
+
+Dos pantallas de consulta que solo ve quien tiene permisos de administración:
+
+- **Cortes de caja** — todos los turnos cerrados, con quién abrió y cerró, a qué
+  hora, el efectivo esperado, el contado y la diferencia. Aquí se aprueban o
+  rechazan los ajustes cuando un corte no cuadra.
+- **Auditoría de gastos** — los gastos de todas las cajas, con su categoría,
+  quién los registró y a qué turno pertenecen.
+
+Ambas se leen de 50 en 50 y traen filtros por fecha. Son de solo lectura: lo que
+muestran lo escribieron las cajas al operar.
+
+---
+
+## 13. Cerrar el turno (corte de caja)
+
+El corte se hace **al salir**: haz clic en tu nombre, arriba a la derecha, y
+elige **Cerrar sesión**. La caja pregunta qué quieres hacer con el turno:
+
+| Opción | Cuándo |
+|---|---|
+| **Cerrar turno antes de salir** | Terminó tu jornada. Sincroniza, hace el corte y cierra |
+| **Salir sin cerrar turno** | Te vas un rato y vuelves hoy mismo; el turno sigue abierto y lo retomas al entrar |
+| **Cancelar** | Te quedas |
+
+Antes se cerraba desde un botón de la barra de venta; se quitó a propósito,
+porque tenerlo junto a **Cobrar** invitaba a cortar caja a media jornada por
+error.
+
+Con **Cerrar turno antes de salir**:
+
+1. La caja **sincroniza primero**. Si algo no logró subir te avisa —*"Quedan N
+   movimiento(s) sin sincronizar"*— y **te deja cerrar igual**: el corte no se
+   detiene por un problema de red.
+2. Revisa el resumen: ventas, anuladas, total por método de pago, depósitos,
+   retiros y gastos.
+3. Compara **Fondo inicial** y **Efectivo esperado** con lo que hay en el cajón.
+4. Cuenta el efectivo real y escríbelo en **Efectivo contado**. El campo viene
+   precargado con el esperado — **cámbialo por lo que realmente contaste.**
+5. La **Diferencia** se muestra en vivo: verde si es cero, ámbar si sobra o falta.
+6. **Cerrar turno**, luego **Imprimir corte** y **Listo**.
+
+Si el turno tuvo servicios, el efectivo esperado suma los dos: farmacia y
+servicios. El cajón es uno solo.
+
+> **Si olvidas cerrar**, al cambiar el día la caja cierra el turno sola, con el
+> efectivo que hubiera hasta ese momento, y lo marca como cierre automático. Es
+> una red de seguridad, no la forma normal de trabajar: un corte automático no
+> tiene a nadie que haya contado el cajón.
+
+---
+
+## 14. Historial (F3)
 
 Ventas del turno actual, o del día si no hay turno abierto.
 
@@ -353,7 +518,7 @@ Ventas del turno actual, o del día si no hay turno abierto.
 
 ---
 
-## 10. Reportes
+## 15. Reportes
 
 Elige el alcance: **Turno actual** o **Día**. Muestra:
 
@@ -367,7 +532,7 @@ Elige el alcance: **Turno actual** o **Día**. Muestra:
 
 ---
 
-## 11. Libro de control
+## 16. Libro de control
 
 Registro de todos los movimientos de medicamentos de los grupos I a IV. Es **lo que se muestra en una visita de verificación de COFEPRIS**, y por eso se consulta desde la caja.
 
@@ -381,7 +546,7 @@ Es solo de lectura: los renglones los escribe el sistema al registrar cada venta
 
 ---
 
-## 12. Facturación
+## 17. Facturación
 
 En la ventana de cobro, abre **Cliente y facturación** y marca **Facturar (timbrado posterior)**. Captura:
 
@@ -396,7 +561,7 @@ También puedes ligar un **cliente**: búscalo por nombre o RFC, o usa **+ Clien
 
 ---
 
-## 13. Todos los atajos
+## 18. Todos los atajos
 
 **Pantalla de venta**
 
@@ -413,6 +578,8 @@ También puedes ligar un **cliente**: búscalo por nombre o RFC, o usa **+ Clien
 | **Esc** | Limpiar la búsqueda; si está vacía, vaciar el ticket |
 | **Enter** en el buscador | Agregar el producto escaneado o el único resultado |
 | `N*código` + Enter | Agregar N piezas |
+| **Alt+M** | Pestaña Medicamentos |
+| **Alt+S** | Pestaña Servicios |
 
 **Ventana de cobro**
 
@@ -438,7 +605,7 @@ Con una ventana abierta, los atajos de la pantalla de venta **no** se disparan: 
 
 ---
 
-## 14. Problemas frecuentes
+## 19. Problemas frecuentes
 
 | Situación | Qué hacer |
 |---|---|
@@ -450,7 +617,13 @@ Con una ventana abierta, los atajos de la pantalla de venta **no** se disparan: 
 | *"Sin stock suficiente para agregar otra unidad"* | El sistema no vende más de lo que hay, ni lotes vencidos |
 | *"El stock disponible está vencido"* | Todo el stock caducó. Usa un sustituto y avisa a inventario |
 | *"Guarda o termina la venta actual antes de retomar otra"* | Cobra o pausa el ticket actual antes de retomar el pausado |
-| *"Descuento mayor a 20% requiere autorización de un administrador"* | Pide autorización |
+| *"El descuento se ajustó a $… (20% de la línea)"* | Tu rol llega hasta ese tope. La caja ya ajustó el descuento; si hace falta más, pide autorización |
+| *"Cantidad supera el stock disponible"* | No hay tanto en el sistema. Revisa si falta recibir mercancía |
+| *"Falta quién lo realizó"* | El servicio necesita doctor: elígelo en el ticket |
+| *"Abre tu turno de caja antes de registrar un gasto"* | Los gastos van contra un turno abierto |
+| **Sincronizar** apagado | Un cajero puede sincronizar cada 15 minutos. Pasa el puntero: dice a qué hora se libera |
+| Insignia **Rechazados N** | El sistema central no aceptó esos registros. Ábrela y lee el motivo de cada uno (§6) |
+| Una venta dice *"Espera a que suba el turno"* | Normal: primero sube el turno y luego la venta. No hagas nada |
 | No aparece ninguna terminal | Point apagada, en otra cuenta, o fuera de modo PDV. Presiona **Actualizar** |
 | *"La terminal ya aprobó el cobro…"* al cambiar método | El dinero ya se cobró. Termina la venta o cancela el cobro en la terminal |
 | *"…cancélalo desde la terminal"* | Mercado Pago no deja cancelar desde la caja un cobro que la terminal ya tomó. Cancélalo en la terminal; el cobro sigue en pantalla hasta que se resuelva |
@@ -468,7 +641,7 @@ Con una ventana abierta, los atajos de la pantalla de venta **no** se disparan: 
 
 ---
 
-## 15. Buenas prácticas de caja
+## 20. Buenas prácticas de caja
 
 1. **Cuenta el fondo antes de abrir el turno.** El corte al final se compara contra ese número.
 2. **Pide la receta cuando suena el aviso**, no al cobrar.
@@ -477,4 +650,5 @@ Con una ventana abierta, los atajos de la pantalla de venta **no** se disparan: 
 5. **Antes de cerrar el turno**, verifica que no queden pendientes de sincronizar.
 6. **Sin internet se puede seguir vendiendo.** No detengas la fila.
 7. **Usa el teclado.** F2 buscar, escanear, F9 cobrar, teclear, Enter. El mouse es opcional.
-8. **Escribe conceptos claros en los cobros directos.** "Servicio" no dice nada dentro de un mes; "Aplicación de inyección — Sra. Ramírez" sí.
+8. **Escribe conceptos claros en los gastos.** "Varios" no dice nada dentro de un mes; "Garrafón de agua" sí.
+9. **Cierra tu turno al irte**, desde tu nombre → Cerrar sesión. Si cambia el día con el turno abierto, la caja lo cierra sola y ese corte no lo contó nadie.

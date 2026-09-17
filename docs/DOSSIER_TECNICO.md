@@ -227,15 +227,24 @@ Presupuesto de bundle inicial: aviso 1.2 MB, error 1.6 MB. Hoy son 1.12 MB en cr
 ## 5. Rutas y navegación
 
 ```
-/login                     guestGuard
-/                          authGuard → Shell
-  ''                       → redirect /pos
-  /pos                     Sale            (F1)
-  /pos/historial           SaleHistory     (F3)
-  /pos/cobro-directo       DirectChargeScreen (requiere sales:write)
-  /pos/reportes            PosReports
-  /pos/libro-control       ControlledLedger  (requiere inventory:read)
-**                         → /
+/login                       guestGuard
+/                            authGuard → Shell
+  ''                         → redirect /pos
+  /pos                       Sale                 (F1)
+  /pos/historial             SaleHistory          (F3)
+  /pos/gastos                ExpenseForm
+  /pos/entrada-stock         StockEntry
+  /pos/productos             ProductCatalog
+  /pos/categorias            Categories
+  /pos/proveedores           Suppliers
+  /pos/facturas              Invoices
+  /pos/cobro-directo         DirectChargeScreen   (oculto: directChargeEnabled)
+  /pos/reportes              PosReports
+  /pos/efectivo              CashBox
+  /pos/cortes                CashSessionAudit
+  /pos/gastos-auditoria      ExpenseAudit
+  /pos/libro-control         ControlledLedger
+**                           → /
 ```
 
 Todo lazy (`loadComponent`/`loadChildren`).
@@ -250,6 +259,18 @@ Todo lazy (`loadComponent`/`loadChildren`).
 | `/pos/entrada-stock` | `stockEntry:write` | Área **propia**, no `inventory`: recibir mercancía es del mostrador, pero `inventory:write` abriría además conteos, salidas y el libro de control |
 | `/pos/reportes` | `dashboard:read` | Analítica; misma área que los reportes del backend |
 | `/pos/libro-control` | `inventory:write` | Más estricto que el `inventory:read` del endpoint **a propósito**: `read` es el permiso con el que el cajero consulta lotes y caducidades al vender, así que gatearlo con `read` se lo mostraría a todo el mostrador |
+| `/pos/gastos` | `pos:write` | Es operación de caja: el gasto sale del cajón del turno |
+| `/pos/efectivo` | `cashSessions:write` | Mueve efectivo sin venta detrás; supervisión |
+| `/pos/cortes` | `cashSessions:read` | Auditoría de todos los turnos |
+| `/pos/gastos-auditoria` | `expenses:read` | Gastos de todas las cajas |
+| `/pos/productos` | `products:write` | Alta y edición de catálogo |
+| `/pos/categorias` | `categories:write` | |
+| `/pos/proveedores` | `suppliers:write` | |
+| `/pos/facturas` | `invoices:write` | Requisito para recibir mercancía |
+
+En la barra, las pantallas se agrupan por `group` (`inventory`, `catalog`,
+`admin`) en menús desplegables: con catorce entradas, una fila plana ya no cabía
+en 1024 px.
 
 `permissionGuard` resuelve con `fetchProfile()` y no con la señal `profile`: al recargar la app dentro de una pantalla, el perfil aún no ha llegado y una lectura síncrona negaría el acceso a quien sí lo tiene.
 
@@ -261,10 +282,16 @@ Definidos en `backend-farma-jyv/functions/src/constants/permissions.ts` y sembra
 
 | Rol | Alcance en el POS |
 |---|---|
-| `cashier` | Venta, historial y entrada de stock. `pos:write`, `sales:read`, `products:read`, `categories:read`, `inventory:read` (lo necesita para lote/caducidad al vender), `stockEntry:write` |
+| `cashier` | Venta, historial, gastos, entrada de stock y el catálogo del mostrador. `pos:write`, `sales:read`, `products:write`, `categories:write`, `suppliers:write`, `invoices:write`, `uploads:write`, `inventory:read` (lote y caducidad al vender), `stockEntry:write`, `pharmacyServices:read` |
 | `manager` | Todo menos reportes (`dashboard` está excluido de su definición) |
 | `admin` | Todo, por el atajo de slug en `hasPermission` |
 | `doctor` | Solo la pantalla de venta, y sin poder cobrar |
+
+**Los roles se editan en el panel, no en el código.** `SYSTEM_ROLE_DEFINITIONS`
+es la semilla; un administrador puede cambiar los permisos de un rol después, y
+entonces manda Firestore. Al depurar un "no veo la pantalla", la fuente de
+verdad es `GET /auth/me`, no esta tabla. **Anular es de mostrador** desde
+2026-09-05: lo cubre `pos:write` y queda firmado con `voidedBy`/`voidedAt`.
 
 ---
 
@@ -376,6 +403,25 @@ Signals: `searchTerm`, `results`, `cart`, `heldSales`, `manualDiscounts`, `lastS
 4. Tope por `min(sellableQty, product.stock)`.
 5. Producto controlado nuevo en el ticket → `warnIfControlled`: sonido + grupo + si se retiene la receta. Se avisa **al agregar**, no al cobrar.
 6. `setCart` pasa siempre por `PromoService.apply`.
+
+### Servicios de farmacia
+
+La pantalla de venta tiene dos pestañas —Medicamentos (`Alt+M`) y Servicios
+(`Alt+S`)— y la segunda solo se monta si el catálogo local trae servicios. Un
+servicio entra al **mismo ticket** que la mercancía: el cliente paga una vez.
+
+Diferencias con una partida de producto:
+
+- **No toca inventario.** `productItemsOf()` filtra por `kind`, y esa regla vive
+  en un solo lugar (`electron/db/sales.js`): `createLocal`, `voidLocal`,
+  `discard` y la traducción de ids la consultan, ninguna la reimplementa.
+- **Puede exigir prestador.** Si `requiresPerformer`, el diálogo *¿Quién lo
+  realizó?* bloquea el cobro hasta elegirlo: de ahí sale la comisión.
+- **La comisión se congela** al cobrar (`commissionRate`, `commissionAmount`):
+  la tarifa del catálogo puede cambiar después, lo devengado no.
+- **El corte los separa.** La venta guarda `pharmacyTotal`/`servicesTotal` y su
+  reparto de efectivo, así que el cierre muestra las dos ramas aunque el cajón
+  sea uno solo — y el efectivo esperado suma ambas.
 
 ### Descuentos
 
@@ -582,13 +628,45 @@ El backend audita cada uno (`cashMovement.created`, entidad `cashMovement`) — 
 
 ---
 
-## 12. Pantallas de consulta
+## 12. Pantallas
 
 **Historial** (`/pos/historial`) — ventas del turno actual, o del día si no hay turno; `includeVoided: true`. Filtro local por folio o nombre de producto. Detalle en diálogo con el ticket embebido, reimpresión, y anulación (`POST /sales/:id/void`) solo para `admin` y con `confirm`.
 
 **Reportes** (`/pos/reportes`) — alcance turno o día, calculados **en el cliente** sobre `listAll` (paginación recursiva de 100 en 100). Métricas: venta neta, ticket promedio, descuentos, anuladas, por método, por hora (con barra proporcional), top 10 por cantidad e importe. `cashCollected` suma con la misma regla del corte del backend: `cashAmount`, con fallback `recibido − cambio` para ventas viejas — sumar el total de una venta mixta contaría también lo de la tarjeta. Imprimible con `window.print()`.
 
 **Libro de control** (`/pos/libro-control`) — `GET /inventory/controlled-ledger`, solo lectura (los renglones los escribe el backend dentro de la transacción de venta/anulación/devolución). Filtros por rango, rangos rápidos (hoy / 7 / 30 días) y grupo; `to` se envía como `<fecha>T23:59:59.999` porque el backend filtra por instante. Renglones con folio, movimiento, producto, grupo, cantidad **con signo**, lotes, receta y paciente. Resumen por grupo y piezas netas. Gateado por `inventory:read`, mismo permiso del endpoint. Se consulta desde la caja porque la visita de verificación ocurre en el mostrador.
+
+---
+
+
+**Gastos** (`/pos/gastos`, `pos:write`) — alta de gasto del turno con monto,
+categoría (`salary`, `food`, `rent`, `contingency`, `electricity`, `supplies`,
+`supplier`, `other`) y descripción. Exige turno abierto: un gasto sin turno no
+tiene corte al cual restarse. Local-first como las ventas; debajo del formulario
+se listan los gastos del turno en curso.
+
+**Efectivo de farmacia** (`/pos/efectivo`, `cashSessions:write`) — entradas y
+salidas de efectivo sin venta detrás. Pregunta por el turno abierto **del
+equipo** (`getOpenLocalAnyUser`), no por el del usuario: la pantalla es de admin
+y el admin no tiene turno propio, así que preguntando por el suyo el movimiento
+se registraba sin turno y el cajero cerraba con un faltante por dinero que
+autorizó otro. El aviso dice de quién es el turno al que se va a cargar.
+Muestra el saldo en caja derivado del último corte más los movimientos
+posteriores — el mismo número que se precarga como fondo del turno siguiente.
+
+**Cortes de caja** (`/pos/cortes`, `cashSessions:read`) — auditoría de todos los
+turnos cerrados contra `GET /cash-sessions`, paginado de 50 en 50 en el
+servidor. Incluye la revisión de ajustes cuando un corte no cuadra
+(`POST /cash-sessions/:id/adjustment/review`).
+
+**Auditoría de gastos** (`/pos/gastos-auditoria`, `expenses:read`) — gastos de
+todas las cajas vía `GET /cash-sessions/movements`, también paginado.
+
+**Catálogo del mostrador** — `/pos/productos` (alta y edición sin recibir
+mercancía), `/pos/categorias`, `/pos/proveedores` y `/pos/facturas`. Todas
+local-first: escriben en SQLite y suben por la cola de catálogo
+(`getPendingCatalogPush`). Un producto creado aquí y aún sin subir es
+exactamente el caso que deja una venta en estado *esperando* (§10).
 
 ---
 
