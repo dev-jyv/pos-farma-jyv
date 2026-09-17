@@ -2,7 +2,69 @@
 
 Punto de venta de escritorio para farmacia. Angular 22 + Electron 43 + PrimeNG 22, Firebase Auth y API REST NestJS (`backend-farma-jyv`), compartida con `farma-jyv-admin`.
 
-Documento generado a partir del código en `main` (commit `f2ccc96`). Versión declarada en `environment.version`: `v1.0.0`.
+Documento generado a partir del código en `cr/sqlite` (commit `78724cd`, 2026-09-16). Versión publicada: **1.0.1** (`environment.electron.version`: `vE1.0.1`).
+
+---
+
+## 0. El sistema alrededor
+
+El POS es una de tres aplicaciones cliente contra la misma API. Nada escribe en
+Firestore directamente: la Cloud Function `api` es la única puerta, y las reglas
+de Firestore niegan toda escritura de cliente.
+
+![Arquitectura del sistema](arquitectura.png)
+
+La fuente del diagrama vive en [`arquitectura.mmd`](arquitectura.mmd) y el PNG se
+regenera desde ahí; GitHub también dibuja el bloque de abajo.
+
+```mermaid
+flowchart TB
+    subgraph clientes["Aplicaciones cliente"]
+        direction LR
+        pos["<b>FarmaJyV Venta · POS</b><br/>Angular 22 + Electron<br/>local-first: SQLite + Prisma<br/>vende sin red"]
+        admin["<b>Panel de administración</b><br/>Angular 21 · Firebase Hosting"]
+        clinic["<b>Consultorio</b><br/>Angular 22"]
+    end
+
+    updates[["Feed de actualizaciones<br/>farma-jyv-updates.web.app"]]
+    api["<b>Cloud Function api</b> · us-central1 · 2ª gen<br/>NestJS sobre Express · /v1 · 512 MiB · 60 s<br/>única puerta de escritura al dato"]
+    crons["<b>Funciones programadas</b> · America/Mexico_City<br/>dailySalesReport 00:10 · monthlySalesReport día 1 00:20<br/>dailyInventoryAlerts 07:00 · dailyFirestoreBackup 02:00"]
+
+    subgraph firebase["Firebase · proyecto farma-jyv"]
+        direction LR
+        auth["Firebase Auth<br/>rol y permisos en los claims"]
+        fs[("Firestore<br/>~34 colecciones")]
+        gcs[("Cloud Storage")]
+        backups[("Respaldos<br/>30 días los automáticos")]
+    end
+
+    subgraph ext["Servicios externos"]
+        direction LR
+        mp["Mercado Pago Point<br/>terminal desactivada hoy"]
+        r2[("Cloudflare R2<br/>comprobantes de factura")]
+        correo["Resend<br/>correo de reportes"]
+    end
+
+    updates -.->|"actualiza"| pos
+    pos ==>|"HTTPS · cola offline"| api
+    admin ==> api
+    clinic ==> api
+
+    api --> auth
+    api ==> fs
+    api --> gcs
+    api --> r2
+    api --> mp
+    mp -. "webhook firmado" .-> api
+
+    crons ==> fs
+    crons --> correo
+    crons --> backups
+```
+
+Lo que distingue al POS de las otras dos: **no depende de la red para vender**.
+Escribe en su propia SQLite y sincroniza después. Todo lo demás de este
+documento sale de esa decisión.
 
 ---
 
@@ -14,17 +76,36 @@ Documento generado a partir del código en `main` (commit `f2ccc96`). Versión d
 | Idioma UI | Español (`es` default, `en` presente en `public/i18n/en.json`) |
 | Autenticación | Firebase Auth (email/password), SDK modular directo |
 | Autorización | `GET /auth/me` → rol (documento `roles`) + permisos por área |
-| Persistencia local | `localStorage` (cola offline, ticket en curso, ventas en pausa) |
+| Persistencia local | **SQLite + Prisma** en el proceso principal (ventas, turnos, movimientos, catálogo, cola de sincronización). `localStorage` solo para el ticket en curso y las ventas en pausa |
 | Impresión | `window.print()` sobre componentes montados al vuelo; cajón por ESC/POS vía IPC |
 | Pago tarjeta | Mercado Pago Point (órdenes + polling) a través del backend |
-| Tamaño | ~8.000 líneas (`src` + `electron`), 60 archivos fuente |
-| Pruebas | Vitest sobre jsdom, 44 archivos, 423 casos — todos pasan (`npm test`) |
+| Tamaño | ~24.500 líneas (`src` + `electron`), 123 archivos fuente |
+| Pruebas | Vitest: **942** casos en `src` (jsdom) + **238** en `electron/test` (Prisma falso en memoria); 66 archivos de prueba |
+| Distribución | DMG/ZIP por `electron-builder`; feed propio en Firebase Hosting (`farma-jyv-updates.web.app`) |
 
 ### Alcance funcional implementado
 
-Venta (búsqueda/escaneo, ticket, descuentos, pausa), cobro (efectivo, tarjeta Point, mixto), **cobro directo sin venta** (terminal o link de pago con QR, en colección aparte), turno de caja (apertura, movimientos, cierre con corte Z propio), cumplimiento COFEPRIS (grupos I–VI, receta, retención, libro de control), desglose fiscal IVA/IEPS, cola offline idempotente, historial del día, reportes locales, anulación (solo `admin`), impresión de ticket/corte/etiqueta, auto-update Electron.
+**Mostrador**: venta (búsqueda, escaneo, ticket, descuentos con tope por rol,
+pausa), servicios de farmacia con prestador y comisión, cobro en efectivo,
+tarjeta y mixto, cumplimiento COFEPRIS (grupos I–VI, receta, retención, libro de
+control), desglose fiscal IVA/IEPS, impresión de ticket, corte y etiqueta,
+anulación (solo con permiso).
 
-No implementado (ver `GOALS.md`): timbrado CFDI, devoluciones/notas de crédito, lectura X, reportes de servidor, multi-caja con selección al login, pantalla de cliente.
+**Caja**: turno con apertura, gastos y movimientos, cierre con corte Z,
+auto-cierre al cambiar el día, caja de la farmacia (movimientos sin turno) y
+auditoría de cortes y gastos para admin.
+
+**Almacén y catálogo**: entrada de stock contra factura, alta y edición de
+producto, categorías, proveedores y facturas.
+
+**Plataforma**: todo local-first sobre SQLite con cola de sincronización
+idempotente, sincronización manual con tope de 15 minutos para el cajero,
+actualización automática en Windows y manual en macOS.
+
+No implementado (ver `GOALS.md`): timbrado CFDI, devoluciones en caja, lectura X,
+reportes de servidor, multi-caja con selección al login, pantalla de cliente.
+Oculto tras bandera: cobro directo sin venta (`directChargeEnabled`) y terminal
+Point (`terminalEnabled`).
 
 ---
 
@@ -405,15 +486,72 @@ Al guardar se llama `ProductService.invalidate()` —el stock recién recibido d
 
 ---
 
-## 10. Cola offline
+## 10. Local-first y sincronización
 
-`SaleService` con `localStorage['pos.pending-sales']`.
+El POS **no escribe contra la API al cobrar**. Escribe en SQLite (proceso
+principal, vía IPC) y sube después. La red deja de ser condición para vender.
 
-- **Encolado**: solo ante `HttpErrorResponse.status === 0` (sin red). Devuelve una `Sale` sintética con `id: offline-<ts>`, `folio: PENDIENTE-<ts>`, `taxSummary` calculado localmente y `change`/`cashAmount`/`cardAmount` resueltos por `resolveTender`, para que el ticket se imprima igual.
-- **Flush**: en el evento `online` y en reintentos manuales. `concatMap` — **en serie**, para no perder el orden de folios ni abrir N peticiones al recuperar la red. Cada venta viaja con su `idempotencyKey` original: si el POST anterior sí llegó y se perdió la respuesta, el backend devuelve la venta ya registrada en vez de duplicarla. Flag `flushing` evita solapes.
-- **Bloqueo**: un 4xx (excepto 401, 408, 429) marca `blockedReason` y la venta deja de reintentarse — turno cerrado, sin stock, orden Point reusada no se arreglan reintentando. El cajero las revisa desde el badge rojo de la barra y decide **reintentar** (misma llave) o **descartar** (con `confirm`; descartar en silencio sería perder una venta ya cobrada).
+### Qué vive en SQLite
 
-Badge ámbar = pendientes de sync. Badge rojo = rechazadas.
+`electron/db/`: `sales.js`, `cash-sessions.js`, `cash-movements.js`,
+`products.js`, `pharmacy-services.js`, `sync-runs.js`. El esquema está en
+`electron/prisma/schema.prisma` y las 12 migraciones se aplican solas al
+arrancar (`migrate.js`), con respaldo previo de la base.
+
+La base vive en `app.getPath('userData')`, **una por equipo**: el historial y los
+turnos son de la caja, no del cajero. De ahí sale el filtro por `cashierId` del
+historial.
+
+### El ciclo de sincronización
+
+`SyncScheduler.runPush()` impone un orden que no es estético — cada paso depende
+del anterior:
+
+```mermaid
+flowchart LR
+    cat["1 · catálogo y<br/>entradas de stock"] --> hijos["2 · gastos y ventas<br/>de turnos ya remotos"]
+    hijos --> cierres["3 · cierres de turno"]
+    cierres --> altas["4 · altas de turno<br/>(el hueco ya está libre)"]
+    altas --> hijos2["5 · segunda pasada:<br/>hijos de los turnos recién creados"]
+```
+
+Una venta de un producto recién dado de alta necesita que ese producto exista
+arriba; una venta que consumió mercancía recién recibida necesita su entrada de
+stock; un turno cerrado no acepta movimientos. Y el backend admite **un turno
+abierto por cajero**, así que el cierre libera el hueco antes del alta del turno
+nuevo. Las corridas se encadenan (`pushChain`): dos solapadas rompen ese orden.
+
+### Envío de ventas
+
+`POST /sales/bulk` en trozos de 100 (el backend rechaza el arreglo entero si
+pasa de 200). Si un lote se rechaza en bloque, se **bisecta** hasta aislar la
+venta culpable, en vez de condenar a las 200 que iban con ella.
+
+Cada venta viaja con su `idempotencyKey` original: si el POST anterior llegó y
+se perdió la respuesta, el backend devuelve la venta ya registrada.
+
+### Los tres estados de una venta en cola
+
+| Estado | Qué significa | Dónde se ve |
+|---|---|---|
+| Pendiente | Lista para subir en el ciclo siguiente | Chip ámbar de la barra de venta ("N sin sincronizar") y punto en el botón Sincronizar |
+| Esperando | Su turno o alguno de sus productos aún no tiene `remoteId`; no se puede enviar todavía | Mismo chip, con el motivo: "Espera a que suba el turno" |
+| Rechazada | El servidor dijo que no. No se reintenta sola | Insignia roja "Rechazados N" del shell, con Reintentar y Descartar |
+
+La distinción importa: una venta *esperando* se resuelve sola cuando su turno
+suba; una *rechazada* necesita que alguien lea el motivo. Antes las
+*esperando* se omitían de las lecturas de UI y no aparecían en ningún lado —
+el aviso del corte llegó a decir "Quedan 1" con dos movimientos sin subir.
+
+`getPendingPush` acepta `contarIntentos`: **solo el push real** gasta cupo de
+reintentos. Las 14 lecturas de UI que usan la misma consulta no lo consumen; al
+sexto intento fallido la venta pasa a rechazada con un motivo accionable.
+
+### Al cerrar sesión o salir
+
+"Cerrar turno antes de salir" sincroniza primero, avisa cuántos movimientos
+quedan sin subir y deja cortar igual. Cerrar la ventana no cierra el turno: la
+sesión sigue iniciada y el turno puede retomarse el mismo día.
 
 ---
 
@@ -466,13 +604,68 @@ Tres plantillas: `SaleTicket` (encabezado de farmacia, partidas, reparto efectiv
 
 ## 14. Electron
 
-`main.js` — ventana única 1360×900 (mín. 1024×700), `contextIsolation: true`, `nodeIntegration: false`, `webSecurity: true`. Carga el dev server si `NODE_ENV=development` o `--dev`; si no, `dist/farma-jyv-pos/browser/index.html`, y si falta el build sale con mensaje explícito. Locale forzado a `es-MX`. `setPermissionRequestHandler` solo concede `geolocation`.
+`main.js` — ventana única 1360×900 (mín. 1024×700), `contextIsolation: true`,
+`nodeIntegration: false`, `webSecurity: true`. Carga el dev server con
+`NODE_ENV=development` o `--dev`; si no, `dist/farma-jyv-pos/browser/index.html`
+por `file://`. Locale forzado a `es-MX`. `setPermissionRequestHandler` solo
+concede `geolocation`.
 
-IPC expuesto por `preload.js` vía `contextBridge` como `window.electronAPI`: `getAppVersion`, `getDeviceInfo` (MAC + hostname → `id` estable para identificar el equipo de venta), `openCashDrawer`.
+`preload.js` expone `window.electronAPI` por `contextBridge`. Ya no es un IPC
+mínimo: por ahí pasan **todas** las operaciones de datos (`sales`,
+`cashSessions`, `cashMovements`, `catalog`, `sync`), más `getDeviceInfo`
+(MAC + hostname, identifica el equipo), `openCashDrawer` y el protocolo de
+cierre de ventana.
 
-Auto-update con `electron-updater` (`autoDownload = true`, instala al cerrar), solo fuera de dev, con feed sobreescribible por `UPDATE_URL`. Todos los errores del updater son no-op logueados — un feed caído no debe tumbar la caja.
+### DevTools y menú
 
-`electron-builder` (clave `build` de `package.json`): `appId mx.farmajyv.pos`, salida `/release`, asar. macOS dmg+zip arm64/x64 (`identity: null`, **sin firmar**), Windows nsis+zip. Feed de publicación `https://updates.farmajyv.mx/pos` — hoy placeholder.
+En producción, DevTools queda cerrado: `isDevToolsShortcut()` intercepta F12,
+⌘⌥I y Ctrl+Shift+I/J/C, y un `devtools-opened` los cierra por si algo más los
+abre. Además se instala un **menú propio**, porque el de Electron trae
+"View → Toggle Developer Tools" y bloquear el atajo no bastaba. Se conservan
+appMenu, Edición y Ventana: sin ellos macOS pierde ⌘Q, ⌘C y ⌘V, y el cajero no
+puede ni pegar un código.
+
+No es paranoia: desde la consola se reescribía el rol en memoria y se saltaban
+los permisos de la UI.
+
+### Content Security Policy
+
+`src/index.html` declara `script-src 'self' file:` — `file:` porque el
+empaquetado carga por `file://`, donde `'self'` no aplica. `style-src` lleva
+`'unsafe-inline'` (Angular incrusta CSS crítico, PrimeNG inyecta estilos en
+runtime). **`connect-src` queda fuera a propósito**: habría que enumerar API,
+Firebase, dev server y emulador, y un host que falte no da error visible, deja
+la caja sin vender.
+
+Efecto colateral que descubrió la CSP: Angular inyectaba el CSS crítico con
+`<link media="print" onload="this.media='all'">`, un manejador inline. Con CSP
+ese `onload` no corre y la hoja se queda en `media="print"` — la app sin
+estilos. Por eso `inlineCritical: false` en las configuraciones `production` y
+`electron` de `angular.json`.
+
+### Empaquetado
+
+`electron-builder` (clave `build` de `package.json`): `appId mx.farmajyv.pos`,
+salida `/release`, asar con `@prisma/client` y `.prisma` desempacados.
+
+⚠️ **El cliente de Prisma se declara con la forma `from`/`to`, no con glob.**
+Los patrones de `files` no entran en carpetas ocultas: `node_modules/.prisma/**/*`
+no incluía nada y el paquete salía sin el cliente generado. La app abría el
+login y moría con `MODULE_NOT_FOUND` al primer acceso a la base. Ninguna prueba
+lo ve, porque solo existe dentro del `.app`.
+
+macOS dmg+zip arm64/x64 con `identity: null` (**sin firmar**): la instalación
+pide "clic derecho → Abrir" y **no hay auto-actualización en Mac** —
+`electron-updater` rechaza un paquete sin firma. En Windows (nsis) sí actualiza.
+
+### Publicación
+
+`npm run release:mac` compila, empaqueta, prepara `dist-updates/` y despliega a
+Firebase Hosting (`farma-jyv-updates.web.app`). `scripts/publicar-actualizacion.mjs`
+es el cuello de botella por el que pasa todo lo que se publica, y ahí vive la
+verificación: si un `.app` no lleva `.prisma` desempacado, **aborta antes de
+subir**. También genera la portada de descargas, leyendo la versión del feed
+para no anunciar una que ya no está.
 
 ---
 
@@ -553,49 +746,103 @@ La paleta sale del logo (`public/brand/logo.png`): verde de las manos y la cruz 
 
 ## 17. Pruebas
 
-`npm test` (`ng test`, builder `@angular/build:unit-test` con Vitest sobre jsdom) → **40 archivos, 366 casos**. Cobertura: 72 % de sentencias en total; servicios ~96 %, utilidades ~98 %, plantillas de componentes por debajo.
+| Suite | Comando | Casos |
+|---|---|---|
+| Angular (jsdom) | `npm test` | **942** |
+| Proceso principal | `npm run test:electron` | **238** |
+| Ambas | `npm run test:all` | 1 180 |
 
-- **Utilidades**: `money`, `taxes`, `tender`, `controlled`, `date-range`, `session-expiry`, `point-order`, `api.utils`, `models`.
-- **Servicios**: todos los del POS con `HttpTestingController` — venta (incluida la cola offline: encolado sin red, bloqueo por 4xx, reintento con la misma llave), cobro directo, Mercado Pago, turno de caja, catálogo, lotes, clientes, libro de control, almacenamiento local, promociones, cajón e impresión.
-- **Core**: notificaciones, salud de la API, sonidos, `AuthService`, guards e interceptor (401 → cierre de sesión).
-- **Pantallas**: venta, cobro, cobro directo, historial, reportes, libro de control, diálogos de caja, tickets, shell y login.
-- **Infraestructura**: `src/testing/setup.ts` rellena `ResizeObserver`, `IntersectionObserver` y `matchMedia`, que jsdom no implementa y PrimeNG sí usa. Registrado en `angular.json` (`test.options.setupFiles`).
+`test:electron` corre sobre `electron/db/*.js` con un **Prisma falso en
+memoria** (`electron/test/fake-prisma.mjs`): es la capa donde aparecieron los
+bugs de dinero, y el builder de Angular ni la mira. Incluye `e2e-real-sqlite`,
+que sí abre una base de verdad.
 
-En `backend-farma-jyv`, `test/mercado-pago.spec.ts` cubre la integración con `fetch` sustituido (22 casos, sin tocar la cuenta real ni el emulador): cuerpo de la orden, traducción de errores, reintentos y su ausencia en `POST`, respaldo de merchant orders, cancelación y firma del webhook.
+Qué cubre, por capas:
 
-**Sin cobertura**: e2e reales, y las ramas de plantilla de las pantallas grandes (`sale.html`, `checkout.html`). La prueba de la cola offline con red intermitente y la de Point con TPV física siguen siendo manuales (ver `GOALS.md`).
+- **Utilidades**: `money`, `taxes`, `tender`, `controlled`, `date-range`,
+  `session-expiry`, `point-order`, `api.utils`, `models` — las reglas
+  replicadas del backend, que es donde un error se convierte en dinero mal
+  cobrado.
+- **Datos locales**: ventas (cola, intentos, traducción de ids remotos,
+  anulación), turnos, movimientos, catálogo, migraciones. Incluye un guardián
+  que compara los `@@index` del schema contra los `CREATE INDEX` de las
+  migraciones: un índice declarado y nunca creado ya pasó inadvertido.
+- **Servicios y pantallas**: venta, cobro, historial, reportes, libro de
+  control, caja, gastos, facturas, catálogo, shell y login.
+- **Seguridad**: `security.spec.mjs` cubre navegación permitida, destino de
+  impresora y los atajos de DevTools (incluido que ⌘C y F9 **no** se confundan
+  con ellos).
+
+**Sin cobertura automatizada**: el pago mixto con TPV física (no hay terminal
+vinculada) y el auto-cierre a las 24:00 (requiere mover el reloj). La pasada de
+QA de septiembre sí ejercitó la app empaquetada con un rol `cashier` real y un
+proxy que bloqueaba toda escritura — ver `GOALS.md`.
 
 ---
 
 ## 18. Riesgos y deuda técnica
 
-**Operativos / de datos**
+Estado a 2026-09-16. El detalle vivo, con su historia, está en `GOALS.md`.
 
-1. **Catálogo sin `controlledGroup`**: el POS cae al flag heredado `requiresPrescription`, que no exige folio ni retención ni deja renglón en el libro. Es la brecha de cumplimiento más directa y se cierra capturando el grupo en el catálogo, no en el POS.
-2. **Point sin prueba física**: código completo, emparejado de TPV y venta real de prueba pendientes.
-3. **Modo offline sin prueba real sin red**: flush, conflictos y mensajes están escritos pero no ejercitados end-to-end.
-4. **Reportes calculados en el cliente** sobre `listAll` paginado: con volumen alto, muchas peticiones y agregación en memoria. La API ya expone `/reports/*`.
-5. **Corte Z reimpreso localmente**: `POST :id/close` ya devuelve el recibo renderizado (58/80 mm) y el POS lo descarta.
-6. **Sin lectura X**: solo hay corte Z al cerrar; el turno no puede fotografiarse sin cerrarlo.
-7. **Sin devoluciones**: `POST /sale-returns` existe en el backend; en caja solo hay anulación total de la venta.
-8. **CFDI**: se captura `billing` y se marca `pending`; sin PAC elegido no hay timbrado. No prometer facturación en caja.
+**Cumplimiento y dinero**
+
+1. **Catálogo sin `controlledGroup`**: el POS cae al flag heredado
+   `requiresPrescription`, que no exige folio ni retención ni deja renglón en el
+   libro de control. Es la brecha de cumplimiento más directa y se cierra
+   capturando el grupo en el catálogo (panel), no en el POS.
+2. **Point sin prueba física**: el código está completo y `terminalEnabled`
+   está en `false`; la tarjeta se registra sin mandar nada a la terminal. Falta
+   emparejar la TPV y hacer una venta real.
+3. **CFDI**: se captura `billing` y se marca `pending`; sin PAC elegido no hay
+   timbrado. No prometer facturación en caja.
+4. **Sin devoluciones ni lectura X en caja**: ambas existen en el backend
+   (`POST /sale-returns`, `GET /cash-sessions/:id/x-report`); en el mostrador
+   solo hay anulación total.
+5. **`catalogUnitPrice` se escribe y nadie lo lee**: el backend marca la partida
+   cobrada a un precio distinto del catálogo, y ninguna pantalla lo muestra. El
+   vigilante natural es un reporte del panel: el POS es la parte interesada.
+
+**Equipo y datos locales**
+
+6. **SQLite local sin cifrar** con recetas, folios y RFC. Prisma no habla
+   SQLCipher y cifrar con una llave que vive en el mismo equipo no protege de
+   quien tiene el equipo. El control es **cifrado de disco obligatorio**
+   (FileVault / BitLocker), a verificar caja por caja antes de instalar.
+7. **Sin firma de código en macOS** (`identity: null`): instalación manual con
+   "clic derecho → Abrir" y **sin auto-actualización**. Se resuelve con un Apple
+   Developer ID.
+8. **Impresora y datos del ticket compilados**: `cashDrawer.printerName` y los
+   datos de la farmacia viven en `environment.electron.ts`. Dos cajas con
+   impresoras distintas hoy exigen dos builds; conviene moverlo a un ajuste
+   guardado en el equipo.
+9. **Multi-caja**: `storeId`/`posId`/`terminalId` son fijos en el entorno; no
+   hay selección de caja al iniciar sesión.
 
 **Técnicos**
 
-9. `window.confirm`/`window.alert` nativos en varios flujos (vaciar ticket, quitar línea > 5 piezas, anular, descartar venta bloqueada) — en Electron son diálogos del sistema, inconsistentes con el resto de la UI.
-10. `isLoggingOut` es estado global de módulo en el interceptor: correcto en la app real (una ventana), pero frágil en pruebas.
-11. Firma de código ausente en macOS (`identity: null`) y feed de actualizaciones apuntando a un host placeholder.
-12. `en.json` existe y está completo pero no hay selector de idioma en la UI.
-13. `PromoService` lee reglas de `environment.promos` — cambiar una promo exige recompilar y redistribuir el instalador.
-14. Multi-caja: `storeId`/`posId`/`terminalId` son fijos en el entorno; no hay selección de caja al iniciar sesión.
+10. `window.confirm`/`window.alert` nativos en varios flujos (vaciar ticket,
+    anular, descartar venta pendiente, sincronizar) — en Electron son diálogos
+    del sistema, inconsistentes con el resto de la UI.
+11. **Reportes calculados en el cliente**: la API ya expone `/reports/*`, pero
+    el rol `cashier` no tiene `dashboard:read`, así que la pantalla agrega en
+    memoria desde la base local.
+12. `en.json` está completo y no hay selector de idioma en la UI.
+13. `PromoService` lee reglas de `environment.promos`: cambiar una promo exige
+    recompilar y redistribuir el instalador.
+14. **La primera pasada de cierres puede condenar un hijo** cuando hay un alta
+    esperando el hueco del cajero. Es una decisión consciente —entre condenar un
+    gasto y dejar la caja sin poder abrir, se elige lo segundo— y solo se paga
+    en ese caso concreto.
 
-**Mercado Pago (revisión 2026-08-08)**
+**Mercado Pago**
 
-15. **`MERCADOPAGO_WEBHOOK_SECRET` vacío**: el código ya rechaza notificaciones sin firma en producción, pero hasta pegar el secreto del panel el webhook no resuelve nada y todo depende del sondeo.
-16. **Sin conciliación diaria**: una orden aprobada sin venta ni cobro directo detrás solo queda en el log del backend; falta la vista que la haga accionable.
-17. **Reembolso de cobro directo**: `cancelDirectCharge` rechaza a propósito los cobros aprobados; el reembolso existe en la API de Point pero no hay UI ni endpoint del módulo.
-18. **TTL de Firestore** pendiente en `directChargeIdempotencyKeys` y `mercadoPagoWebhookEvents`: sin la política, ambas colecciones crecen sin límite.
-19. **El módulo `direct-charges` no está desplegado**: hasta desplegar el backend, la pantalla de cobro directo responde 404.
+15. **`MERCADOPAGO_WEBHOOK_SECRET` vacío**: el backend ya rechaza notificaciones
+    sin firma en producción, pero hasta pegar el secreto del panel todo depende
+    del sondeo.
+16. **Sin conciliación diaria**: una orden aprobada sin venta detrás solo queda
+    en el log del backend.
+17. **Cobro directo oculto**: `directChargeEnabled: false`. El módulo y la
+    pantalla siguen completos; esto solo quita la entrada del menú.
 
 ---
 
@@ -605,3 +852,9 @@ En `backend-farma-jyv`, `test/mercado-pago.spec.ts` cubre la integración con `f
 - `GOALS.md` — backlog priorizado (P0–P3) y bitácora de lo hecho.
 - `README.md` — comandos y stack.
 - `graphify-out/` — grafo de conocimiento del código (`graphify query`, `path`, `explain`).
+- `docs/INSTALACION_CAJA.md` — poner el POS en una caja nueva.
+- `docs/SETUP.md` — preparar una máquina de desarrollo.
+- `docs/MANUAL_USUARIO.md` — manual del cajero.
+- `docs/arquitectura.mmd` / `docs/arquitectura.png` — diagrama del sistema.
+- `backend-farma-jyv/docs/DOSSIER_TECNICO.md` — la API que consume este POS.
+- `backend-farma-jyv/RUNBOOK.md` — operación en producción.
