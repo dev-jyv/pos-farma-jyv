@@ -1271,6 +1271,22 @@ describe('Sale', () => {
       }
     });
 
+    it('con el cobro abierto un sync no cambia el total; al cancelar sí se aplica', () => {
+      component.addToCart(product(), 2);
+      component.openCheckout();
+      expect(component.checkoutVisible()).toBe(true);
+
+      TestBed.inject(PromoService).setPromotions([promo2x1]);
+      TestBed.tick();
+      // El diálogo muestra `total()` en vivo: cambiarlo a media venta deja mal
+      // el cambio calculado o la order de la terminal creada por otro monto.
+      expect(component.total()).toBe(100);
+
+      component.checkoutVisible.set(false);
+      TestBed.tick();
+      expect(component.total()).toBe(50);
+    });
+
     it('si entra una promo, el manual se recorta al 20 % de lo que queda', () => {
       component.addToCart(product(), 2);
       component.updateLineDiscount('product:p1', 20); // 20 % de $100, sin promo

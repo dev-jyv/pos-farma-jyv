@@ -20,6 +20,7 @@ export class PromoService {
   private readonly promotions = signal<PromotionDto[]>([]);
   /** Cambia cada vez que llegan promociones: el ticket abierto se recalcula con ella. */
   readonly version = computed(() => this.promotions());
+  private reloadSequence = 0;
 
   constructor() {
     void this.reload();
@@ -35,8 +36,14 @@ export class PromoService {
       // Sin almacén (navegador, pruebas) la caja cobra a precio de lista.
       return;
     }
+    // Solo cuenta la lectura más reciente: la del arranque puede terminar después
+    // que la que dispara el sync y dejar la lista vieja (una baja sin aplicar).
+    const request = ++this.reloadSequence;
     try {
-      this.promotions.set((await store.listActive()) ?? []);
+      const rows = (await store.listActive()) ?? [];
+      if (request === this.reloadSequence) {
+        this.promotions.set(rows);
+      }
     } catch {
       // Una lectura fallida no borra lo que ya se tenía: mejor la promo de hace
       // un rato que cobrar a precio de lista algo que está en promoción.

@@ -114,4 +114,26 @@ describe('PromoService', () => {
     } as unknown as CartLine;
     expect(service.promoOnlyDiscount(servicio)).toBe(0);
   });
+
+  it('una lectura vieja que termina tarde no pisa a la más reciente', async () => {
+    let resolverVieja!: (rows: PromotionDto[]) => void;
+    let resolverNueva!: (rows: PromotionDto[]) => void;
+    const listActive = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<PromotionDto[]>((r) => (resolverVieja = r)))
+      .mockImplementationOnce(() => new Promise<PromotionDto[]>((r) => (resolverNueva = r)));
+    const w = window as unknown as { electronAPI?: unknown };
+    w.electronAPI = { promotions: { listActive } };
+    try {
+      const vieja = service.reload(); // la del arranque
+      const nueva = service.reload(); // la que dispara el sync, ya con la baja
+      resolverNueva([]);
+      await nueva;
+      resolverVieja([promotion()]);
+      await vieja;
+    } finally {
+      delete w.electronAPI;
+    }
+    expect(service.promoOnlyDiscount(line(2))).toBe(0);
+  });
 });

@@ -288,10 +288,18 @@ export class Sale {
 
     // El ticket solo se recalculaba al tocarlo: una promo que llegaba con el
     // ticket ya armado (arranque, sync) no aplicaba, y una retirada seguía
-    // descontando. `untracked`: el efecto depende solo de las promociones, no del
-    // carrito que él mismo reescribe.
+    // descontando. `untracked`: el efecto depende de las promociones y de si el
+    // cobro está abierto, no del carrito que él mismo reescribe.
+    //
+    // **Nunca con el cobro abierto**: el diálogo muestra `total()` en vivo, y un
+    // sync a media venta cambiaba el importe con el cambio ya calculado o la
+    // order de la terminal ya creada por el monto anterior. Al cerrarse sin
+    // cobrar, el efecto vuelve a correr y aplica lo que llegó mientras tanto.
     effect(() => {
       this.promoService.version();
+      if (this.checkoutVisible()) {
+        return;
+      }
       untracked(() => this.repriceCart());
     });
   }

@@ -283,6 +283,30 @@ describe('SyncScheduler — catálogos de servicios contra un backend viejo', ()
     );
   });
 
+  it('si falla el pull de productos, igual baja servicios, doctores y promociones', async () => {
+    const promesa = scheduler.syncNow();
+    await flush(40);
+    http
+      .expectOne((req) => req.url.endsWith('/products/sync'))
+      .flush({}, { status: 500, statusText: 'Internal Server Error' });
+    await flush();
+    http.expectOne((req) => req.url.endsWith('/pharmacy-services/sync')).flush({ data: [] });
+    await flush();
+    http.expectOne((req) => req.url.endsWith('/service-providers/sync')).flush({ data: [] });
+    await flush();
+    http
+      .expectOne((req) => req.url.endsWith('/promotions/sync'))
+      .flush({ data: [{ id: 'promo-1', updatedAt: '2026-09-24T10:00:00.000Z' }] });
+    await flush();
+    await promesa;
+
+    // La baja de una promo no puede depender de que el catálogo de productos baje.
+    expect(upsertPromotions).toHaveBeenCalledWith([expect.objectContaining({ id: 'promo-1' })]);
+    const corridas = recordRun.mock.calls.map(([run]) => run);
+    expect(corridas.find((run) => run.entity === 'products')?.status).toBe('error');
+    expect(corridas.find((run) => run.entity === 'promotions')?.status).toBe('ok');
+  });
+
   it('baja las promociones y avisa al carrito para que las relea', async () => {
     const avisos = vi.fn();
     window.addEventListener('farmajyv:promotions-synced', avisos);

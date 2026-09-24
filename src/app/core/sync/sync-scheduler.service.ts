@@ -560,6 +560,11 @@ export class SyncScheduler {
         status: 'error',
         errorMessage,
       });
+      // Los demás catálogos no dependen de los productos: cada uno lleva su
+      // cursor y su registro de error. Sin esto, un producto que el SQLite no
+      // aceptaba dejaba sin bajar la baja de una promoción, y la caja la seguía
+      // aplicando.
+      await this.doPullServiceCatalogs();
       return { ok: false, pulled: 0, errorMessage };
     }
   }
