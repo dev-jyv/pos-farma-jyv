@@ -363,22 +363,23 @@
               </div>
 
               <div class="mt-3 flex items-center gap-2">
-                <div class="inline-flex items-center overflow-hidden rounded-lg border border-slate-200 bg-white">
+                <div class="inline-flex h-8 items-stretch overflow-hidden rounded-lg border border-slate-200 bg-white">
                   <button
                     type="button"
-                    class="px-2.5 py-1.5 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
+                    class="flex w-8 items-center justify-center text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
+                    [attr.aria-label]="'Quitar una pieza de ' + nameOf(line)"
                     [disabled]="line.quantity <= 1"
                     (click)="bumpQuantity(keyOf(line), -1)"
                   >
                     <i class="pi pi-minus text-xs"></i>
                   </button>
-                  <span class="min-w-9 border-x border-slate-200 px-2 py-1.5 text-center text-sm font-bold tabular-nums">
+                  <span class="flex w-11 items-center justify-center border-x border-slate-200 text-sm font-bold tabular-nums">
                     @if (keyOf(line) === lastLineId()) {
                       <input
                         #lastQtyInput
                         type="number"
                         min="1"
-                        class="w-10 border-0 bg-transparent text-center outline-none"
+                        class="[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none h-full w-full border-0 bg-transparent text-center outline-none"
                         [attr.aria-label]="'Cantidad de ' + nameOf(line)"
                         [ngModel]="line.quantity"
                         (ngModelChange)="updateQuantity(keyOf(line), $event)"
@@ -389,7 +390,8 @@
                   </span>
                   <button
                     type="button"
-                    class="px-2.5 py-1.5 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
+                    class="flex w-8 items-center justify-center text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
+                    [attr.aria-label]="'Agregar una pieza de ' + nameOf(line)"
                     [disabled]="maxQuantityOf(line) !== null && line.quantity >= maxQuantityOf(line)!"
                     (click)="bumpQuantity(keyOf(line), 1)"
                   >
@@ -397,6 +399,12 @@
                   </button>
                 </div>
 
+                <span class="ml-auto text-sm font-bold tabular-nums text-slate-900">
+                  ${{ unitPriceOf(line) * line.quantity - line.discountAmount | number: '1.2-2' }}
+                </span>
+              </div>
+
+              <div class="mt-2 flex flex-wrap items-center gap-2">
                 <label class="flex items-center gap-1 text-xs text-slate-500">
                   Desc.
                   <!-- El `<label>` ya nombra el campo, pero dice "Desc." en las
@@ -406,24 +414,24 @@
                     type="number"
                     min="0"
                     step="0.01"
-                    class="w-16 rounded-md border border-slate-200 bg-white px-1.5 py-1 text-right text-sm tabular-nums outline-none focus:border-emerald-500"
+                    class="[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none h-7 w-20 rounded-md border border-slate-200 bg-white px-2 text-right text-sm tabular-nums outline-none focus:border-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
                     [attr.aria-label]="'Descuento de ' + nameOf(line)"
+                    [disabled]="promotionOf(line) !== null"
+                    [attr.title]="promotionOf(line) ? 'El descuento lo fija la promoción' : null"
                     [value]="line.discountAmount"
                     (change)="updateLineDiscount(keyOf(line), $any($event.target).valueAsNumber || 0, $any($event.target))"
                   />
                 </label>
                 @if (promotionOf(line); as promo) {
                   <span
-                    class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800"
+                    class="inline-flex min-w-0 items-center gap-1 rounded-md bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-800"
                     [attr.title]="promo.name + ' −$' + (promo.discountAmount | number: '1.2-2')"
                   >
-                    Promo {{ promo.name }} −${{ promo.discountAmount | number: '1.2-2' }}
+                    <i class="pi pi-tag text-[10px]"></i>
+                    <span class="truncate">{{ promo.name }}</span>
+                    <span class="shrink-0 tabular-nums">−${{ promo.discountAmount | number: '1.2-2' }}</span>
                   </span>
                 }
-
-                <span class="ml-auto text-sm font-bold tabular-nums text-slate-900">
-                  ${{ unitPriceOf(line) * line.quantity - line.discountAmount | number: '1.2-2' }}
-                </span>
               </div>
             </li>
           }

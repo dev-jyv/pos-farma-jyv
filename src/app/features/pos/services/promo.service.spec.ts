@@ -62,9 +62,11 @@ describe('PromoService', () => {
     expect(service.apply([line(1)])[0]).toMatchObject({ promotion: null });
   });
 
-  it('el manual se suma a la promo y el total nunca pasa el de la línea', () => {
-    expect(service.apply([line(2)], { 'product:local-1': 5 })[0].discountAmount).toBe(15);
-    expect(service.apply([line(2)], { 'product:local-1': 500 })[0].discountAmount).toBe(70);
+  it('una línea en promoción ignora el descuento manual; sin promo vuelve a contar', () => {
+    expect(service.apply([line(2)], { 'product:local-1': 5 })[0].discountAmount).toBe(10);
+    // 1 pieza no llega al paquete: el manual guardado aplica.
+    expect(service.apply([line(1)], { 'product:local-1': 5 })[0].discountAmount).toBe(5);
+    expect(service.apply([line(1)], { 'product:local-1': 500 })[0].discountAmount).toBe(35);
   });
 
   it('compara contra el id remoto; un producto sin sincronizar no entra', () => {

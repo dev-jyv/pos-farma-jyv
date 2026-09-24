@@ -462,11 +462,10 @@ describe('Sale', () => {
     });
 
     /**
-     * El tope del 20 % es para el descuento **manual**, medido sobre lo que
-     * queda tras la promo, igual que el backend: un 2x1 no pide administrador,
-     * pero tampoco deja sumar 20 % del precio lleno encima.
+     * Una línea en promoción no admite descuento manual: el precio lo fijó la
+     * gerencia. Un 2x1 (50 %) tampoco pide administrador por el tope del 20 %.
      */
-    it('con un 2x1 el tope aplica solo al descuento manual', () => {
+    it('con un 2x1 el descuento queda bloqueado en el de la promo', () => {
       TestBed.inject(PromoService).setPromotions([
         {
           id: 'promo-1',
@@ -481,16 +480,10 @@ describe('Sale', () => {
       component.updateQuantity('product:p1', 2);
       expect(component.cart()[0].discountAmount).toBe(50);
 
-      // Promo 50 + manual 10 (20 % de los 50 que quedan): permitido.
+      // El 2x1 (50 %) no pide administrador, y el manual no se le suma.
       component.updateLineDiscount('product:p1', 60);
-      expect(component.cart()[0].discountAmount).toBe(60);
-
-      // Manual 11: más del 20 %.
-      component.updateLineDiscount('product:p1', 61);
-      expect(component.cart()[0].discountAmount).toBe(60);
-      expect(notifyError).toHaveBeenCalledWith(
-        'Descuento mayor a 20% requiere autorización de un administrador.',
-      );
+      expect(component.cart()[0].discountAmount).toBe(50);
+      expect(component.total()).toBe(50);
     });
 
     it('el administrador sí puede forzarlo', () => {
@@ -1287,13 +1280,16 @@ describe('Sale', () => {
       expect(component.total()).toBe(50);
     });
 
-    it('si entra una promo, el manual se recorta al 20 % de lo que queda', () => {
+    it('si entra una promo, el manual se deja de aplicar y vuelve si la promo sale', () => {
       component.addToCart(product(), 2);
       component.updateLineDiscount('product:p1', 20); // 20 % de $100, sin promo
       TestBed.inject(PromoService).setPromotions([promo2x1]);
       TestBed.tick();
-      // Promo 50 + manual recortado a 10 (20 % de los 50 que quedan).
-      expect(component.cart()[0].discountAmount).toBe(60);
+      expect(component.cart()[0].discountAmount).toBe(50);
+
+      TestBed.inject(PromoService).setPromotions([]);
+      TestBed.tick();
+      expect(component.cart()[0].discountAmount).toBe(20);
     });
   });
 });

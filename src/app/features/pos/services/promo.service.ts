@@ -63,7 +63,10 @@ export class PromoService {
   apply(lines: CartLine[], manualByKey: Record<string, number> = {}): CartLine[] {
     return lines.map((line) => {
       const promotion = this.promotionFor(line);
-      const manual = Math.max(0, manualByKey[lineKey(line)] ?? 0);
+      // Una línea en promoción no admite descuento manual: el precio lo fijó la
+      // gerencia al crear la promo. El manual guardado se conserva y vuelve a
+      // contar si la promo deja de aplicar (baja la cantidad, se retira).
+      const manual = promotion ? 0 : Math.max(0, manualByKey[lineKey(line)] ?? 0);
       const lineTotal = lineUnitPrice(line) * line.quantity;
       const discountAmount = Math.min(lineTotal, (promotion?.discountAmount ?? 0) + manual);
       if (!isProductLine(line)) {

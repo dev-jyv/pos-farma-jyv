@@ -759,6 +759,14 @@ export class Sale {
     if (!line) {
       return;
     }
+    // El campo se deshabilita con promo; esto cubre atajos o un cambio que
+    // llegue por otro camino.
+    if (this.promotionOf(line)) {
+      if (inputEl) {
+        inputEl.value = String(line.discountAmount);
+      }
+      return;
+    }
     const lineTotal = lineUnitPrice(line) * line.quantity;
     const promo = this.promoService.promoOnlyDiscount(line);
     const totalDiscount = Math.min(Math.max(0, rawAmount), lineTotal);
