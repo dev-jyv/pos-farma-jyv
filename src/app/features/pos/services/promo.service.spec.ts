@@ -136,4 +136,16 @@ describe('PromoService', () => {
     }
     expect(service.promoOnlyDiscount(line(2))).toBe(0);
   });
+
+  it('una promo con regla que esta versión no conoce no rompe el ticket', () => {
+    service.setPromotions([
+      promotion({ id: 'nueva', rule: { type: 'bundle', items: [] } as never }),
+      promotion({ id: 'buena' }),
+    ]);
+    let result: CartProductLine[] = [];
+    expect(() => (result = service.apply([line(2)]) as CartProductLine[])).not.toThrow();
+    // La desconocida se ignora y la válida sigue aplicando.
+    expect(result[0].promotion?.id).toBe('buena');
+    expect(result[0].discountAmount).toBe(10);
+  });
 });
