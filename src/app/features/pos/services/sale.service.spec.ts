@@ -190,6 +190,14 @@ describe('SaleService', () => {
       ]);
     });
 
+    it('lleva la hora local del cobro para validar la promo al sincronizar', () => {
+      const antes = Date.now();
+      const payload = service.buildPayload(cart(), 0, 'cash', 100, null, 's1');
+      const soldAt = Date.parse(payload.soldAt);
+      expect(soldAt).toBeGreaterThanOrEqual(antes);
+      expect(soldAt).toBeLessThanOrEqual(Date.now());
+    });
+
     it('normaliza los opcionales ausentes a null', () => {
       const payload = service.buildPayload(cart(), 0, 'card', null, 'order-1', 's1');
       expect(payload.customerId).toBeNull();

@@ -60,6 +60,12 @@ export interface CreateSalePayload {
    */
   idempotencyKey: string;
   /**
+   * Hora local del cobro (ISO). El payload se guarda tal cual y se empuja
+   * después por `/sales/bulk`; con ella el backend decide si la promoción estaba
+   * vigente **cuando se cobró**, no cuando llegó la red.
+   */
+  soldAt: string;
+  /**
    * Partida discriminada: el backend distingue por `kind` qué mueve inventario
    * y qué es un servicio. Un payload sin `kind` (venta encolada por una versión
    * anterior del POS) el backend lo trata como producto.
@@ -317,6 +323,7 @@ export class SaleService {
   ): CreateSalePayload {
     return {
       idempotencyKey: extras.idempotencyKey ?? newIdempotencyKey(),
+      soldAt: new Date().toISOString(),
       // El backend conoce el producto por su id de Firestore (`remoteId`), no
       // por el id local de SQLite (`id`) — son el mismo producto pero con
       // identidades distintas a cada lado hasta que el catálogo sincroniza.
