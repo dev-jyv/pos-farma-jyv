@@ -10,6 +10,7 @@ import cashMovements from '../db/cash-movements.js';
 import catalogo from '../db/pharmacy-services.js';
 import productos from '../db/products.js';
 import ventas from '../db/sales.js';
+import promociones from '../db/promotions.js';
 
 /**
  * E2E del núcleo local-first: **SQLite de verdad**, migraciones de verdad y
@@ -56,6 +57,7 @@ beforeEach(async () => {
   await prisma.product.deleteMany();
   await prisma.pharmacyService.deleteMany();
   await prisma.serviceProvider.deleteMany();
+  await prisma.promotion.deleteMany();
 });
 
 async function unProducto({ id = 'p-1', stock = 20, salePrice = 50, remoteId = null } = {}) {
@@ -789,5 +791,96 @@ describe('el catálogo de servicios contra la base real', () => {
       quantity: 10,
     });
     expect(resultado.stock).toBe(15);
+  });
+});
+
+/**
+ * Promociones contra el motor real. El Prisma falso no valida que las columnas
+ * nuevas (`Promotion`, `SaleItem.promotion*`) existan, ni cómo SQLite compara
+ * fechas o guarda `null`: es justo lo que rompería la caja en producción.
+ */
+describe('promociones en SQLite real', () => {
+  const regla = { type: 'tiered', tiers: [{ quantity: 2, price: 60 }] };
+
+  it('baja con fechas de Firestore y sin fin; re-sync no duplica y la baja la retira', async () => {
+    await promociones.upsertMany(prisma, [
+      {
+        id: 'pr-1',
+        name: 'Paracetamol 2x$60',
+        rule: regla,
+        productIds: ['p-1'],
+        startsAt: { _seconds: 1_700_000_000, _nanoseconds: 0 },
+        endsAt: null,
+        isActive: true,
+        deactivatedAt: null,
+        updatedAt: { _seconds: 1_700_000_000, _nanoseconds: 0 },
+      },
+      {
+        id: 'pr-2',
+        name: 'Vencida',
+        rule: { type: 'nxm', buy: 2, pay: 1 },
+        productIds: ['p-1'],
+        startsAt: '2020-01-01T00:00:00Z',
+        endsAt: '2021-01-01T00:00:00Z',
+        isActive: true,
+        updatedAt: '2021-01-01T00:00:00Z',
+      },
+    ]);
+    expect((await promociones.listActive(prisma, new Date())).map((p) => p.id)).toEqual(['pr-1']);
+
+    await promociones.upsertMany(prisma, [
+      {
+        id: 'pr-1',
+        name: 'Paracetamol 2x$60',
+        rule: regla,
+        productIds: ['p-1'],
+        startsAt: '2023-01-01T00:00:00Z',
+        isActive: false,
+        deactivatedAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ]);
+    expect(await prisma.promotion.count()).toBe(2);
+    expect(await promociones.listActive(prisma, new Date())).toEqual([]);
+  });
+
+  it('una venta con promoción guarda y devuelve sus campos', async () => {
+    const sesion = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    await unProducto({ salePrice: 35 });
+    const venta = await ventas.createLocal(prisma, {
+      ...ventaPayload([
+        partidaProducto('p-1', {
+          unitPrice: 35,
+          quantity: 2,
+          subtotal: 70,
+          discountAmount: 10,
+          promotionId: 'pr-1',
+          promotionName: 'Paracetamol 2x$60',
+          promotionDiscount: 10,
+        }),
+      ]),
+      cashSessionId: sesion.id,
+    });
+    expect(venta.items[0]).toMatchObject({
+      promotionId: 'pr-1',
+      promotionName: 'Paracetamol 2x$60',
+      promotionDiscount: 10,
+    });
+  });
+
+  it('una fila con JSON corrupto no rompe la lectura de vigentes', async () => {
+    await prisma.promotion.create({
+      data: {
+        id: 'rota',
+        name: 'Rota',
+        type: 'tiered',
+        ruleJson: '{no es json',
+        productIdsJson: 'tampoco',
+        startsAt: new Date('2020-01-01'),
+        isActive: true,
+        updatedAt: new Date(),
+      },
+    });
+    await expect(promociones.listActive(prisma, new Date())).resolves.toEqual([]);
   });
 });
