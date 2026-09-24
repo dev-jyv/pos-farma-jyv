@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CartLine, CartProductLine, Product, PromotionDto } from '../../../shared/models';
 import { PromoService } from './promo.service';
@@ -70,6 +70,20 @@ describe('PromoService', () => {
   it('compara contra el id remoto; un producto sin sincronizar no entra', () => {
     expect(service.promoOnlyDiscount(line(2, { remoteId: 'otro' }))).toBe(0);
     expect(service.promoOnlyDiscount(line(2, { id: 'p1', remoteId: undefined }))).toBe(10);
+  });
+
+  it('una promo programada empieza a aplicar sola al llegar su hora', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-25T07:59:00Z'));
+      service.setPromotions([promotion({ startsAt: '2026-09-25T08:00:00Z' })]);
+      expect(service.promoOnlyDiscount(line(2))).toBe(0);
+
+      vi.setSystemTime(new Date('2026-09-25T08:00:00Z'));
+      expect(service.promoOnlyDiscount(line(2))).toBe(10);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('ignora promociones programadas o vencidas', () => {

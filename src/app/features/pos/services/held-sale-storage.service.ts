@@ -12,6 +12,7 @@ interface HeldSaleDto {
    * `kind` en sus líneas; `normalizeStoredLine` lo rellena al retomarla.
    */
   lines: unknown[];
+  manualDiscounts?: Record<string, number>;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -40,6 +41,7 @@ export class HeldSaleStorageService {
         lines: item.lines
           .map((line) => normalizeStoredLine(line))
           .filter((line): line is CartLine => line !== null),
+        ...(item.manualDiscounts ? { manualDiscounts: item.manualDiscounts } : {}),
       }));
     } catch {
       // Un `removeItem` que también lanza volvería a propagar desde el catch.
@@ -61,6 +63,7 @@ export class HeldSaleStorageService {
       label: item.label,
       heldAt: item.heldAt.toISOString(),
       lines: item.lines,
+      ...(item.manualDiscounts ? { manualDiscounts: item.manualDiscounts } : {}),
     }));
     // Misma razón que en `CartStorageService.save`: la cuota llena o el
     // almacenamiento bloqueado no pueden tumbar la venta en curso.

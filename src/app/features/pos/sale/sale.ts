@@ -760,6 +760,7 @@ export class Sale {
       label: `Venta en pausa ${new Date().toLocaleTimeString()}`,
       lines: this.cart(),
       heldAt: new Date(),
+      manualDiscounts: { ...this.manualDiscounts() },
     };
     this.heldSales.update((list) => {
       const next = [...list, held];
@@ -779,13 +780,22 @@ export class Sale {
     if (!held) {
       return;
     }
-    const manuals: Record<string, number> = {};
-    for (const line of held.lines) {
-      const promo = this.promoService.promoOnlyDiscount(line);
-      manuals[lineKey(line)] = Math.max(0, line.discountAmount - promo);
+    const manuals: Record<string, number> = { ...(held.manualDiscounts ?? {}) };
+    if (!held.manualDiscounts) {
+      // Venta pausada antes de guardar el manual aparte: se deduce como antes.
+      for (const line of held.lines) {
+        const promo = this.promoService.promoOnlyDiscount(line);
+        manuals[lineKey(line)] = Math.max(0, line.discountAmount - promo);
+      }
     }
     this.manualDiscounts.set(manuals);
     this.setCart(held.lines);
+    // Aun con el manual guardado, la base del tope pudo cambiar (la promo ya no
+    // existe o es otra): se recorta al 20 % para no cobrar algo que el backend
+    // rechaza al sincronizar.
+    for (const line of held.lines) {
+      this.recortarDescuentoAlTope(lineKey(line));
+    }
     this.heldSales.update((list) => {
       const next = list.filter((item) => item.id !== id);
       this.persistHeld(next);

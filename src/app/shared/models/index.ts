@@ -566,6 +566,14 @@ export interface HeldSale {
   label: string;
   lines: CartLine[];
   heldAt: Date;
+  /**
+   * Descuento **manual** por `lineKey`, guardado aparte de las líneas. Las
+   * promociones cambian con cada sync: si al retomar se dedujera como
+   * `discountAmount − promo de ahora`, una promo retirada mientras tanto
+   * convertía su descuento en manual y rebasaba el tope del cajero. Ausente en
+   * ventas pausadas antes de este campo.
+   */
+  manualDiscounts?: Record<string, number>;
 }
 
 export interface CashMethodTotals {

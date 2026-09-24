@@ -64,15 +64,16 @@ async function upsertMany(prisma, remotes = []) {
 }
 
 /**
- * Promociones aplicables en `now`: activas, ya iniciadas y sin terminar. La
- * vigencia se decide con la hora local porque la caja cobra sin red; el
- * backend la vuelve a validar al sincronizar.
+ * Promociones activas que no han terminado en `now`, **incluidas las
+ * programadas**. El renderer relee solo tras cada sync (10:30, 14:00, 20:00):
+ * si aquí se filtrara `startsAt <= now`, una promo que empieza a las 08:00 y
+ * bajó la noche anterior no aplicaría hasta las 10:30. La ventana exacta la
+ * decide `PromoService` en cada cálculo, con la hora local.
  */
 async function listActive(prisma, now = new Date()) {
   const rows = await prisma.promotion.findMany({
     where: {
       isActive: true,
-      startsAt: { lte: now },
       OR: [{ endsAt: null }, { endsAt: { gte: now } }],
     },
     orderBy: { name: 'asc' },

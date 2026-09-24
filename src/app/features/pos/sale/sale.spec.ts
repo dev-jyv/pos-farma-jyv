@@ -537,6 +537,55 @@ describe('Sale', () => {
       expect(component.cart()).toHaveLength(1);
       expect(component.heldSales()).toHaveLength(0);
     });
+
+    /**
+     * Regresión F5: el manual se deducía al retomar como `discountAmount − promo
+     * de ahora`. Si el sync retiraba la promo con la venta en pausa, los $50 del
+     * 2x1 volvían como descuento manual del 50 % y el backend rechazaba la venta.
+     */
+    it('retomar tras retirarse la promo no convierte su descuento en manual', () => {
+      const promos = TestBed.inject(PromoService);
+      promos.setPromotions([
+        {
+          id: 'promo-1',
+          name: '2x1',
+          rule: { type: 'nxm', buy: 2, pay: 1 },
+          productIds: ['p1'],
+          startsAt: new Date(Date.now() - 60_000).toISOString(),
+          endsAt: null,
+          isActive: true,
+        },
+      ]);
+      component.addToCart(product(), 2);
+      expect(component.cart()[0].discountAmount).toBe(50);
+      component.holdSale();
+
+      promos.setPromotions([]);
+      component.resumeHeldSale(component.heldSales()[0].id);
+
+      expect(component.cart()[0].discountAmount).toBe(0);
+      expect(component.total()).toBe(100);
+    });
+
+    it('una venta pausada vieja (sin manual guardado) se recorta al tope al retomar', () => {
+      component.addToCart(product(), 2);
+      component.updateLineDiscount('product:p1', 20);
+      component.holdSale();
+      const [held] = component.heldSales();
+      // Forma de una venta pausada antes de guardar el manual aparte, con un
+      // descuento que ya no cabe en el tope.
+      component.heldSales.set([
+        {
+          ...held,
+          manualDiscounts: undefined,
+          lines: held.lines.map((line) => ({ ...line, discountAmount: 50 })),
+        },
+      ]);
+
+      component.resumeHeldSale(held.id);
+
+      expect(component.cart()[0].discountAmount).toBe(20);
+    });
   });
 
   describe('atajos con diálogo abierto', () => {

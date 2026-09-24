@@ -46,13 +46,16 @@ describe('pull de promociones', () => {
     expect(await listActive(prisma, AHORA)).toEqual([]);
   });
 
-  it('no ofrece programadas ni vencidas', async () => {
+  it('descarta las vencidas pero conserva las programadas', async () => {
     await upsertMany(prisma, [
-      promoRemota({ id: 'futura', startsAt: '2026-10-01T00:00:00Z' }),
-      promoRemota({ id: 'vencida', endsAt: '2026-09-20T00:00:00Z' }),
-      promoRemota({ id: 'vigente', endsAt: '2026-09-30T00:00:00Z' }),
+      promoRemota({ id: 'futura', name: 'A futura', startsAt: '2026-09-25T08:00:00Z' }),
+      promoRemota({ id: 'vencida', name: 'B vencida', endsAt: '2026-09-20T00:00:00Z' }),
+      promoRemota({ id: 'vigente', name: 'C vigente', endsAt: '2026-09-30T00:00:00Z' }),
     ]);
-    expect((await listActive(prisma, AHORA)).map((promo) => promo.id)).toEqual(['vigente']);
+    // La programada se entrega con su `startsAt`: `PromoService` la empieza a
+    // aplicar sola cuando llega la hora, sin esperar al siguiente sync.
+    const ids = (await listActive(prisma, AHORA)).map((promo) => promo.id);
+    expect(ids).toEqual(['futura', 'vigente']);
   });
 
   it('descarta filas sin id o sin regla', async () => {
