@@ -1,4 +1,4 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, computed, signal } from '@angular/core';
 
 import { CartLine, CartLinePromotion, CartProductLine, PromotionDto } from '../../../shared/models';
 import { isProductLine, lineKey, lineUnitPrice } from '../../../shared/utils/cart-line';
@@ -18,6 +18,8 @@ import { PROMOTIONS_SYNCED_EVENT } from '../../../core/sync/sync-events';
 @Injectable({ providedIn: 'root' })
 export class PromoService {
   private readonly promotions = signal<PromotionDto[]>([]);
+  /** Cambia cada vez que llegan promociones: el ticket abierto se recalcula con ella. */
+  readonly version = computed(() => this.promotions());
 
   constructor() {
     void this.reload();

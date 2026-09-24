@@ -833,11 +833,24 @@ flushQueueAsync(): Promise<void> {
           if (!pending.length) {
             return of(null);
           }
+          // Por `/sales/bulk` y no `POST /sales`: la venta se cobró sin red, y
+          // la ruta en línea rechaza una promoción que cerró entre el cobro y el
+          // sync. Así la venta quedaba en error para siempre y el backend nunca
+          // se enteraba ni de ella ni de su anulación (libro de control incluido).
           const pushes = pending.map((item) =>
             this.http
-              .post<unknown>(`${this.apiUrl}/sales`, item.payload)
+              .post<unknown>(`${this.apiUrl}/sales/bulk`, { items: [item.payload] })
               .pipe(
-                map((response) => mapRemoteSale(unwrapEntity<SaleDto>(response))),
+                map((response) => {
+                  const [result] = unwrapEntity<BulkSaleResult[]>(response) ?? [];
+                  if (!result) {
+                    throw new Error('El servidor no devolvió resultado para la venta');
+                  }
+                  if (!result.ok) {
+                    throw new Error(result.error);
+                  }
+                  return result.sale;
+                }),
                 switchMap((created) =>
                   this.http
                     .post<unknown>(`${this.apiUrl}/sales/${created.id}/void`, {

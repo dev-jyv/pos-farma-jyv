@@ -416,10 +416,10 @@ describe('SaleService', () => {
 
         // Se crea y se anula, en dos pasos: sin el alta, el libro de control se
         // queda sin el asiento y sin su reversa.
-        const alta = http.expectOne(SALES_URL);
+        const alta = http.expectOne(`${SALES_URL}/bulk`);
         expect(resuelta).toBe(false);
         sales.getPendingVoided.mockResolvedValue([]);
-        alta.flush({ data: { id: 'remote-2', folio: 'A-2', items: [], createdAt: new Date().toISOString(), voidedAt: null } });
+        alta.flush({ data: [{ ok: true, sale: { id: 'remote-2', folio: 'A-2' } }] });
         await flushMicrotasks();
 
         const anulacion = http.expectOne(`${SALES_URL}/remote-2/void`);
@@ -573,9 +573,11 @@ describe('SaleService', () => {
 
       // Sin esto el backend no se entera de que esa venta ocurrió, y el libro de
       // control se queda sin el asiento ni su reversa.
-      const created = http.expectOne(SALES_URL);
-      expect(created.request.body).toEqual({ idempotencyKey: 'key-9' });
-      created.flush({ data: { id: 'remote-9', folio: 'V-9', items: [], subtotal: 0, discountTotal: 0, total: 0, paymentMethod: 'cash', amountReceived: 0, change: 0, cardPaymentReference: null, cashierId: 'u1', cashSessionId: 's1', voidedAt: null, createdAt: '2026-09-03T18:00:00.000Z' } });
+      // Por `/sales/bulk`: la ruta en línea rechaza una promo que cerró entre
+      // el cobro sin red y el sync, y la venta quedaba atorada para siempre.
+      const created = http.expectOne(`${SALES_URL}/bulk`);
+      expect(created.request.body).toEqual({ items: [{ idempotencyKey: 'key-9' }] });
+      created.flush({ data: [{ ok: true, sale: { id: 'remote-9', folio: 'V-9' } }] });
       await flushMicrotasks();
 
       const voided = http.expectOne(`${SALES_URL}/remote-9/void`);
@@ -588,6 +590,24 @@ describe('SaleService', () => {
 
       expect(sales.markSynced).toHaveBeenCalledWith('local-9', 'remote-9', 'V-9');
       expect(sales.markRemoteVoided).toHaveBeenCalledWith('local-9');
+    });
+
+    it('si el servidor la rechaza, queda marcada con el motivo y no se anula', async () => {
+      sales.getPendingVoided.mockResolvedValue([
+        { ...localSale({ id: 'local-8', payload: { idempotencyKey: 'key-8' } }), voidedAt: null, voidedBy: null },
+      ]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+
+      http
+        .expectOne(`${SALES_URL}/bulk`)
+        .flush({ data: [{ ok: false, error: 'Stock insuficiente para Paracetamol' }] });
+      await flushMicrotasks();
+
+      http.expectNone(`${SALES_URL}/undefined/void`);
+      expect(sales.markPushFailed).toHaveBeenCalledWith('local-8', 'Stock insuficiente para Paracetamol');
+      expect(sales.markRemoteVoided).not.toHaveBeenCalled();
     });
   });
 

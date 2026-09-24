@@ -1,5 +1,15 @@
 import { DecimalPipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, signal, viewChild } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+  viewChild,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { TranslatePipe } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
@@ -275,6 +285,30 @@ export class Sale {
       const uid = this.authService.user()?.uid ?? '';
       this.cartStorage.save(uid, lines, this.manualDiscounts());
     });
+
+    // El ticket solo se recalculaba al tocarlo: una promo que llegaba con el
+    // ticket ya armado (arranque, sync) no aplicaba, y una retirada seguía
+    // descontando. `untracked`: el efecto depende solo de las promociones, no del
+    // carrito que él mismo reescribe.
+    effect(() => {
+      this.promoService.version();
+      untracked(() => this.repriceCart());
+    });
+  }
+
+  /**
+   * Vuelve a aplicar las promociones al ticket abierto y recorta el manual al
+   * tope: si entra una promo, la base del 20 % baja y el manual pudo quedar
+   * arriba.
+   */
+  private repriceCart(): void {
+    if (this.cart().length === 0) {
+      return;
+    }
+    this.setCart(this.cart());
+    for (const line of this.cart()) {
+      this.recortarDescuentoAlTope(lineKey(line));
+    }
   }
 
   promotionOf(line: CartLine): CartLinePromotion | null {
@@ -815,6 +849,9 @@ export class Sale {
     if (this.cart().length === 0) {
       return;
     }
+    // Una promo pudo vencer (o empezar) con el ticket abierto: se cobra con la
+    // vigencia de este momento.
+    this.repriceCart();
     this.checkoutVisible.set(true);
   }
 

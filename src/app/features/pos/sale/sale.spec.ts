@@ -1217,4 +1217,67 @@ describe('Sale', () => {
     });
   });
 
+
+  /**
+   * El ticket abierto sigue a las promociones: antes solo se recalculaba al
+   * tocarlo, así que una promo que llegaba con el ticket armado no aplicaba y
+   * una retirada o vencida seguía descontando.
+   */
+  describe('ticket abierto y cambios de promociones', () => {
+    const promo2x1 = {
+      id: 'promo-1',
+      name: '2x1',
+      rule: { type: 'nxm' as const, buy: 2, pay: 1 },
+      productIds: ['p1'],
+      startsAt: new Date(Date.now() - 60_000).toISOString(),
+      endsAt: null,
+      isActive: true,
+    };
+
+    it('una promo que llega con el ticket armado se aplica', () => {
+      component.addToCart(product(), 2);
+      TestBed.inject(PromoService).setPromotions([promo2x1]);
+      TestBed.tick();
+      expect(component.cart()[0].discountAmount).toBe(50);
+    });
+
+    it('una promo retirada por el sync deja de descontar', () => {
+      TestBed.inject(PromoService).setPromotions([promo2x1]);
+      TestBed.tick();
+      component.addToCart(product(), 2);
+      TestBed.inject(PromoService).setPromotions([]);
+      TestBed.tick();
+      const [line] = component.cart() as Array<{ discountAmount: number; promotion?: unknown }>;
+      expect(line.discountAmount).toBe(0);
+      expect(line.promotion ?? null).toBeNull();
+    });
+
+    it('al abrir el cobro se descarta una promo que venció con el ticket abierto', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-09-25T10:00:00Z'));
+        TestBed.inject(PromoService).setPromotions([
+          { ...promo2x1, startsAt: '2026-09-01T00:00:00Z', endsAt: '2026-09-25T10:05:00Z' },
+        ]);
+        TestBed.tick();
+        component.addToCart(product(), 2);
+        expect(component.cart()[0].discountAmount).toBe(50);
+
+        vi.setSystemTime(new Date('2026-09-25T10:10:00Z'));
+        component.openCheckout();
+        expect(component.cart()[0].discountAmount).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('si entra una promo, el manual se recorta al 20 % de lo que queda', () => {
+      component.addToCart(product(), 2);
+      component.updateLineDiscount('product:p1', 20); // 20 % de $100, sin promo
+      TestBed.inject(PromoService).setPromotions([promo2x1]);
+      TestBed.tick();
+      // Promo 50 + manual recortado a 10 (20 % de los 50 que quedan).
+      expect(component.cart()[0].discountAmount).toBe(60);
+    });
+  });
 });
