@@ -157,12 +157,14 @@ describe('SyncScheduler — catálogos de servicios contra un backend viejo', ()
   let http: HttpTestingController;
   let upsertMany: Mock;
   let upsertProviders: Mock;
+  let upsertPromotions: Mock;
   let recordRun: Mock;
 
   beforeEach(() => {
     localStorage.clear();
     upsertMany = vi.fn().mockResolvedValue({ count: 0 });
     upsertProviders = vi.fn().mockResolvedValue({ count: 0 });
+    upsertPromotions = vi.fn().mockResolvedValue({ count: 0 });
     recordRun = vi.fn().mockResolvedValue({ id: 'r1' });
     window.electronAPI = {
       catalog: { upsertMany: vi.fn().mockResolvedValue({ count: 0 }) },
@@ -171,6 +173,7 @@ describe('SyncScheduler — catálogos de servicios contra un backend viejo', ()
       cashSessions: {},
       cashMovements: {},
       pharmacyServices: { list: vi.fn(), getById: vi.fn(), listProviders: vi.fn(), upsertMany, upsertProviders },
+      promotions: { listActive: vi.fn().mockResolvedValue([]), upsertMany: upsertPromotions },
     } as unknown as Window['electronAPI'];
 
     TestBed.resetTestingModule();
@@ -203,7 +206,7 @@ describe('SyncScheduler — catálogos de servicios contra un backend viejo', ()
     http = TestBed.inject(HttpTestingController);
   });
 
-  /** Responde el pull de productos y luego los dos de catálogos de servicios. */
+  /** Responde el pull de productos, los dos de servicios y el de promociones. */
   async function correrPull(opciones: { serviciosStatus?: number } = {}): Promise<void> {
     const promesa = scheduler.syncNow();
     // `syncNow` ahora espera el push completo antes del pull: varios
@@ -220,10 +223,18 @@ describe('SyncScheduler — catálogos de servicios contra un backend viejo', ()
       // Con el backend viejo, el de doctores también falla.
       const doctores = http.expectOne((req) => req.url.endsWith('/service-providers/sync'));
       doctores.flush({}, { status: opciones.serviciosStatus, statusText: 'Not Found' });
+      await flush();
+      http
+        .expectOne((req) => req.url.endsWith('/promotions/sync'))
+        .flush({}, { status: opciones.serviciosStatus, statusText: 'Not Found' });
     } else {
       servicios.flush({ data: [{ id: 'sv-1', updatedAt: '2026-09-07T10:00:00.000Z' }] });
       await flush();
       http.expectOne((req) => req.url.endsWith('/service-providers/sync')).flush({ data: [] });
+      await flush();
+      http
+        .expectOne((req) => req.url.endsWith('/promotions/sync'))
+        .flush({ data: [{ id: 'promo-1', updatedAt: '2026-09-24T10:00:00.000Z' }] });
     }
     await flush();
     await promesa;
@@ -267,7 +278,19 @@ describe('SyncScheduler — catálogos de servicios contra un backend viejo', ()
     await correrPull();
 
     const entidades = recordRun.mock.calls.map(([run]) => run.entity);
-    expect(new Set(entidades)).toEqual(new Set(['products', 'pharmacyServices', 'serviceProviders']));
+    expect(new Set(entidades)).toEqual(
+      new Set(['products', 'pharmacyServices', 'serviceProviders', 'promotions']),
+    );
+  });
+
+  it('baja las promociones y avisa al carrito para que las relea', async () => {
+    const avisos = vi.fn();
+    window.addEventListener('farmajyv:promotions-synced', avisos);
+    await correrPull();
+    window.removeEventListener('farmajyv:promotions-synced', avisos);
+
+    expect(upsertPromotions).toHaveBeenCalledWith([expect.objectContaining({ id: 'promo-1' })]);
+    expect(avisos).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -9,6 +9,7 @@ import {
   Product,
   ProductBatch,
   ProductFieldsPayload,
+  PromotionDto,
   Sale,
 } from '../../shared/models';
 
@@ -365,6 +366,11 @@ declare global {
         listProviders: () => Promise<ServiceProviderDto[]>;
         upsertMany: (services: unknown[]) => Promise<{ count: number }>;
         upsertProviders: (providers: unknown[]) => Promise<{ count: number }>;
+      };
+      /** Promociones **solo-pull**; `listActive` ya filtra por vigencia con la hora local. */
+      promotions: {
+        listActive: () => Promise<PromotionDto[]>;
+        upsertMany: (promotions: unknown[]) => Promise<{ count: number }>;
       };
       cashMovements: {
         /** `cashSessionId` en `null`: caja de la farmacia, movimiento sin turno. */

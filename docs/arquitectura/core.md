@@ -134,7 +134,7 @@ Para migrar cuando haya soporte: sustituir `provideFirebase()` por `provideFireb
 
 ## 7. Entornos
 
-Los cuatro archivos son **idénticos salvo dos flags**; el resto (apiUrl, licencia PrimeNG, configuración de farmacia, Mercado Pago, credenciales Firebase, `printTicketOnSale`, `expiryWarningDays: 30`, `soundsEnabled`, `promos: []`, `cashDrawer.printerName: ''`, `version: 'v1.0.0'`) coincide byte a byte.
+Los cuatro archivos son **idénticos salvo dos flags**; el resto (apiUrl, licencia PrimeNG, configuración de farmacia, Mercado Pago, credenciales Firebase, `printTicketOnSale`, `expiryWarningDays: 30`, `soundsEnabled`, `cashDrawer.printerName: ''`, `version: 'v1.0.0'`) coincide byte a byte.
 
 | Archivo | `production` | `isElectron` | Se activa en |
 |---|---|---|---|

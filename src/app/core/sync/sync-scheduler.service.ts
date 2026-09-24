@@ -12,6 +12,7 @@ import { StockEntryService } from '../../features/pos/services/stock-entry.servi
 import { environment } from '../../../environments/environment';
 import { AuthService } from '../auth/auth.service';
 import { pushOwnerFilter } from './push-owner';
+import { PROMOTIONS_SYNCED_EVENT } from './sync-events';
 
 /**
  * Cuánto espera el cajero entre dos sincronizaciones manuales. El admin no pasa
@@ -609,6 +610,12 @@ export class SyncScheduler {
     await this.pullCatalog('serviceProviders', 'service-providers', (items) =>
       window.electronAPI?.pharmacyServices.upsertProviders(items),
     );
+    // Promociones: mismo pull incremental. Al terminar se avisa al carrito para
+    // que relea las vigentes sin esperar a reiniciar la caja.
+    await this.pullCatalog('promotions', 'promotions', (items) =>
+      window.electronAPI?.promotions?.upsertMany(items),
+    );
+    window.dispatchEvent(new Event(PROMOTIONS_SYNCED_EVENT));
   }
 
   private async pullCatalog(

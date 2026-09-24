@@ -303,6 +303,12 @@ export function createFakePrisma() {
     isActive: true,
     updatedAt: new Date('2026-09-07T10:00:00Z'),
   }));
+  db.promotion = createModel(db, 'promotion', () => ({
+    endsAt: null,
+    deactivatedAt: null,
+    isActive: true,
+    updatedAt: new Date('2026-09-24T10:00:00Z'),
+  }));
   db.serviceProvider = createModel(db, 'serviceProvider', () => ({
     license: null,
     defaultCommissionRate: null,

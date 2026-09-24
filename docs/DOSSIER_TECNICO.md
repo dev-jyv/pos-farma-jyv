@@ -150,7 +150,7 @@ Los cuatro archivos comparten proyecto Firebase, `apiUrl` y credenciales de Merc
 | `.prod.ts` | true | false |
 | `.electron.ts` | true | true |
 
-Claves de configuración operativa: `printTicketOnSale` (auto-imprime al cerrar venta), `expiryWarningDays: 30`, `soundsEnabled`, `promos: []` (reglas locales NxM/%), `cashDrawer.printerName` (vacío = cajón deshabilitado), `pharmacy.{name,address,phone,rfc}` (encabezado de tickets), `mercadoPago.terminalId` (terminal de **esta** caja; vacío = usar la primera que devuelva la API).
+Claves de configuración operativa: `printTicketOnSale` (auto-imprime al cerrar venta), `expiryWarningDays: 30`, `soundsEnabled`, `cashDrawer.printerName` (vacío = cajón deshabilitado), `pharmacy.{name,address,phone,rfc}` (encabezado de tickets), `mercadoPago.terminalId` (terminal de **esta** caja; vacío = usar la primera que devuelva la API).
 
 Variables del backend que condicionan al POS (`backend-farma-jyv/functions/.env`):
 
@@ -905,8 +905,10 @@ Estado a 2026-09-16. El detalle vivo, con su historia, está en `GOALS.md`.
     el rol `cashier` no tiene `dashboard:read`, así que la pantalla agrega en
     memoria desde la base local.
 12. `en.json` está completo y no hay selector de idioma en la UI.
-13. `PromoService` lee reglas de `environment.promos`: cambiar una promo exige
-    recompilar y redistribuir el instalador.
+13. ~~`PromoService` lee reglas de `environment.promos`~~ — resuelto
+    (2026-09-24): las promociones se administran en el admin web, bajan por
+    `GET /promotions/sync` a la tabla local `Promotion` y el backend recalcula
+    el monto al registrar la venta.
 14. **La primera pasada de cierres puede condenar un hijo** cuando hay un alta
     esperando el hueco del cajero. Es una decisión consciente —entre condenar un
     gasto y dejar la caja sin poder abrir, se elige lo segundo— y solo se paga

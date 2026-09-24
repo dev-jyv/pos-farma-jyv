@@ -333,7 +333,38 @@ export interface CartProductLine {
   kind: 'product';
   product: Product;
   quantity: number;
+  /** Total de la partida: promoción + descuento manual. */
   discountAmount: number;
+  /** Promoción aplicada; la recalcula `PromoService` en cada cambio del carrito. */
+  promotion?: CartLinePromotion | null;
+}
+
+export interface CartLinePromotion {
+  id: string;
+  name: string;
+  /** Parte de `discountAmount` que aporta la promoción. */
+  discountAmount: number;
+}
+
+/**
+ * Regla de una promoción, **misma forma que el backend** (`types/index.ts`). Es
+ * inmutable allá: para cambiar un precio se da de baja y se crea otra.
+ */
+export type PromotionRule =
+  | { type: 'tiered'; tiers: Array<{ quantity: number; price: number }> }
+  | { type: 'nxm'; buy: number; pay: number }
+  | { type: 'percent'; percent: number; minQty: number };
+
+/** Promoción tal como la devuelve el SQLite local (`electron/db/promotions.js`). */
+export interface PromotionDto {
+  id: string;
+  name: string;
+  rule: PromotionRule;
+  /** Ids **remotos** de producto. */
+  productIds: string[];
+  startsAt: string;
+  endsAt: string | null;
+  isActive: boolean;
 }
 
 export interface CartServiceLine {
@@ -395,6 +426,10 @@ interface SaleItemCommon {
 export interface SaleProductItem extends SaleItemCommon {
   kind?: 'product';
   productId: string;
+  /** Promoción aplicada (id remoto) y su parte de `discountAmount`. */
+  promotionId?: string;
+  promotionName?: string;
+  promotionDiscount?: number;
 }
 
 export interface SaleServiceItem extends SaleItemCommon {

@@ -18,6 +18,7 @@ import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import {
   CartLine,
+  CartLinePromotion,
   CartServiceLine,
   HeldSale,
   PharmacyService,
@@ -276,8 +277,8 @@ export class Sale {
     });
   }
 
-  promoDiscount(line: CartLine): number {
-    return this.promoService.promoOnlyDiscount(line);
+  promotionOf(line: CartLine): CartLinePromotion | null {
+    return isProductLine(line) ? line.promotion ?? null : null;
   }
 
   clearCart(): void {
@@ -694,17 +695,20 @@ export class Sale {
     if (!line) {
       return;
     }
-    const lineTotal = lineUnitPrice(line) * line.quantity;
-    const tope = roundMoney(lineTotal * MAX_CASHIER_DISCOUNT_RATE);
-    if (lineTotal === 0 || line.discountAmount <= tope) {
+    // El tope es para el descuento **manual** y se mide sobre lo que queda
+    // después de la promoción, igual que en el backend: la promo la decidió la
+    // gerencia y un 2x1 no debe pedir administrador.
+    const promo = this.promoService.promoOnlyDiscount(line);
+    const base = lineUnitPrice(line) * line.quantity - promo;
+    const tope = roundMoney(base * MAX_CASHIER_DISCOUNT_RATE);
+    const manual = roundMoney(line.discountAmount - promo);
+    if (base <= 0 || manual <= tope) {
       return;
     }
-    const promo = this.promoService.promoOnlyDiscount(line);
-    const manual = Math.max(0, roundMoney(tope - promo));
-    this.manualDiscounts.update((map) => ({ ...map, [productId]: manual }));
+    this.manualDiscounts.update((map) => ({ ...map, [productId]: tope }));
     this.setCart(this.cart());
     this.notifications.error(
-      `El descuento se ajustó a $${tope.toFixed(2)} (20% de la línea): más requiere autorización de un administrador.`,
+      `El descuento manual se ajustó a $${tope.toFixed(2)} (20% de la línea): más requiere autorización de un administrador.`,
     );
   }
 
@@ -717,8 +721,10 @@ export class Sale {
     const promo = this.promoService.promoOnlyDiscount(line);
     const totalDiscount = Math.min(Math.max(0, rawAmount), lineTotal);
     const manual = Math.max(0, totalDiscount - promo);
-    const percentage = lineTotal === 0 ? 0 : (totalDiscount / lineTotal) * 100;
-    if (percentage > MAX_CASHIER_DISCOUNT_RATE * 100 && !this.isAdmin()) {
+    // Solo la parte manual cuenta para el tope, sobre el precio ya con promo.
+    const base = lineTotal - promo;
+    const percentage = base <= 0 ? 0 : (manual / base) * 100;
+    if (percentage > MAX_CASHIER_DISCOUNT_RATE * 100 + 1e-9 && !this.isAdmin()) {
       this.notifications.error('Descuento mayor a 20% requiere autorización de un administrador.');
       if (inputEl) {
         inputEl.value = String(line.discountAmount);

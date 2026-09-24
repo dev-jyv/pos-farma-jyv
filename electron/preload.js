@@ -103,6 +103,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     upsertMany: (services) => ipcRenderer.invoke('pharmacyServices:upsertMany', services),
     upsertProviders: (providers) => ipcRenderer.invoke('pharmacyServices:upsertProviders', providers),
   },
+  promotions: {
+    listActive: () => ipcRenderer.invoke('promotions:listActive'),
+    upsertMany: (promotions) => ipcRenderer.invoke('promotions:upsertMany', promotions),
+  },
   cashMovements: {
     add: (cashSessionId, input) => ipcRenderer.invoke('cashMovements:add', cashSessionId, input),
     updateExpense: (id, patch) => ipcRenderer.invoke('cashMovements:updateExpense', id, patch),

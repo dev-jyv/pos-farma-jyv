@@ -31,6 +31,20 @@ export class SaleTicket {
     return (isSaleProductItem(item) ? item.productId : item.serviceId) + item.productName;
   }
 
+  /** La promo se imprime con su nombre: el cliente debe ver por qué pagó menos. */
+  promoOf(item: SaleItem): { name: string; amount: number } | null {
+    if (!isSaleProductItem(item) || !item.promotionName || !item.promotionDiscount) {
+      return null;
+    }
+    return { name: item.promotionName, amount: item.promotionDiscount };
+  }
+
+  /** Lo que queda del descuento de la partida fuera de la promo. */
+  manualDiscountOf(item: SaleItem): number {
+    const promo = isSaleProductItem(item) ? (item.promotionDiscount ?? 0) : 0;
+    return Math.round((item.discountAmount - promo) * 100) / 100;
+  }
+
   readonly sale = input.required<Sale>();
   readonly cashierLabel = input('');
   readonly preview = input(false);

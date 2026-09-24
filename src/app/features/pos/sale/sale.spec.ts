@@ -461,6 +461,38 @@ describe('Sale', () => {
       expect(component.cart()[0].discountAmount).toBe(20);
     });
 
+    /**
+     * El tope del 20 % es para el descuento **manual**, medido sobre lo que
+     * queda tras la promo, igual que el backend: un 2x1 no pide administrador,
+     * pero tampoco deja sumar 20 % del precio lleno encima.
+     */
+    it('con un 2x1 el tope aplica solo al descuento manual', () => {
+      TestBed.inject(PromoService).setPromotions([
+        {
+          id: 'promo-1',
+          name: '2x1',
+          rule: { type: 'nxm', buy: 2, pay: 1 },
+          productIds: ['p1'],
+          startsAt: new Date(Date.now() - 60_000).toISOString(),
+          endsAt: null,
+          isActive: true,
+        },
+      ]);
+      component.updateQuantity('product:p1', 2);
+      expect(component.cart()[0].discountAmount).toBe(50);
+
+      // Promo 50 + manual 10 (20 % de los 50 que quedan): permitido.
+      component.updateLineDiscount('product:p1', 60);
+      expect(component.cart()[0].discountAmount).toBe(60);
+
+      // Manual 11: más del 20 %.
+      component.updateLineDiscount('product:p1', 61);
+      expect(component.cart()[0].discountAmount).toBe(60);
+      expect(notifyError).toHaveBeenCalledWith(
+        'Descuento mayor a 20% requiere autorización de un administrador.',
+      );
+    });
+
     it('el administrador sí puede forzarlo', () => {
       isAdmin.set(true);
       component.updateLineDiscount('product:p1', 30);

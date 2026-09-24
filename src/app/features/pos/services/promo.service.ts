@@ -1,88 +1,98 @@
-import { Injectable } from '@angular/core';
+import { Injectable, signal } from '@angular/core';
 
-import { CartLine, CartProductLine } from '../../../shared/models';
+import { CartLine, CartLinePromotion, CartProductLine, PromotionDto } from '../../../shared/models';
 import { isProductLine, lineKey, lineUnitPrice } from '../../../shared/utils/cart-line';
-import { environment } from '../../../../environments/environment';
+import { pickBestPromotion } from '../../../shared/utils/promotions';
+import { PROMOTIONS_SYNCED_EVENT } from '../../../core/sync/sync-events';
 
-export type PromoRule =
-  | {
-      type: 'nxm';
-      buy: number;
-      pay: number;
-      skus?: string[];
-      productIds?: string[];
-    }
-  | {
-      type: 'percent';
-      percent: number;
-      minQty: number;
-      skus?: string[];
-      productIds?: string[];
-    };
-
+/**
+ * Aplica las promociones del admin al carrito. Las reglas vienen del SQLite
+ * local (`GET /promotions/sync` → `electron/db/promotions.js`), no de un archivo
+ * de configuración: así un cambio de precio del admin llega a la caja en el
+ * siguiente sync sin reinstalar.
+ *
+ * El cálculo lo hace el motor compartido (`shared/utils/promotions.ts`, copia
+ * del backend). El backend lo vuelve a calcular al registrar la venta; la caja
+ * solo manda `promotionId`.
+ */
 @Injectable({ providedIn: 'root' })
 export class PromoService {
+  private readonly promotions = signal<PromotionDto[]>([]);
+
+  constructor() {
+    void this.reload();
+    if (typeof window !== 'undefined') {
+      window.addEventListener(PROMOTIONS_SYNCED_EVENT, () => void this.reload());
+    }
+  }
+
+  /** Relee las promociones vigentes del almacén local. */
+  async reload(): Promise<void> {
+    const store = window.electronAPI?.promotions;
+    if (!store) {
+      // Sin almacén (navegador, pruebas) la caja cobra a precio de lista.
+      return;
+    }
+    try {
+      this.promotions.set((await store.listActive()) ?? []);
+    } catch {
+      // Una lectura fallida no borra lo que ya se tenía: mejor la promo de hace
+      // un rato que cobrar a precio de lista algo que está en promoción.
+    }
+  }
+
+  /** Solo para pruebas y para el modo navegador. */
+  setPromotions(promotions: PromotionDto[]): void {
+    this.promotions.set(promotions);
+  }
+
   /**
    * `manualByKey` se indexa por `lineKey`, no por id de producto: dos líneas de
    * servicio del mismo tipo pueden convivir en el ticket (una por doctor) y
    * necesitan descuentos independientes.
    */
   apply(lines: CartLine[], manualByKey: Record<string, number> = {}): CartLine[] {
-    const rules = (environment.promos ?? []) as PromoRule[];
     return lines.map((line) => {
-      const promoDiscount = this.promoDiscountForLine(line, rules);
+      const promotion = this.promotionFor(line);
       const manual = Math.max(0, manualByKey[lineKey(line)] ?? 0);
       const lineTotal = lineUnitPrice(line) * line.quantity;
-      return {
-        ...line,
-        discountAmount: Math.min(lineTotal, promoDiscount + manual),
-      };
+      const discountAmount = Math.min(lineTotal, (promotion?.discountAmount ?? 0) + manual);
+      if (!isProductLine(line)) {
+        return { ...line, discountAmount };
+      }
+      return { ...line, discountAmount, promotion };
     });
   }
 
   promoOnlyDiscount(line: CartLine): number {
-    return this.promoDiscountForLine(line, (environment.promos ?? []) as PromoRule[]);
+    return this.promotionFor(line)?.discountAmount ?? 0;
   }
 
-  private promoDiscountForLine(line: CartLine, rules: PromoRule[]): number {
-    // Las promociones son del catálogo de farmacia. Una regla sin filtros
-    // aplica "a todo" (ver `matches`), y sin este corte una promo 2x1 general
-    // regalaría consultas médicas.
+  private promotionFor(line: CartLine): CartLinePromotion | null {
+    // Las promociones son del catálogo de farmacia: una consulta médica nunca
+    // entra a un 2x1.
     if (!isProductLine(line)) {
-      return 0;
+      return null;
     }
-    let best = 0;
-    for (const rule of rules) {
-      if (!this.matches(line, rule)) {
-        continue;
-      }
-      if (rule.type === 'nxm') {
-        if (rule.buy <= 0 || rule.pay < 0 || rule.pay >= rule.buy) {
-          continue;
-        }
-        const freeUnits = Math.floor(line.quantity / rule.buy) * (rule.buy - rule.pay);
-        best = Math.max(best, freeUnits * line.product.salePrice);
-      } else if (rule.type === 'percent') {
-        if (line.quantity < rule.minQty || rule.percent <= 0) {
-          continue;
-        }
-        best = Math.max(best, (line.product.salePrice * line.quantity * rule.percent) / 100);
-      }
-    }
-    return Math.round(best * 100) / 100;
+    const best = pickBestPromotion(this.candidates(line), lineUnitPrice(line), line.quantity);
+    return best
+      ? { id: best.promotion.id, name: best.promotion.name, discountAmount: best.discountAmount }
+      : null;
   }
 
-  private matches(line: CartProductLine, rule: PromoRule): boolean {
-    const { skus, productIds } = rule;
-    if ((!skus || skus.length === 0) && (!productIds || productIds.length === 0)) {
-      return true;
-    }
-    if (productIds?.includes(line.product.id)) {
-      return true;
-    }
-    if (skus?.includes(line.product.sku)) {
-      return true;
-    }
-    return false;
+  /**
+   * `productIds` de la promoción son ids **remotos**; el carrito trae el producto
+   * local. Un producto dado de alta en esta caja y aún sin sincronizar no tiene
+   * `remoteId` y no puede estar en ninguna promoción.
+   */
+  private candidates(line: CartProductLine): PromotionDto[] {
+    const remoteId = line.product.remoteId ?? line.product.id;
+    const now = Date.now();
+    return this.promotions().filter(
+      (promotion) =>
+        promotion.productIds.includes(remoteId) &&
+        Date.parse(promotion.startsAt) <= now &&
+        (!promotion.endsAt || Date.parse(promotion.endsAt) >= now),
+    );
   }
 }

@@ -24,6 +24,7 @@ const syncRunsDb = require('./db/sync-runs');
 const cashSessionsDb = require('./db/cash-sessions');
 const cashMovementsDb = require('./db/cash-movements');
 const pharmacyServicesDb = require('./db/pharmacy-services');
+const promotionsDb = require('./db/promotions');
 
 app.commandLine.appendSwitch('lang', 'es-MX');
 app.commandLine.appendSwitch('accept-lang', 'es-MX,es;q=0.9');
@@ -425,6 +426,10 @@ function registrarIPCHandlers() {
     pharmacyServicesDb.upsertServices(await getPrisma(), services));
   ipcMain.handle('pharmacyServices:upsertProviders', async (_event, providers) =>
     pharmacyServicesDb.upsertProviders(await getPrisma(), providers));
+  ipcMain.handle('promotions:listActive', async () =>
+    promotionsDb.listActive(await getPrisma(), new Date()));
+  ipcMain.handle('promotions:upsertMany', async (_event, promotions) =>
+    promotionsDb.upsertMany(await getPrisma(), promotions));
 
   /**
    * El renderer recibió el aviso y va a decidir (puede tardar: cerrar un turno es

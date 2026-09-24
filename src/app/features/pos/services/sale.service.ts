@@ -72,6 +72,8 @@ export interface CreateSalePayload {
         discountAmount: number;
         /** Precio cobrado por unidad; el backend lo respeta sobre el de catálogo. */
         unitPrice: number;
+        /** Promoción aplicada; el backend recalcula su monto con la regla guardada. */
+        promotionId?: string;
       }
     | {
         kind: 'service';
@@ -172,7 +174,19 @@ function toSaleItems(cart: CartLine[]): SaleItem[] {
     };
     if (isProductLine(line)) {
       // Id LOCAL: es la copia que vive en SQLite y la que ve el ticket.
-      return { ...comun, kind: 'product' as const, productId: line.product.id, productName: line.product.name };
+      return {
+        ...comun,
+        kind: 'product' as const,
+        productId: line.product.id,
+        productName: line.product.name,
+        ...(line.promotion
+          ? {
+              promotionId: line.promotion.id,
+              promotionName: line.promotion.name,
+              promotionDiscount: line.promotion.discountAmount,
+            }
+          : {}),
+      };
     }
     return {
       ...comun,
@@ -318,6 +332,9 @@ export class SaleService {
               // se rechazaba con "el monto recibido es menor al total": el
               // servidor la tarifaba de nuevo con el precio nuevo.
               unitPrice: lineUnitPrice(line),
+              // Solo el id: el monto lo calcula el servidor con la regla, y el
+              // tope del 20 % allá excluye la parte de la promo.
+              ...(line.promotion ? { promotionId: line.promotion.id } : {}),
             }
           : {
               // El catálogo de servicios es solo-pull: su `id` ya es el remoto,

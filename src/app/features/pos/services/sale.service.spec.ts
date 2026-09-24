@@ -167,6 +167,29 @@ describe('SaleService', () => {
       expect(payload.cashSessionId).toBe('s1');
     });
 
+    it('con promoción manda solo su id; el monto lo recalcula el backend', () => {
+      const conPromo: CartLine[] = [
+        {
+          kind: 'product',
+          product: product(),
+          quantity: 2,
+          discountAmount: 10,
+          promotion: { id: 'promo-1', name: 'Paracetamol 2x$60', discountAmount: 10 },
+        },
+      ];
+      const payload = service.buildPayload(conPromo, 0, 'cash', 100, null, 's1');
+      expect(payload.items).toEqual([
+        {
+          kind: 'product',
+          productId: 'p1',
+          quantity: 2,
+          discountAmount: 10,
+          unitPrice: 50,
+          promotionId: 'promo-1',
+        },
+      ]);
+    });
+
     it('normaliza los opcionales ausentes a null', () => {
       const payload = service.buildPayload(cart(), 0, 'card', null, 'order-1', 's1');
       expect(payload.customerId).toBeNull();

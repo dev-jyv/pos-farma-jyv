@@ -208,6 +208,11 @@ model SaleItem {
   netAmount         Float?
   /// `SaleItemTaxes` (JSON); ausente en ventas anteriores al desglose de impuestos.
   taxesJson         String?
+  /// Promoción aplicada (id remoto). El backend recalcula su monto con la regla.
+  promotionId       String?
+  promotionName     String?
+  /// Parte de `discountAmount` que aportó la promoción.
+  promotionDiscount Float?
 
   @@index([saleId])
   @@index([serviceId])
@@ -363,4 +368,25 @@ model SyncRun {
   finishedAt   DateTime?
 
   @@index([entity, direction, startedAt])
+}
+
+/// Promociones por cantidad. **Solo-pull** como los servicios: las administra
+/// el admin web y llegan por `GET /promotions/sync`, así que el `id` es el de
+/// Firestore. La regla es inmutable en el backend; aquí se guarda como JSON.
+model Promotion {
+  id             String    @id
+  name           String
+  /// 'tiered' | 'nxm' | 'percent'
+  type           String
+  /// `PromotionRule` (JSON).
+  ruleJson       String
+  /// Ids **remotos** de producto (JSON array).
+  productIdsJson String
+  startsAt       DateTime
+  endsAt         DateTime?
+  isActive       Boolean   @default(true)
+  deactivatedAt  DateTime?
+  updatedAt      DateTime
+
+  @@index([isActive])
 }

@@ -14,7 +14,6 @@ export const environment = {
   printTicketOnSale: false,
   expiryWarningDays: 30,
   soundsEnabled: true,
-  promos: [],
   cashDrawer: {
     printerName: '',
   },
