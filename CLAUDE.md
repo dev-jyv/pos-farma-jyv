@@ -17,6 +17,7 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 - `npm test` / `ng test` — Vitest sobre `src/` (Angular)
 - `npm run test:electron` — Vitest sobre `electron/test/**` (proceso principal: `electron/db/*.js` contra un Prisma falso en memoria; el builder de Angular no mira esa carpeta)
 - `npm run test:all` — ambas suites
+- `npm run check:promo-engine` — compara el sha256 de `src/app/shared/utils/promotions-engine.cases.json` (casos dorados del motor de promociones) con las copias de `../backend-farma-jyv` y `../farma-jyv-admin`; un repo hermano ausente se avisa y no falla. El JSON no se edita en un solo repo: si cambia el motor, se regenera en los tres.
 
 ## Arquitectura
 
@@ -39,6 +40,12 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 
 - `core/api/auth.interceptor.ts` adjunta el ID token de Firebase a requests hacia `environment.apiUrl` y fuerza logout ante 401.
 - `core/api/api.utils.ts` centraliza `unwrapEntity`/`unwrapList` (formas de respuesta inconsistentes del backend) y `toDate` (Firestore `Timestamp` / epoch / string → `Date`). Reusar en vez de parsear respuestas por feature.
+
+### Sync y promociones
+
+- `core/sync/sync-scheduler.service.ts`: sync completo en horario fijo (10:30/14:00/20:00) más el manual limitado del cajero. Aparte, `pullPromotions()` corre **cada hora** solo el pull incremental de promociones (mismo cursor), emite `PROMOTIONS_SYNCED_EVENT`, no corre sin sesión/`electronAPI`, no se encima con otro igual ni con un sync completo y no cuenta para el límite manual.
+- Si al cobrar una promo del ticket ya cerró (la detecta el checkout, o el backend responde 400 `La promoción "X" no está vigente`), la venta no se registra: `Sale.onPromotionClosed` baja promociones, recalcula y pide volver a cobrar. Excepción: con la tarjeta ya aprobada en la terminal sí se registra.
+- `electron/db/promotions.js#purgeStale` borra al arrancar (best-effort, tras migraciones) las promos dadas de baja o terminadas hace más de 30 días.
 
 ### Entornos
 

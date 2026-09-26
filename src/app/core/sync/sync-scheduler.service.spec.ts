@@ -764,3 +764,182 @@ describe('SyncScheduler — el conteo de pendientes usa el mismo filtro que el e
     expect(await scheduler.countPending()).toBe(3);
   });
 });
+
+/**
+ * Pull liviano de promociones, cada hora y aparte del sync completo. El horario
+ * fijo deja huecos de hasta 14 h: una baja del admin a las 15:00 se seguía
+ * aplicando hasta las 20:00. Este pull no empuja nada, no consume el cupo del
+ * botón y no se encima con otro igual ni con un sync completo.
+ */
+describe('SyncScheduler — pull de promociones cada hora', () => {
+  let scheduler: SyncScheduler;
+  let http: HttpTestingController;
+  let upsertPromotions: Mock;
+  let recordRun: Mock;
+  let usuario: { uid: string } | null;
+
+  beforeEach(() => {
+    localStorage.clear();
+    usuario = { uid: 'uid-cajero' };
+    upsertPromotions = vi.fn().mockResolvedValue({ count: 1 });
+    recordRun = vi.fn().mockResolvedValue({ id: 'r1' });
+    window.electronAPI = {
+      catalog: { upsertMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      sales: {},
+      sync: {
+        getStatus: vi.fn().mockResolvedValue([
+          { entity: 'promotions', direction: 'pull', status: 'ok', cursor: '2026-09-24T09:00:00.000Z' },
+        ]),
+        recordRun,
+      },
+      cashSessions: {},
+      cashMovements: {},
+      pharmacyServices: {
+        upsertMany: vi.fn().mockResolvedValue({ count: 0 }),
+        upsertProviders: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+      promotions: { listActive: vi.fn().mockResolvedValue([]), upsertMany: upsertPromotions },
+    } as unknown as Window['electronAPI'];
+
+    const flushAsync = { flushQueue: vi.fn(), flushQueueAsync: vi.fn().mockResolvedValue(undefined) };
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ApiHealthService, useValue: { checkNow: vi.fn() } },
+        { provide: AuthService, useValue: { user: () => usuario, isAdmin: () => false } },
+        { provide: SaleService, useValue: flushAsync },
+        { provide: StockEntryService, useValue: flushAsync },
+        { provide: ProductCatalogService, useValue: flushAsync },
+        {
+          provide: CashSessionService,
+          useValue: {
+            ...flushAsync,
+            flushClosesAsync: vi.fn().mockResolvedValue(undefined),
+            pullAdjustmentStatus: vi.fn(),
+          },
+        },
+        { provide: CashMovementService, useValue: flushAsync },
+      ],
+    });
+    scheduler = TestBed.inject(SyncScheduler);
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  async function flush(veces = 20): Promise<void> {
+    for (let i = 0; i < veces; i += 1) {
+      await Promise.resolve();
+    }
+  }
+
+  it('baja solo promociones con su cursor, las guarda y avisa al carrito', async () => {
+    const avisos = vi.fn();
+    window.addEventListener('farmajyv:promotions-synced', avisos);
+
+    const promesa = scheduler.pullPromotions();
+    await flush();
+    const req = http.expectOne((r) => r.url.endsWith('/promotions/sync'));
+    expect(req.request.params.get('updatedSince')).toBe('2026-09-24T09:00:00.000Z');
+    req.flush({ data: [{ id: 'promo-1', updatedAt: '2026-09-25T10:00:00.000Z' }] });
+
+    await expect(promesa).resolves.toBe(true);
+    window.removeEventListener('farmajyv:promotions-synced', avisos);
+
+    // Nada de productos, servicios ni push: es el pull liviano.
+    http.verify();
+    expect(upsertPromotions).toHaveBeenCalledWith([expect.objectContaining({ id: 'promo-1' })]);
+    expect(recordRun).toHaveBeenCalledWith(
+      expect.objectContaining({ entity: 'promotions', status: 'ok', cursor: '2026-09-25T10:00:00.000Z' }),
+    );
+    expect(TestBed.inject(SaleService).flushQueueAsync).not.toHaveBeenCalled();
+    expect(avisos).toHaveBeenCalledTimes(1);
+  });
+
+  it('sin sesión no pide nada', async () => {
+    usuario = null;
+    await expect(scheduler.pullPromotions()).resolves.toBe(false);
+    await flush();
+    http.expectNone((r) => r.url.endsWith('/promotions/sync'));
+  });
+
+  it('sin electronAPI (navegador) no pide nada', async () => {
+    window.electronAPI = undefined as unknown as Window['electronAPI'];
+    await expect(scheduler.pullPromotions()).resolves.toBe(false);
+    http.expectNone((r) => r.url.endsWith('/promotions/sync'));
+  });
+
+  it('dos llamadas a la vez comparten la misma petición', async () => {
+    const a = scheduler.pullPromotions();
+    const b = scheduler.pullPromotions();
+    await flush();
+    http.expectOne((r) => r.url.endsWith('/promotions/sync')).flush({ data: [] });
+    await expect(Promise.all([a, b])).resolves.toEqual([true, true]);
+  });
+
+  it('un fallo de red devuelve false, registra el error y aun así avisa', async () => {
+    const avisos = vi.fn();
+    window.addEventListener('farmajyv:promotions-synced', avisos);
+    const promesa = scheduler.pullPromotions();
+    await flush();
+    http
+      .expectOne((r) => r.url.endsWith('/promotions/sync'))
+      .flush({}, { status: 500, statusText: 'Internal Server Error' });
+    await expect(promesa).resolves.toBe(false);
+    window.removeEventListener('farmajyv:promotions-synced', avisos);
+    expect(recordRun).toHaveBeenCalledWith(expect.objectContaining({ entity: 'promotions', status: 'error' }));
+    expect(avisos).toHaveBeenCalledTimes(1);
+  });
+
+  it('con un sync completo en curso no pide promociones aparte: espera al completo', async () => {
+    const completo = scheduler.syncNow();
+    await flush(60);
+    // El pull completo ya arrancó (está esperando `/products/sync`).
+    const products = http.expectOne((r) => r.url.endsWith('/products/sync'));
+    const liviano = scheduler.pullPromotions();
+
+    products.flush({ data: [] });
+    await flush();
+    http.expectOne((r) => r.url.endsWith('/pharmacy-services/sync')).flush({ data: [] });
+    await flush();
+    http.expectOne((r) => r.url.endsWith('/service-providers/sync')).flush({ data: [] });
+    await flush();
+    // Una sola petición de promociones: la del sync completo.
+    http.expectOne((r) => r.url.endsWith('/promotions/sync')).flush({ data: [] });
+    await completo;
+    await expect(liviano).resolves.toBe(true);
+    http.verify();
+  });
+
+  it('no consume el cupo de sincronización manual del cajero', async () => {
+    const promesa = scheduler.pullPromotions();
+    await flush();
+    http.expectOne((r) => r.url.endsWith('/promotions/sync')).flush({ data: [] });
+    await promesa;
+    expect(scheduler.canSyncManually('uid-cajero', false)).toBe(true);
+  });
+
+  it('start() lo arma cada 60 minutos y stop() lo desarma', async () => {
+    vi.useFakeTimers();
+    // 11:00 local: el siguiente horario fijo (14:00) queda fuera de la ventana.
+    vi.setSystemTime(new Date(2026, 8, 25, 11, 0, 0));
+    try {
+      scheduler.start();
+      await vi.advanceTimersByTimeAsync(59 * 60 * 1000);
+      http.expectNone((r) => r.url.endsWith('/promotions/sync'));
+
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+      http.expectOne((r) => r.url.endsWith('/promotions/sync')).flush({ data: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      // Ni productos ni servicios: solo promociones.
+      http.expectNone((r) => r.url.endsWith('/products/sync'));
+
+      scheduler.stop();
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+      http.expectNone((r) => r.url.endsWith('/promotions/sync'));
+    } finally {
+      scheduler.stop();
+      vi.useRealTimers();
+    }
+  });
+});

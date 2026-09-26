@@ -3,7 +3,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import promociones from '../db/promotions.js';
 import { createFakePrisma } from './fake-prisma.mjs';
 
-const { upsertMany, listActive } = promociones;
+const { upsertMany, listActive, purgeStale } = promociones;
 
 let prisma;
 
@@ -61,5 +61,54 @@ describe('pull de promociones', () => {
   it('descarta filas sin id o sin regla', async () => {
     const { count } = await upsertMany(prisma, [promoRemota({ id: undefined }), promoRemota({ rule: null })]);
     expect(count).toBe(0);
+  });
+});
+
+describe('purga de promociones viejas', () => {
+  const DIA = 24 * 60 * 60 * 1000;
+  const haceDias = (dias) => new Date(AHORA.getTime() - dias * DIA).toISOString();
+
+  it('borra las bajas y las terminadas hace más de 30 días; conserva lo demás', async () => {
+    await upsertMany(prisma, [
+      promoRemota({ id: 'baja-vieja', isActive: false, deactivatedAt: haceDias(31) }),
+      promoRemota({ id: 'baja-reciente', isActive: false, deactivatedAt: haceDias(29) }),
+      promoRemota({ id: 'terminada-vieja', endsAt: haceDias(31) }),
+      promoRemota({ id: 'terminada-reciente', endsAt: haceDias(29) }),
+      promoRemota({ id: 'vigente-sin-fin' }),
+      promoRemota({ id: 'programada', startsAt: '2026-10-01T00:00:00Z' }),
+    ]);
+
+    const { count } = await purgeStale(prisma, AHORA);
+
+    expect(count).toBe(2);
+    expect(prisma.promotion.rows.map((row) => row.id).sort()).toEqual([
+      'baja-reciente',
+      'programada',
+      'terminada-reciente',
+      'vigente-sin-fin',
+    ]);
+  });
+
+  it('una baja sin deactivatedAt se mide por su updatedAt', async () => {
+    await upsertMany(prisma, [
+      promoRemota({ id: 'baja-vieja', isActive: false, deactivatedAt: null, updatedAt: haceDias(40) }),
+      promoRemota({ id: 'baja-nueva', isActive: false, deactivatedAt: null, updatedAt: haceDias(2) }),
+    ]);
+
+    await purgeStale(prisma, AHORA);
+
+    expect(prisma.promotion.rows.map((row) => row.id)).toEqual(['baja-nueva']);
+  });
+
+  it('una activa vieja sin fin nunca se purga, aunque su updatedAt sea antiguo', async () => {
+    await upsertMany(prisma, [promoRemota({ id: 'eterna', updatedAt: haceDias(400) })]);
+    await purgeStale(prisma, AHORA);
+    expect(await listActive(prisma, AHORA)).toHaveLength(1);
+  });
+
+  it('respeta un margen distinto de días', async () => {
+    await upsertMany(prisma, [promoRemota({ id: 'terminada', endsAt: haceDias(10) })]);
+    await purgeStale(prisma, AHORA, 7);
+    expect(prisma.promotion.rows).toEqual([]);
   });
 });

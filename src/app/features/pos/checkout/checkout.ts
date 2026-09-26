@@ -66,6 +66,7 @@ import {
   PointOrder,
 } from '../services/mercado-pago.service';
 import { SaleService, newIdempotencyKey } from '../services/sale.service';
+import { PromoService, closedPromotionFromError } from '../services/promo.service';
 import { roundMoney } from '../../../shared/utils/money';
 import { resolveTender } from '../../../shared/utils/tender';
 
@@ -124,6 +125,7 @@ export class Checkout {
   private readonly mercadoPago = inject(MercadoPagoService);
   private readonly notifications = inject(NotificationService);
   private readonly cashDrawer = inject(CashDrawerService);
+  private readonly promoService = inject(PromoService);
   /**
    * `takeUntilDestroyed()` sin argumento exige contexto de inyección, y el sondeo
    * de la terminal arranca dentro de un `subscribe` (ya fuera de él): sin este
@@ -148,6 +150,12 @@ export class Checkout {
 
   readonly closed = output<void>();
   readonly completed = output<Sale>();
+  /**
+   * Una promo del ticket cerró antes de registrar la venta (nombre de la promo).
+   * La venta **no** se registró: la pantalla de venta refresca las promociones,
+   * recalcula el ticket y pide volver a cobrar.
+   */
+  readonly promotionClosed = output<string>();
 
   readonly paymentMethods: { labelKey: string; value: PaymentMethod; icon: string }[] = [
     { labelKey: 'payment.cash', value: 'cash', icon: 'pi pi-wallet' },
@@ -781,6 +789,20 @@ export class Checkout {
     if (!this.canConfirm()) {
       return;
     }
+    // El cobro pudo quedarse abierto mientras la promo vencía o el pull de cada
+    // hora traía su baja: registrarla así sube una venta marcada para revisión
+    // con un precio que ya no existe. Se corta aquí, con el cliente enfrente.
+    //
+    // **Salvo que la terminal ya cobró**: con la tarjeta aprobada el cliente pagó
+    // ese monto, y no registrar la venta dejaría el cargo sin venta. El backend
+    // acepta la venta y la marca para revisión, que es lo correcto en ese caso.
+    if (!this.cardOrderApproved()) {
+      const closed = this.promoService.findClosedPromotion(this.cart());
+      if (closed) {
+        this.promotionClosed.emit(closed);
+        return;
+      }
+    }
     this.submitting.set(true);
     const customer = this.selectedCustomer();
     const payload = this.saleService.buildPayload(
@@ -838,6 +860,13 @@ export class Checkout {
         },
         error: (error: unknown) => {
           this.submitting.set(false);
+          // Rechazo en línea por promo cerrada: la venta no existe en ningún lado
+          // (ni en la cola), así que la pantalla puede recalcular y volver a cobrar.
+          const closed = closedPromotionFromError(error);
+          if (closed) {
+            this.promotionClosed.emit(closed);
+            return;
+          }
           this.notifications.error(getApiErrorMessage(error));
         },
       });

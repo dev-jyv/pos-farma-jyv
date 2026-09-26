@@ -13,6 +13,11 @@ export class NotificationService {
     this.messageService.add({ severity: 'error', summary: 'Error', detail });
   }
 
+  /** Aviso que el cajero tiene que leer antes de seguir: dura más que un éxito. */
+  warn(detail: string, summary = 'Atención'): void {
+    this.messageService.add({ severity: 'warn', summary, detail, life: 10_000 });
+  }
+
   /**
    * La sesión del backend expira a las 24:00 de Ciudad de México, no a las 24 h de
    * haber entrado: el mensaje tiene que decirlo o el cajero cree que es una falla.

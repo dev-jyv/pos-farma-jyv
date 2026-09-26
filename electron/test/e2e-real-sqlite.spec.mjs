@@ -868,6 +868,24 @@ describe('promociones en SQLite real', () => {
     });
   });
 
+  it('la purga borra en SQLite real las cerradas hace más de 30 días (comparando fechas y null)', async () => {
+    const ahora = new Date('2026-09-25T12:00:00Z');
+    const base = { rule: regla, productIds: ['p-1'], startsAt: '2026-01-01T00:00:00Z' };
+    await promociones.upsertMany(prisma, [
+      { ...base, id: 'baja-vieja', name: 'A', isActive: false, deactivatedAt: '2026-08-01T00:00:00Z', updatedAt: '2026-08-01T00:00:00Z' },
+      { ...base, id: 'baja-sin-fecha', name: 'B', isActive: false, updatedAt: '2026-07-01T00:00:00Z' },
+      { ...base, id: 'terminada-vieja', name: 'C', endsAt: '2026-08-10T00:00:00Z', updatedAt: '2026-08-10T00:00:00Z' },
+      { ...base, id: 'baja-reciente', name: 'D', isActive: false, deactivatedAt: '2026-09-20T00:00:00Z', updatedAt: '2026-09-20T00:00:00Z' },
+      { ...base, id: 'vigente', name: 'E', endsAt: null, updatedAt: '2025-01-01T00:00:00Z' },
+    ]);
+
+    const { count } = await promociones.purgeStale(prisma, ahora);
+
+    expect(count).toBe(3);
+    const quedan = (await prisma.promotion.findMany({ orderBy: { id: 'asc' } })).map((p) => p.id);
+    expect(quedan).toEqual(['baja-reciente', 'vigente']);
+  });
+
   it('una fila con JSON corrupto no rompe la lectura de vigentes', async () => {
     await prisma.promotion.create({
       data: {

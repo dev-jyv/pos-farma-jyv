@@ -72,6 +72,7 @@ describe('Sale', () => {
   let component: Sale;
   let notifyError: ReturnType<typeof vi.fn>;
   let notifySuccess: ReturnType<typeof vi.fn>;
+  let notifyWarn: ReturnType<typeof vi.fn>;
   let batches: ProductBatch[];
   let isAdmin: ReturnType<typeof signal<boolean>>;
   let canSell: ReturnType<typeof signal<boolean>>;
@@ -93,7 +94,9 @@ describe('Sale', () => {
     syncSchedulerMock = {
       settleStaleShift: vi.fn(() => Promise.resolve(false)),
       settlingStaleShift: signal(false),
+      pullPromotions: vi.fn(() => Promise.resolve(true)),
     };
+    notifyWarn = vi.fn();
     notifySuccess = vi.fn();
     batches = [batch()];
     servicios = [servicio()];
@@ -124,6 +127,7 @@ describe('Sale', () => {
   let syncSchedulerMock: {
     settleStaleShift: ReturnType<typeof vi.fn>;
     settlingStaleShift: WritableSignal<boolean>;
+    pullPromotions: ReturnType<typeof vi.fn>;
   };
 
   async function build(): Promise<void> {
@@ -133,7 +137,10 @@ describe('Sale', () => {
         provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         providePrimeNG({}),
         MessageService,
-        { provide: NotificationService, useValue: { error: notifyError, success: notifySuccess } },
+        {
+          provide: NotificationService,
+          useValue: { error: notifyError, success: notifySuccess, warn: notifyWarn },
+        },
         { provide: ProductService, useValue: { search: () => of([product()]), invalidate: vi.fn() } },
         { provide: BatchService, useValue: { listByProduct: () => of(batches) } },
         { provide: SaleService, useValue: saleServiceMock },
@@ -200,6 +207,7 @@ describe('Sale', () => {
       });
       const bloqueo = signal(false);
       syncSchedulerMock = {
+        pullPromotions: vi.fn(() => Promise.resolve(true)),
         // Enciende el bloqueo solo cuando de verdad hay turno rezagado, igual
         // que el sincronizador real: si se encendiera antes, el modal
         // parpadearía en cada entrada a Ventas.
@@ -264,6 +272,7 @@ describe('Sale', () => {
       syncSchedulerMock = {
         settleStaleShift: vi.fn(() => Promise.reject(new Error('sin red'))),
         settlingStaleShift: signal(false),
+        pullPromotions: vi.fn(() => Promise.resolve(true)),
       };
       await build();
 
@@ -1290,6 +1299,148 @@ describe('Sale', () => {
       TestBed.inject(PromoService).setPromotions([]);
       TestBed.tick();
       expect(component.cart()[0].discountAmount).toBe(20);
+    });
+  });
+  /**
+   * Autorrecuperación ante una promo que cerró al cobrar: el cobro no registró
+   * nada, así que la pantalla baja promociones, espera a que `PromoService` las
+   * relea, recalcula y pide volver a cobrar con el total nuevo.
+   */
+  describe('promoción cerrada al cobrar', () => {
+    const promo2x1 = {
+      id: 'promo-1',
+      name: '2x1',
+      rule: { type: 'nxm' as const, buy: 2, pay: 1 },
+      productIds: ['p1'],
+      startsAt: new Date(Date.now() - 60_000).toISOString(),
+      endsAt: null,
+      isActive: true,
+    };
+
+    it('baja promociones, espera la relectura, recalcula y avisa el total nuevo', async () => {
+      const promos = TestBed.inject(PromoService);
+      promos.setPromotions([promo2x1]);
+      TestBed.tick();
+      component.addToCart(product(), 2);
+      expect(component.total()).toBe(50);
+      component.openCheckout();
+
+      // El pull trae la baja; `reload` la lee del SQLite (aquí, el mock).
+      const orden: string[] = [];
+      syncSchedulerMock.pullPromotions.mockImplementation(async () => {
+        orden.push('pull');
+        return true;
+      });
+      const reload = vi.spyOn(promos, 'reload').mockImplementation(async () => {
+        orden.push('reload');
+        promos.setPromotions([]);
+      });
+
+      await component.onPromotionClosed('2x1');
+
+      expect(orden).toEqual(['pull', 'reload']);
+      expect(reload).toHaveBeenCalled();
+      expect(component.checkoutVisible()).toBe(false);
+      expect(component.total()).toBe(100);
+      expect(notifyWarn).toHaveBeenCalledWith(
+        'La promoción 2x1 ya terminó. Nuevo total $100.00. Vuelve a cobrar.',
+        'Promoción terminada',
+      );
+      // Nada se registró ni se encoló: el ticket sigue ahí para volver a cobrar.
+      expect(component.cart()).toHaveLength(1);
+      expect(component.lastSale()).toBeNull();
+      expect(notifySuccess).not.toHaveBeenCalled();
+    });
+
+    it('sin red no se queda colgada: recalcula con lo que ya tiene', async () => {
+      vi.useFakeTimers();
+      try {
+        const promos = TestBed.inject(PromoService);
+        promos.setPromotions([promo2x1]);
+        component.addToCart(product(), 2);
+        syncSchedulerMock.pullPromotions.mockReturnValue(new Promise(() => undefined));
+        vi.spyOn(promos, 'reload').mockImplementation(async () => promos.setPromotions([]));
+
+        const recuperacion = component.onPromotionClosed('2x1');
+        expect(component.recoveringPromotion()).toBe(true);
+        // Mientras refresca no se puede reabrir el cobro con el precio viejo.
+        component.openCheckout();
+        expect(component.checkoutVisible()).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(8_000);
+        await recuperacion;
+
+        expect(component.recoveringPromotion()).toBe(false);
+        expect(component.total()).toBe(100);
+        expect(notifyWarn).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe('indicadores de promociones en pantalla', () => {
+    const tiered = {
+      id: 'promo-1',
+      name: '2 por $90',
+      rule: { type: 'tiered' as const, tiers: [{ quantity: 2, price: 90 }] },
+      productIds: ['p1'],
+      startsAt: new Date(Date.now() - 60_000).toISOString(),
+      endsAt: null,
+      isActive: true,
+    };
+
+    it('marca "Promo" en los resultados de búsqueda del producto con promo vigente', () => {
+      TestBed.inject(PromoService).setPromotions([tiered]);
+      component.results.set([product(), product({ id: 'p2', name: 'Ibuprofeno' })]);
+      fixture.detectChanges();
+
+      const badges = fixture.nativeElement.querySelectorAll('[data-testid="search-promo-badge"]');
+      expect(badges).toHaveLength(1);
+      expect(component.hasPromotion(product())).toBe(true);
+      expect(component.hasPromotion(product({ id: 'p2' }))).toBe(false);
+    });
+
+    it('sugiere llevar una más bajo la partida, y deja de hacerlo al completar el paquete', () => {
+      TestBed.inject(PromoService).setPromotions([tiered]);
+      TestBed.tick();
+      component.addToCart(product(), 1);
+      fixture.detectChanges();
+
+      const hint = fixture.nativeElement.querySelector('[data-testid="promo-step-hint"]');
+      expect(hint?.textContent.replace(/\s+/g, ' ').trim()).toBe(
+        'Lleva 1 más: 2 por $90 (ahorras $10.00)',
+      );
+
+      component.bumpQuantity('product:p1', 1);
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('[data-testid="promo-step-hint"]')).toBeNull();
+    });
+
+    it('no sugiere piezas que no hay en existencia', () => {
+      TestBed.inject(PromoService).setPromotions([tiered]);
+      batches = [batch({ quantity: 1 })];
+      component.addToCart(product({ stock: 1 }), 1);
+      expect(component.stepHintOf(component.cart()[0])).toBeNull();
+    });
+
+    it('avisa cuando la partida es de un producto sin sincronizar', () => {
+      const w = window as unknown as { electronAPI?: unknown };
+      const previo = w.electronAPI;
+      w.electronAPI = {};
+      try {
+        component.addToCart(product({ remoteId: null }), 1);
+        component.addToCart(product({ id: 'p2', remoteId: 'r-p2', name: 'Ibuprofeno' }), 1);
+        fixture.detectChanges();
+
+        const badges = fixture.nativeElement.querySelectorAll('[data-testid="unsynced-badge"]');
+        expect(badges).toHaveLength(1);
+        expect(badges[0].getAttribute('aria-label')).toBe(
+          'Sin sincronizar: no entra a promociones hasta el próximo sync',
+        );
+      } finally {
+        w.electronAPI = previo;
+      }
     });
   });
 });

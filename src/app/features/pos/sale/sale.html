@@ -197,9 +197,24 @@
                 <span class="font-mono text-[11px] tracking-wide text-slate-400">
                   {{ product.barcode || product.sku }}
                 </span>
-                @if (product.requiresPrescription) {
-                  <span class="mt-0.5 inline-flex w-fit rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800">
-                    Receta
+                @if (product.requiresPrescription || hasPromotion(product)) {
+                  <span class="mt-0.5 flex flex-wrap gap-1">
+                    @if (product.requiresPrescription) {
+                      <span class="inline-flex w-fit rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800">
+                        Receta
+                      </span>
+                    }
+                    <!-- Mismo color que la promo aplicada en el ticket: el cajero
+                         puede ofrecerla antes de agregar el producto. -->
+                    @if (hasPromotion(product)) {
+                      <span
+                        data-testid="search-promo-badge"
+                        class="inline-flex w-fit items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800"
+                      >
+                        <i class="pi pi-tag text-[9px]"></i>
+                        Promo
+                      </span>
+                    }
                   </span>
                 }
               </div>
@@ -310,6 +325,19 @@
                     @if (line.product.requiresPrescription) {
                       <span class="mt-0.5 inline-flex rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800">
                         Receta
+                      </span>
+                    }
+                    @if (isUnsynced(line)) {
+                      <span
+                        data-testid="unsynced-badge"
+                        class="ml-1 mt-0.5 inline-flex items-center gap-1 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600"
+                        pTooltip="Sin sincronizar: no entra a promociones hasta el próximo sync"
+                        tooltipPosition="top"
+                        tabindex="0"
+                        aria-label="Sin sincronizar: no entra a promociones hasta el próximo sync"
+                      >
+                        <i class="pi pi-cloud-upload text-[10px]"></i>
+                        Sin sincronizar
                       </span>
                     }
                   } @else {
@@ -433,6 +461,15 @@
                   </span>
                 }
               </div>
+              @if (stepHintOf(line); as hint) {
+                <!-- Sugerencia discreta: solo aparece si llevar más de verdad
+                     baja el precio por pieza (ver PromoService.nextStepHint). -->
+                <p data-testid="promo-step-hint" class="mt-1.5 text-[11px] text-amber-700">
+                  <i class="pi pi-lightbulb text-[10px]"></i>
+                  Lleva {{ hint.extraQty }} más: {{ line.quantity + hint.extraQty }} por
+                  ${{ hint.totalForAll | number: '1.0-2' }} (ahorras ${{ hint.savings | number: '1.2-2' }})
+                </p>
+              }
             </li>
           }
         </ul>
@@ -496,6 +533,7 @@
   [cashSessionId]="cashSession()?.id ?? ''"
   (closed)="checkoutVisible.set(false)"
   (completed)="onSaleCompleted($event)"
+  (promotionClosed)="onPromotionClosed($event)"
 />
 
 <app-performer-dialog

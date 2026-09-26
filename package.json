@@ -12,6 +12,7 @@
     "test": "ng test",
     "test:electron": "npm run prisma:generate && vitest run --config electron/vitest.config.mjs",
     "test:all": "npm run test -- --watch=false && npm run test:electron",
+    "check:promo-engine": "node scripts/check-promotions-engine.mjs",
     "prisma:generate": "prisma generate --schema=electron/prisma/schema.prisma",
     "electron:build": "npm run prisma:generate && ng build --configuration electron",
     "electron:start": "npm run electron:build && cross-env ELECTRON_RUN_AS_NODE= electron electron/main.js",

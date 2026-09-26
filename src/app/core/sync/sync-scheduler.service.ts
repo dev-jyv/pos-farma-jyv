@@ -27,6 +27,16 @@ function formatTime(date: Date): string {
   return date.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
 }
 
+/**
+ * Cada cuánto se revisan **solo** las promociones, aparte del sync completo. El
+ * horario fijo deja huecos de hasta 14 h (20:00 → 10:30): una promo que el admin
+ * da de baja a las 15:00 se seguía aplicando hasta las 20:00, y cada venta con
+ * ella subía marcada para revisión. El pull de promociones es incremental y
+ * pesa unos cuantos bytes, así que una vez por hora no le cuesta nada al
+ * servidor.
+ */
+const PROMOTIONS_PULL_INTERVAL_MS = 60 * 60 * 1000;
+
 /** Horarios fijos de sync, en hora local del equipo de caja. */
 const FIXED_TIMES: Array<[number, number]> = [
   [10, 30],
@@ -88,6 +98,14 @@ export class SyncScheduler {
   private readonly apiUrl = environment.apiUrl;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** Pull liviano de promociones (ver `PROMOTIONS_PULL_INTERVAL_MS`). */
+  private promotionsTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Pull de promociones en vuelo: el horario de cada hora y la autorrecuperación
+   * del cobro pueden pedirlo a la vez, y ambos esperan la misma corrida en vez de
+   * duplicar el fetch y la escritura en SQLite.
+   */
+  private promotionsPullInFlight: Promise<boolean> | null = null;
   /**
    * A diferencia de `flushQueue()` en `SaleService`/`StockEntryService`, que sí
    * tienen su propia bandera, `pullProducts()` no tenía guardia de reentrancia:
@@ -124,7 +142,10 @@ export class SyncScheduler {
   private readonly destroyRef = inject(DestroyRef);
 
   constructor() {
-    this.destroyRef.onDestroy(() => this.clearCooldownTimer());
+    this.destroyRef.onDestroy(() => {
+      this.clearCooldownTimer();
+      this.stop();
+    });
   }
 
   /**
@@ -140,6 +161,64 @@ export class SyncScheduler {
       return;
     }
     this.scheduleNext();
+    // Se arma junto con el horario fijo y por la misma razón: sin `electronAPI`
+    // no hay SQLite donde guardar lo que baje.
+    this.promotionsTimer = setInterval(() => void this.pullPromotions(), PROMOTIONS_PULL_INTERVAL_MS);
+  }
+
+  /** Desarma el horario fijo y el pull de promociones de cada hora. */
+  stop(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (this.promotionsTimer !== null) {
+      clearInterval(this.promotionsTimer);
+      this.promotionsTimer = null;
+    }
+  }
+
+  /**
+   * Pull **solo de promociones**, incremental (mismo cursor que el del sync
+   * completo) y sin push. Lo corre el temporizador de cada hora y la caja cuando
+   * el backend rechaza un cobro por una promo que ya cerró.
+   *
+   * - Sin sesión o sin `electronAPI` no hace nada: no hay token para el backend
+   *   ni SQLite donde escribir.
+   * - **No cuenta para el límite del botón "Sincronizar"**: ese cupo protege del
+   *   pull del catálogo completo y del push de toda la cola, no de esto.
+   * - Si ya hay un sync completo en curso, espera a ese en vez de pedir otro: el
+   *   completo también baja las promociones y avisa al carrito.
+   *
+   * Devuelve `true` si las promociones quedaron al día (y se avisó al carrito).
+   */
+  pullPromotions(): Promise<boolean> {
+    if (!window.electronAPI || !this.auth.user()) {
+      return Promise.resolve(false);
+    }
+    if (this.promotionsPullInFlight) {
+      return this.promotionsPullInFlight;
+    }
+    if (this.pullInFlight) {
+      return this.pullInFlight.then(
+        () => true,
+        () => false,
+      );
+    }
+    this.promotionsPullInFlight = this.doPullPromotions().finally(() => {
+      this.promotionsPullInFlight = null;
+    });
+    return this.promotionsPullInFlight;
+  }
+
+  private async doPullPromotions(): Promise<boolean> {
+    const ok = await this.pullCatalog('promotions', 'promotions', (items) =>
+      window.electronAPI?.promotions?.upsertMany(items),
+    );
+    // Se avisa aunque falle: `PromoService` relee lo que haya en SQLite, que no
+    // cambió, y quien espera la recarga no se queda colgado.
+    window.dispatchEvent(new Event(PROMOTIONS_SYNCED_EVENT));
+    return ok;
   }
 
   /** Corrida de horario/arranque: no bloquea a nadie, dispara y sigue. */
@@ -616,7 +695,10 @@ export class SyncScheduler {
       window.electronAPI?.pharmacyServices.upsertProviders(items),
     );
     // Promociones: mismo pull incremental. Al terminar se avisa al carrito para
-    // que relea las vigentes sin esperar a reiniciar la caja.
+    // que relea las vigentes sin esperar a reiniciar la caja. Si el pull de cada
+    // hora va a medias se espera: con los dos a la vez se pediría dos veces lo
+    // mismo con el mismo cursor.
+    await this.promotionsPullInFlight?.catch(() => false);
     await this.pullCatalog('promotions', 'promotions', (items) =>
       window.electronAPI?.promotions?.upsertMany(items),
     );
@@ -627,7 +709,7 @@ export class SyncScheduler {
     entity: string,
     path: string,
     write: (items: SyncCatalogItem[]) => unknown,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const cursor = await this.getCursor(entity);
     let newestUpdatedAt = cursor;
     try {
@@ -654,6 +736,7 @@ export class SyncScheduler {
         status: 'ok',
         cursor: newestUpdatedAt ?? undefined,
       });
+      return true;
     } catch (error: unknown) {
       await window.electronAPI?.sync.recordRun({
         entity,
@@ -661,6 +744,7 @@ export class SyncScheduler {
         status: 'error',
         errorMessage: getApiErrorMessage(error),
       });
+      return false;
     }
   }
 }

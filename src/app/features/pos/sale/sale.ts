@@ -55,7 +55,7 @@ import { CashSessionService } from '../services/cash-session.service';
 import { HeldSaleStorageService } from '../services/held-sale-storage.service';
 import { ProductService } from '../services/product.service';
 import { ServiceCatalogService } from '../services/service-catalog.service';
-import { PromoService } from '../services/promo.service';
+import { PromoService, PromotionStepHint } from '../services/promo.service';
 import { SaleService } from '../services/sale.service';
 import { Checkout } from '../checkout/checkout';
 import { CashSessionDialog } from '../cash-session/cash-session-dialog';
@@ -76,6 +76,12 @@ import { SubstitutesDialog } from './substitutes-dialog';
 const MAX_CASHIER_DISCOUNT_RATE = 0.2;
 
 const MIN_SEARCH_LENGTH = 2;
+
+/**
+ * Cuánto espera la caja el pull de promociones tras un cobro con promo cerrada.
+ * Hay un cliente enfrente: sin red, se recalcula con lo que ya hay en SQLite.
+ */
+const PROMOTION_RECOVERY_TIMEOUT_MS = 8_000;
 
 function startOfToday(): Date {
   const now = new Date();
@@ -321,6 +327,79 @@ export class Sale {
 
   promotionOf(line: CartLine): CartLinePromotion | null {
     return isProductLine(line) ? line.promotion ?? null : null;
+  }
+
+  /**
+   * "Lleva 1 más" bajo la partida. No se ofrece lo que no hay en existencia: la
+   * sugerencia se volvería un error de stock al aceptarla.
+   */
+  stepHintOf(line: CartLine): PromotionStepHint | null {
+    const hint = this.promoService.nextStepHint(line);
+    if (!hint) {
+      return null;
+    }
+    const max = lineMaxQuantity(line);
+    return max !== null && line.quantity + hint.extraQty > max ? null : hint;
+  }
+
+  /** Marca "Promo" en los resultados de búsqueda. */
+  hasPromotion(product: Product): boolean {
+    return this.promoService.hasPromotion(product);
+  }
+
+  /**
+   * Producto dado de alta en esta caja que aún no sube: las promociones apuntan a
+   * ids remotos, así que no entra a ninguna hasta el próximo sync. Solo en
+   * Electron: en el navegador no hay altas locales.
+   */
+  isUnsynced(line: CartLine): boolean {
+    return isProductLine(line) && !line.product.remoteId && Boolean(window.electronAPI);
+  }
+
+  /**
+   * Refrescando promociones tras un cobro rechazado por promo cerrada. Mientras
+   * dura, el cobro no se reabre: se cobraría otra vez con el precio viejo.
+   */
+  readonly recoveringPromotion = signal(false);
+
+  /**
+   * Autorrecuperación cuando una promo del ticket cerró al momento de cobrar
+   * (la detecta el cobro, o el backend la rechaza en línea). La venta **no** se
+   * registró —ni en SQLite ni en la cola—, así que no hay nada que deshacer:
+   *
+   * 1. se cierra el cobro;
+   * 2. se bajan las promociones (pull liviano) y se espera a que `PromoService`
+   *    las relea — con tope de tiempo: sin red, se sigue con lo que ya había;
+   * 3. se recalcula el ticket y se avisa el total nuevo para volver a cobrar.
+   *
+   * El cobro nuevo abre el diálogo otra vez, que genera su propia llave de
+   * idempotencia: el intento rechazado nunca existió en el servidor.
+   */
+  async onPromotionClosed(promotionName: string): Promise<void> {
+    this.checkoutVisible.set(false);
+    this.recoveringPromotion.set(true);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.syncScheduler.pullPromotions().catch(() => false),
+        new Promise<boolean>((resolve) => {
+          timeout = setTimeout(() => resolve(false), PROMOTION_RECOVERY_TIMEOUT_MS);
+        }),
+      ]);
+      await this.promoService.reload();
+      this.repriceCart();
+    } finally {
+      clearTimeout(timeout);
+      this.recoveringPromotion.set(false);
+    }
+    const total = this.total().toLocaleString('es-MX', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    this.notifications.warn(
+      `La promoción ${promotionName} ya terminó. Nuevo total $${total}. Vuelve a cobrar.`,
+      'Promoción terminada',
+    );
   }
 
   clearCart(): void {
@@ -862,7 +941,7 @@ export class Sale {
     if (!this.ensureShiftOpen()) {
       return;
     }
-    if (this.cart().length === 0) {
+    if (this.cart().length === 0 || this.recoveringPromotion()) {
       return;
     }
     // Una promo pudo vencer (o empezar) con el ticket abierto: se cobra con la

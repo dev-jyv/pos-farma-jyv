@@ -208,6 +208,12 @@ function createModel(db, name, defaults) {
       }
       return { ...borrado };
     },
+    /** Lo usa la purga de promociones viejas (`purgeStale`). Sin cascada: ningún modelo que lo use tiene hijos. */
+    async deleteMany({ where } = {}) {
+      const antes = model.rows.length;
+      model.rows = model.rows.filter((row) => !matchesWhere(row, where, db));
+      return { count: antes - model.rows.length };
+    },
     async updateMany({ where, data }) {
       const affected = model.rows.filter((row) => matchesWhere(row, where, db));
       affected.forEach((row) => applyData(row, data));

@@ -81,4 +81,32 @@ async function listActive(prisma, now = new Date()) {
   return rows.map(toPromotionDto).filter((promotion) => promotion.rule);
 }
 
-module.exports = { toPromotionDto, upsertMany, listActive };
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Borra las promociones que ya no pueden volver a aplicar y solo ocupan espacio:
+ * las dadas de baja hace más de `days` días (por `deactivatedAt`, o por
+ * `updatedAt` si una fila vieja llegó sin él) y las que terminaron (`endsAt`)
+ * hace más de `days` días. La tabla es solo-pull y el admin nunca reactiva una
+ * promo (la regla es inmutable: se da de baja y se crea otra), así que sin esto
+ * crece para siempre con cada campaña.
+ *
+ * El margen de 30 días no es por la caja —`listActive` ya las ignora— sino por
+ * si alguien necesita revisar en el equipo qué promo tenía una venta reciente.
+ * No toca el cursor del sync: una baja más vieja que el cursor no vuelve a bajar,
+ * y una que cambie después llega por `updatedSince` como cualquier otra.
+ */
+async function purgeStale(prisma, now = new Date(), days = 30) {
+  const cutoff = new Date(now.getTime() - days * DAY_MS);
+  return prisma.promotion.deleteMany({
+    where: {
+      OR: [
+        { isActive: false, deactivatedAt: { lt: cutoff } },
+        { isActive: false, deactivatedAt: null, updatedAt: { lt: cutoff } },
+        { endsAt: { lt: cutoff } },
+      ],
+    },
+  });
+}
+
+module.exports = { toPromotionDto, upsertMany, listActive, purgeStale };

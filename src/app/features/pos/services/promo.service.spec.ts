@@ -1,7 +1,8 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CartLine, CartProductLine, Product, PromotionDto } from '../../../shared/models';
-import { PromoService } from './promo.service';
+import { PromoService, closedPromotionFromError } from './promo.service';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -149,5 +150,157 @@ describe('PromoService', () => {
     // La desconocida se ignora y la válida sigue aplicando.
     expect(result[0].promotion?.id).toBe('buena');
     expect(result[0].discountAmount).toBe(10);
+  });
+});
+
+/**
+ * "Lleva 1 más": el menor k de piezas extra con el que el cliente paga menos por
+ * pieza de lo que ya paga. No se ofrece repetir un paquete ya completo ni una
+ * pieza más de un porcentaje que ya aplica: eso no es una mejora.
+ */
+describe('PromoService.nextStepHint', () => {
+  let service: PromoService;
+  const a10 = (qty: number) => line(qty, { salePrice: 10 });
+
+  beforeEach(() => {
+    service = new PromoService();
+  });
+
+  it('tiered 2x$17: con 1 sugiere llevar 1 más; con 2 nada; con 3 otra vez', () => {
+    service.setPromotions([promotion({ rule: { type: 'tiered', tiers: [{ quantity: 2, price: 17 }] } })]);
+    expect(service.nextStepHint(a10(1))).toEqual({ extraQty: 1, totalForAll: 17, savings: 3 });
+    expect(service.nextStepHint(a10(2))).toBeNull();
+    expect(service.nextStepHint(a10(3))).toEqual({ extraQty: 1, totalForAll: 34, savings: 6 });
+  });
+
+  it('nxm 3x2: con 1 hacen falta 2 más; con el paquete completo no sugiere repetirlo', () => {
+    service.setPromotions([promotion({ rule: { type: 'nxm', buy: 3, pay: 2 } })]);
+    expect(service.nextStepHint(a10(1))).toEqual({ extraQty: 2, totalForAll: 20, savings: 10 });
+    expect(service.nextStepHint(a10(2))).toEqual({ extraQty: 1, totalForAll: 20, savings: 10 });
+    expect(service.nextStepHint(a10(3))).toBeNull();
+  });
+
+  it('percent 10 % desde 3: sugiere llegar al mínimo, y ya en él no insiste', () => {
+    service.setPromotions([promotion({ rule: { type: 'percent', percent: 10, minQty: 3 } })]);
+    expect(service.nextStepHint(a10(1))).toEqual({ extraQty: 2, totalForAll: 27, savings: 3 });
+    expect(service.nextStepHint(a10(2))).toEqual({ extraQty: 1, totalForAll: 27, savings: 3 });
+    expect(service.nextStepHint(a10(3))).toBeNull();
+    expect(service.nextStepHint(a10(7))).toBeNull();
+  });
+
+  it('con varias promos usa la mejor en cada cantidad, igual que apply', () => {
+    service.setPromotions([
+      promotion({ id: 'pct', rule: { type: 'percent', percent: 10, minQty: 1 } }),
+      promotion({ id: 'nxm', rule: { type: 'nxm', buy: 2, pay: 1 } }),
+    ]);
+    // 1 pieza: 10 % ($9). 2 piezas: 2x1 ($10) — la pieza extra cuesta $1.
+    expect(service.nextStepHint(a10(1))).toEqual({ extraQty: 1, totalForAll: 10, savings: 10 });
+  });
+
+  it('sin promo, con una regla desconocida, vencida o de servicio no sugiere nada', () => {
+    expect(service.nextStepHint(a10(1))).toBeNull();
+    service.setPromotions([promotion({ rule: { type: 'bundle' } as never })]);
+    expect(service.nextStepHint(a10(1))).toBeNull();
+    service.setPromotions([promotion({ endsAt: new Date(Date.now() - 1000).toISOString() })]);
+    expect(service.nextStepHint(a10(1))).toBeNull();
+    service.setPromotions([promotion()]);
+    const servicio = {
+      kind: 'service',
+      service: { id: 'p1', price: 35 },
+      provider: null,
+      quantity: 1,
+      discountAmount: 0,
+    } as unknown as CartLine;
+    expect(service.nextStepHint(servicio)).toBeNull();
+  });
+
+  it('es pura: no toca el carrito ni la promo aplicada', () => {
+    service.setPromotions([promotion()]);
+    const partida = line(1);
+    const antes = structuredClone(partida);
+    service.nextStepHint(partida);
+    expect(partida).toEqual(antes);
+  });
+});
+
+describe('PromoService.hasPromotion', () => {
+  let service: PromoService;
+
+  beforeEach(() => {
+    service = new PromoService();
+  });
+
+  it('marca el producto con una promo vigente, por su id remoto', () => {
+    service.setPromotions([promotion()]);
+    expect(service.hasPromotion(product())).toBe(true);
+    expect(service.hasPromotion(product({ remoteId: 'otro' }))).toBe(false);
+  });
+
+  it('no marca promos programadas, vencidas o con regla desconocida', () => {
+    service.setPromotions([
+      promotion({ startsAt: new Date(Date.now() + DAY).toISOString() }),
+      promotion({ id: 'b', endsAt: new Date(Date.now() - 1000).toISOString() }),
+      promotion({ id: 'c', rule: { type: 'bundle' } as never }),
+    ]);
+    expect(service.hasPromotion(product())).toBe(false);
+  });
+});
+
+describe('PromoService.findClosedPromotion', () => {
+  let service: PromoService;
+
+  beforeEach(() => {
+    service = new PromoService();
+    service.setPromotions([promotion()]);
+  });
+
+  it('nada que reportar mientras la promo aplicada siga vigente', () => {
+    const lines = service.apply([line(2)]);
+    expect(service.findClosedPromotion(lines)).toBeNull();
+  });
+
+  it('reporta la promo aplicada que el pull dio de baja', () => {
+    const lines = service.apply([line(2)]);
+    service.setPromotions([]);
+    expect(service.findClosedPromotion(lines)).toBe('Paracetamol 2x$60');
+  });
+
+  it('reporta la que venció con el cobro abierto', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-25T10:00:00Z'));
+      service.setPromotions([promotion({ startsAt: '2026-09-01T00:00:00Z', endsAt: '2026-09-25T10:05:00Z' })]);
+      const lines = service.apply([line(2)]);
+      vi.setSystemTime(new Date('2026-09-25T10:06:00Z'));
+      expect(service.findClosedPromotion(lines)).toBe('Paracetamol 2x$60');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('que ahora gane otra promo no es una promo cerrada', () => {
+    const lines = service.apply([line(2)]);
+    service.setPromotions([
+      promotion(),
+      promotion({ id: 'promo-2', name: '2x1', rule: { type: 'nxm', buy: 2, pay: 1 } }),
+    ]);
+    expect(service.findClosedPromotion(lines)).toBeNull();
+  });
+});
+
+describe('closedPromotionFromError', () => {
+  const rechazo = (status: number, message: string) =>
+    new HttpErrorResponse({ status, error: { error: { message } } });
+
+  it('reconoce el 400 del backend y devuelve el nombre de la promo', () => {
+    expect(closedPromotionFromError(rechazo(400, 'La promoción "Paracetamol 2x$60" no está vigente'))).toBe(
+      'Paracetamol 2x$60',
+    );
+  });
+
+  it('ignora otros errores y otros códigos', () => {
+    expect(closedPromotionFromError(rechazo(400, 'Stock insuficiente'))).toBeNull();
+    expect(closedPromotionFromError(rechazo(500, 'La promoción "X" no está vigente'))).toBeNull();
+    expect(closedPromotionFromError(new Error('sin red'))).toBeNull();
   });
 });

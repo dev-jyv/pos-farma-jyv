@@ -137,7 +137,16 @@ app.whenReady().then(() => {
   registrarIPCHandlers();
   // Arranca migraciones ya (no bloquea la ventana): las llamadas IPC que
   // lleguen antes de terminar esperan la misma promesa dentro de `getPrisma()`.
-  getPrisma().catch((error) => console.error('[db] error al migrar', error));
+  getPrisma()
+    .then((prisma) =>
+      // Limpieza best-effort de promociones cerradas hace más de 30 días. Va
+      // encadenada a las migraciones (la tabla puede no existir antes) y nunca
+      // se espera: un fallo aquí no debe retrasar ni tumbar la caja.
+      promotionsDb
+        .purgeStale(prisma, new Date())
+        .catch((error) => console.error('[db] no se pudieron purgar promociones viejas', error)),
+    )
+    .catch((error) => console.error('[db] error al migrar', error));
   createWindow();
   verificarActualizaciones();
 });
