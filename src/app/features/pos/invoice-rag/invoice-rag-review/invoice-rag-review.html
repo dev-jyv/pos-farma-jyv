@@ -1,0 +1,190 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <p-button icon="pi pi-arrow-left" [text]="true" (onClick)="back()" [ariaLabel]="'invoiceRag.back' | translate" />
+    <div class="min-w-0 flex-1">
+      <h1 class="truncate text-lg font-bold text-slate-900">{{ document()?.fileName ?? ('invoiceRag.reviewTitle' | translate) }}</h1>
+      <p class="text-xs text-slate-500">{{ 'invoiceRag.reviewHint' | translate }}</p>
+    </div>
+    @if (document(); as doc) {
+      <p-tag [severity]="statusSeverity[doc.status]" [value]="'invoiceRag.status.' + doc.status | translate" />
+      @if (doc.confidence !== null) {
+        <span class="text-xs text-slate-500">{{ 'invoiceRag.confidence' | translate }}: {{ doc.confidence | percent: '1.0-0' }}</span>
+      }
+    }
+  </div>
+
+  @if (loading()) {
+    <div class="flex flex-1 items-center justify-center"><p-progressspinner /></div>
+  } @else if (document(); as doc) {
+    <div class="grid min-h-0 flex-1 gap-4 overflow-auto px-4 py-4 lg:grid-cols-2 lg:overflow-hidden">
+      <div class="flex min-h-[28rem] flex-col lg:min-h-0">
+        @if (file(); as f) {
+          <app-invoice-rag-preview [url]="f.url" [mimeType]="f.mimeType" [fileName]="f.fileName" />
+        }
+      </div>
+
+      <div class="min-h-0 lg:overflow-auto">
+        @if (doc.status === 'failed') {
+          <div class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <p class="font-semibold">{{ 'invoiceRag.extractFailed' | translate }}</p>
+            <p>{{ doc.extractError }}</p>
+          </div>
+        } @else if (!hasData()) {
+          <div class="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            {{ 'invoiceRag.notExtracted' | translate }}
+          </div>
+        }
+
+        @let f = form();
+        <form [formGroup]="f" (ngSubmit)="confirm()" class="flex flex-col gap-5">
+          <div class="flex flex-col gap-2">
+            <span class="text-sm font-semibold text-slate-700">{{ 'invoiceRag.documentType' | translate }}</span>
+            <div class="grid grid-cols-3 gap-2">
+              @for (option of typeOptions; track option.value) {
+                <button
+                  type="button"
+                  (click)="f.controls.documentType.setValue(option.value)"
+                  class="rounded-lg border-2 px-3 py-2 text-sm font-bold transition"
+                  [class]="
+                    f.controls.documentType.value === option.value
+                      ? 'border-(--pos-primary) bg-(--pos-primary-soft) text-(--pos-primary-ink)'
+                      : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                  "
+                >
+                  {{ option.labelKey | translate }}
+                </button>
+              }
+            </div>
+          </div>
+
+          @for (party of parties; track party.key) {
+            <fieldset [formGroupName]="party.key" class="grid gap-3 sm:grid-cols-[2fr_1fr]">
+              <legend class="mb-1 text-sm font-semibold text-slate-700">{{ party.labelKey | translate }}</legend>
+              <div class="flex flex-col gap-1">
+                <label [for]="party.key + '-name'" class="text-xs font-medium text-slate-600">{{ 'invoiceRag.name' | translate }}</label>
+                <input pInputText [id]="party.key + '-name'" formControlName="name" autocomplete="off" class="w-full" />
+              </div>
+              <div class="flex flex-col gap-1">
+                <label [for]="party.key + '-rfc'" class="text-xs font-medium text-slate-600">RFC</label>
+                <input pInputText [id]="party.key + '-rfc'" formControlName="rfc" autocomplete="off" maxlength="13" class="w-full uppercase" />
+                @if (f.get(party.key + '.rfc')?.invalid && f.get(party.key + '.rfc')?.touched) {
+                  <span class="text-xs text-red-600">{{ 'invoiceRag.rfcInvalid' | translate }}</span>
+                }
+              </div>
+            </fieldset>
+          }
+
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div class="flex flex-col gap-1">
+              <label for="rag-folio" class="text-xs font-medium text-slate-600">{{ 'invoiceRag.folio' | translate }}</label>
+              <input pInputText id="rag-folio" formControlName="folio" autocomplete="off" class="w-full" />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label for="rag-date" class="text-xs font-medium text-slate-600">{{ 'invoiceRag.issueDate' | translate }}</label>
+              <input id="rag-date" type="date" formControlName="issueDate" class="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div class="flex flex-col gap-1 sm:col-span-2">
+              <label for="rag-uuid" class="text-xs font-medium text-slate-600">{{ 'invoiceRag.cfdiUuid' | translate }}</label>
+              <input pInputText id="rag-uuid" formControlName="cfdiUuid" autocomplete="off" class="w-full font-mono uppercase" />
+              @if (f.controls.cfdiUuid.invalid && f.controls.cfdiUuid.touched) {
+                <span class="text-xs text-red-600">{{ 'invoiceRag.uuidInvalid' | translate }}</span>
+              }
+            </div>
+            <div class="flex flex-col gap-1">
+              <label for="rag-currency" class="text-xs font-medium text-slate-600">{{ 'invoiceRag.currency' | translate }}</label>
+              <input pInputText id="rag-currency" formControlName="currency" maxlength="3" autocomplete="off" class="w-full uppercase" />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label for="rag-payment" class="text-xs font-medium text-slate-600">{{ 'invoiceRag.paymentMethod' | translate }}</label>
+              <input pInputText id="rag-payment" formControlName="paymentMethod" autocomplete="off" class="w-full" />
+            </div>
+          </div>
+
+          <section class="flex flex-col gap-2">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-semibold text-slate-700">{{ 'invoiceRag.items' | translate }}</span>
+              <p-button icon="pi pi-plus" [label]="'invoiceRag.addItem' | translate" size="small" [text]="true" (onClick)="addItem()" />
+            </div>
+            <div formArrayName="items" class="flex flex-col gap-2">
+              @for (item of f.controls.items.controls; track item; let i = $index) {
+                <div [formGroupName]="i" class="grid grid-cols-[1fr_5rem_7rem_7rem_2.5rem] items-center gap-2">
+                  <input pInputText formControlName="description" [placeholder]="'invoiceRag.description' | translate" class="w-full" />
+                  <p-inputnumber formControlName="quantity" [placeholder]="'invoiceRag.quantity' | translate" [maxFractionDigits]="3" styleClass="w-full" inputStyleClass="w-full" />
+                  <p-inputnumber formControlName="unitPrice" [placeholder]="'invoiceRag.unitPrice' | translate" [minFractionDigits]="2" [maxFractionDigits]="2" styleClass="w-full" inputStyleClass="w-full" />
+                  <p-inputnumber formControlName="amount" [placeholder]="'invoiceRag.amount' | translate" [minFractionDigits]="2" [maxFractionDigits]="2" styleClass="w-full" inputStyleClass="w-full" />
+                  <p-button icon="pi pi-trash" severity="danger" [text]="true" size="small" (onClick)="removeItem(i)" [ariaLabel]="'invoiceRag.remove' | translate" />
+                </div>
+              } @empty {
+                <p class="text-xs text-slate-400">{{ 'invoiceRag.noItems' | translate }}</p>
+              }
+            </div>
+          </section>
+
+          <section class="flex flex-col gap-2">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-semibold text-slate-700">{{ 'invoiceRag.taxes' | translate }}</span>
+              <p-button icon="pi pi-plus" [label]="'invoiceRag.addTax' | translate" size="small" [text]="true" (onClick)="addTax()" />
+            </div>
+            <div formArrayName="taxes" class="flex flex-col gap-2">
+              @for (tax of f.controls.taxes.controls; track tax; let i = $index) {
+                <div [formGroupName]="i" class="grid grid-cols-[1fr_6rem_8rem_2.5rem] items-center gap-2">
+                  <input pInputText formControlName="type" [placeholder]="'invoiceRag.taxType' | translate" class="w-full" />
+                  <p-inputnumber formControlName="ratePercent" suffix=" %" [maxFractionDigits]="4" [placeholder]="'invoiceRag.rate' | translate" styleClass="w-full" inputStyleClass="w-full" />
+                  <p-inputnumber formControlName="amount" [minFractionDigits]="2" [maxFractionDigits]="2" [placeholder]="'invoiceRag.amount' | translate" styleClass="w-full" inputStyleClass="w-full" />
+                  <p-button icon="pi pi-trash" severity="danger" [text]="true" size="small" (onClick)="removeTax(i)" [ariaLabel]="'invoiceRag.remove' | translate" />
+                </div>
+              }
+            </div>
+          </section>
+
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div class="flex flex-col gap-1">
+              <label for="rag-subtotal" class="text-xs font-medium text-slate-600">{{ 'invoiceRag.subtotal' | translate }}</label>
+              <p-inputnumber inputId="rag-subtotal" formControlName="subtotal" [minFractionDigits]="2" [maxFractionDigits]="2" styleClass="w-full" inputStyleClass="w-full" />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label for="rag-total" class="text-xs font-medium text-slate-600">{{ 'invoiceRag.total' | translate }}</label>
+              <p-inputnumber inputId="rag-total" formControlName="total" [minFractionDigits]="2" [maxFractionDigits]="2" styleClass="w-full" inputStyleClass="w-full font-bold" />
+              @if (f.controls.total.invalid && f.controls.total.touched) {
+                <span class="text-xs text-red-600">{{ 'invoiceRag.totalRequired' | translate }}</span>
+              }
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <label for="rag-notes" class="text-xs font-medium text-slate-600">{{ 'invoiceRag.notes' | translate }}</label>
+            <textarea pTextarea id="rag-notes" formControlName="notes" rows="3" class="w-full"></textarea>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2 border-t border-(--pos-border) pt-4">
+            @if (confirmingRemove()) {
+              <span class="text-sm text-red-700">{{ 'invoiceRag.removeConfirm' | translate }}</span>
+              <p-button type="button" [label]="'invoiceRag.yesRemove' | translate" severity="danger" size="small" [loading]="busy() === 'remove'" (onClick)="remove()" />
+              <p-button type="button" [label]="'invoiceRag.cancel' | translate" severity="secondary" size="small" [text]="true" (onClick)="confirmingRemove.set(false)" />
+            } @else {
+              <p-button type="button" icon="pi pi-trash" [label]="'invoiceRag.remove' | translate" severity="danger" [text]="true" [disabled]="!!busy()" (onClick)="confirmingRemove.set(true)" />
+            }
+            <p-button
+              type="button"
+              styleClass="ml-auto"
+              icon="pi pi-sparkles"
+              [label]="'invoiceRag.reextract' | translate"
+              severity="secondary"
+              [outlined]="true"
+              [loading]="busy() === 'extract'"
+              [disabled]="!!busy()"
+              (onClick)="reextract()"
+            />
+            <p-button
+              type="submit"
+              icon="pi pi-check"
+              [label]="'invoiceRag.confirm' | translate"
+              [loading]="busy() === 'confirm'"
+              [disabled]="!!busy()"
+            />
+          </div>
+        </form>
+      </div>
+    </div>
+  }
+</div>

@@ -23,7 +23,7 @@
     la ejecución; `connect-src` solo acotaría a dónde puede hablar código que ya
     no debería poder ejecutarse.
   -->
-  <meta http-equiv="Content-Security-Policy" content="script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob:; font-src 'self' file: data:; media-src 'self' file: data:; object-src 'none'; frame-src 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob:; font-src 'self' file: data:; media-src 'self' file: data:; object-src 'none'; frame-src blob:; form-action 'none'">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
 </head>
 <body>

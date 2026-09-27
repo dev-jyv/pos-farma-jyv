@@ -1,0 +1,65 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <p-button icon="pi pi-arrow-left" [text]="true" (onClick)="back()" [ariaLabel]="'invoiceRag.back' | translate" />
+    <div>
+      <h1 class="text-lg font-bold text-slate-900">{{ 'invoiceRag.searchTitle' | translate }}</h1>
+      <p class="text-xs text-slate-500">{{ 'invoiceRag.searchHint' | translate }}</p>
+    </div>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-5">
+    @if (!available) {
+      <p class="mx-auto max-w-3xl rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        {{ 'invoiceRag.desktopOnly' | translate }}
+      </p>
+    } @else {
+      <div class="mx-auto flex max-w-3xl flex-col gap-4">
+        <form class="flex gap-2" (ngSubmit)="search()">
+          <label for="invoice-rag-query" class="sr-only">{{ 'invoiceRag.searchTitle' | translate }}</label>
+          <input
+            pInputText
+            id="invoice-rag-query"
+            name="query"
+            autocomplete="off"
+            class="flex-1"
+            maxlength="500"
+            [ngModel]="query()"
+            (ngModelChange)="query.set($event)"
+            [placeholder]="'invoiceRag.searchPlaceholder' | translate"
+          />
+          <p-button type="submit" icon="pi pi-search" [label]="'invoiceRag.searchAction' | translate" [loading]="searching()" [disabled]="!query().trim()" />
+        </form>
+
+        @for (hit of hits(); track hit.document.id) {
+          @let data = hit.document.confirmed ?? hit.document.extracted;
+          <button
+            type="button"
+            (click)="open(hit)"
+            class="flex w-full items-center gap-4 rounded-xl border border-slate-200 px-4 py-3 text-left transition hover:border-(--pos-primary) hover:bg-slate-50"
+          >
+            <div class="flex w-14 shrink-0 flex-col items-center">
+              <span class="text-lg font-bold tabular-nums text-(--pos-primary-ink)">{{ hit.score | percent: '1.0-0' }}</span>
+              <span class="text-[10px] uppercase text-slate-400">{{ 'invoiceRag.similarity' | translate }}</span>
+            </div>
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-sm font-semibold text-slate-800">{{ data?.issuer?.name || hit.document.fileName }}</p>
+              <p class="truncate text-xs text-slate-500">
+                {{ hit.document.documentType ? ('invoiceRag.type.' + hit.document.documentType | translate) : '' }}
+                @if (data?.folio) { · {{ data!.folio }} }
+                @if (data?.issueDate) { · {{ data!.issueDate | date: 'dd/MM/yyyy' : 'UTC' }} }
+              </p>
+            </div>
+            @if (data?.total != null) {
+              <span class="text-sm font-bold tabular-nums">${{ data!.total | number: '1.2-2' }}</span>
+            }
+            <i class="pi pi-angle-right text-slate-300"></i>
+          </button>
+        } @empty {
+          @if (searched()) {
+            <p class="py-10 text-center text-sm text-slate-500">{{ 'invoiceRag.noResults' | translate }}</p>
+          }
+        }
+      </div>
+    }
+  </div>
+</div>

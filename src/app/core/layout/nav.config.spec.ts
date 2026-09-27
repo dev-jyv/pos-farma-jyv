@@ -81,6 +81,7 @@ describe('NAV_ITEMS', () => {
       'nav.categories',
       'nav.suppliers',
       'nav.invoices',
+      'nav.invoiceRag',
       'nav.products',
     ]);
   });

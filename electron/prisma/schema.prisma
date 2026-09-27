@@ -390,3 +390,43 @@ model Promotion {
 
   @@index([isActive])
 }
+
+/// Facturas-RAG: comprobante (factura o recibo) leído por un LLM con visión.
+/// Local a la caja, sin sync. El archivo vive en `userData/invoice-rag/`.
+model InvoiceDocument {
+  id            String            @id @default(uuid())
+  fileName      String
+  mimeType      String
+  sizeBytes     Int
+  filePath      String
+  fileSha256    String            @unique
+  /// 'uploaded' | 'extracted' | 'indexed' | 'failed'
+  status        String            @default("uploaded")
+  /// 'invoice' | 'receipt' | 'other'
+  documentType  String?
+  confidence    Float?
+  /// JSON tal como lo devolvió el LLM.
+  extractedJson String?
+  /// JSON revisado por el usuario; es el que se embebe.
+  confirmedJson String?
+  extractError  String?
+  model         String?
+  createdBy     String
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  embedding     InvoiceEmbedding?
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+/// Embedding del JSON confirmado. `vector` es un Float32Array en crudo.
+model InvoiceEmbedding {
+  documentId  String          @id
+  model       String
+  dims        Int
+  vector      Bytes
+  contentText String
+  createdAt   DateTime        @default(now())
+  document    InvoiceDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+}

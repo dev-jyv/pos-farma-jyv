@@ -5,6 +5,12 @@ import {
   CashSession,
   CashSessionSummary,
   ExpenseCategory,
+  InvoiceRagData,
+  InvoiceRagDocument,
+  InvoiceRagDocumentType,
+  InvoiceRagEmbedding,
+  InvoiceRagSearchHit,
+  InvoiceRagStatus,
   PaymentMethod,
   Product,
   ProductBatch,
@@ -371,6 +377,37 @@ declare global {
       promotions: {
         listActive: () => Promise<PromotionDto[]>;
         upsertMany: (promotions: unknown[]) => Promise<{ count: number }>;
+      };
+      /** Archivos en `userData/invoice-rag/`; el renderer manda bytes, nunca rutas. */
+      invoiceRag: {
+        register: (input: {
+          fileName: string;
+          mimeType: string;
+          bytes: Uint8Array;
+          createdBy: string;
+        }) => Promise<{ document: InvoiceRagDocument; duplicate: boolean }>;
+        readFile: (id: string) => Promise<{ fileName: string; mimeType: string; bytes: Uint8Array }>;
+        list: (filters?: {
+          status?: InvoiceRagStatus;
+          documentType?: InvoiceRagDocumentType;
+          term?: string;
+          page?: number;
+          limit?: number;
+        }) => Promise<{ items: InvoiceRagDocument[]; total: number }>;
+        getById: (id: string) => Promise<InvoiceRagDocument | null>;
+        saveExtraction: (id: string, input: { data: InvoiceRagData; model: string }) => Promise<InvoiceRagDocument>;
+        markFailed: (id: string, message: string) => Promise<InvoiceRagDocument>;
+        confirm: (
+          id: string,
+          input: { data: InvoiceRagData; contentText: string; embedding: InvoiceRagEmbedding },
+        ) => Promise<InvoiceRagDocument>;
+        search: (input: {
+          vector: number[];
+          model: string;
+          limit?: number;
+          minScore?: number;
+        }) => Promise<InvoiceRagSearchHit[]>;
+        remove: (id: string) => Promise<{ id: string }>;
       };
       cashMovements: {
         /** `cashSessionId` en `null`: caja de la farmacia, movimiento sin turno. */

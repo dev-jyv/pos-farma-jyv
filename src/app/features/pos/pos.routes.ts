@@ -127,6 +127,26 @@ export const POS_ROUTES: Routes = [
     loadComponent: () => import('./invoices/invoice-detail/invoice-detail').then((m) => m.InvoiceDetail),
   },
   {
+    path: 'facturas-rag',
+    canActivate: [permissionGuard('invoices', 'write')],
+    loadComponent: () => import('./invoice-rag/invoice-rag-list/invoice-rag-list').then((m) => m.InvoiceRagList),
+  },
+  {
+    path: 'facturas-rag/nuevo',
+    canActivate: [permissionGuard('invoices', 'write')],
+    loadComponent: () => import('./invoice-rag/invoice-rag-upload/invoice-rag-upload').then((m) => m.InvoiceRagUpload),
+  },
+  {
+    path: 'facturas-rag/buscar',
+    canActivate: [permissionGuard('invoices', 'write')],
+    loadComponent: () => import('./invoice-rag/invoice-rag-search/invoice-rag-search').then((m) => m.InvoiceRagSearch),
+  },
+  {
+    path: 'facturas-rag/:id',
+    canActivate: [permissionGuard('invoices', 'write')],
+    loadComponent: () => import('./invoice-rag/invoice-rag-review/invoice-rag-review').then((m) => m.InvoiceRagReview),
+  },
+  {
     /**
      * Edición de catálogo local-first: busca en SQLite, y da de alta/edita
      * escribiendo directo ahí (sin red), igual que venta y entrada de stock.

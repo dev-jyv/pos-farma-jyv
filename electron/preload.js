@@ -107,6 +107,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listActive: () => ipcRenderer.invoke('promotions:listActive'),
     upsertMany: (promotions) => ipcRenderer.invoke('promotions:upsertMany', promotions),
   },
+  invoiceRag: {
+    register: (input) => ipcRenderer.invoke('invoiceRag:register', input),
+    readFile: (id) => ipcRenderer.invoke('invoiceRag:readFile', id),
+    list: (filters) => ipcRenderer.invoke('invoiceRag:list', filters),
+    getById: (id) => ipcRenderer.invoke('invoiceRag:getById', id),
+    saveExtraction: (id, input) => ipcRenderer.invoke('invoiceRag:saveExtraction', id, input),
+    markFailed: (id, message) => ipcRenderer.invoke('invoiceRag:markFailed', id, message),
+    confirm: (id, input) => ipcRenderer.invoke('invoiceRag:confirm', id, input),
+    search: (input) => ipcRenderer.invoke('invoiceRag:search', input),
+    remove: (id) => ipcRenderer.invoke('invoiceRag:remove', id),
+  },
   cashMovements: {
     add: (cashSessionId, input) => ipcRenderer.invoke('cashMovements:add', cashSessionId, input),
     updateExpense: (id, patch) => ipcRenderer.invoke('cashMovements:updateExpense', id, patch),

@@ -160,6 +160,14 @@ export const NAV_ITEMS: NavItem[] = [
     group: 'inventory',
   },
   {
+    labelKey: 'nav.invoiceRag',
+    path: '/pos/facturas-rag',
+    icon: 'pi pi-sparkles',
+    hotkey: '',
+    permission: { area: 'invoices', level: 'write' },
+    group: 'inventory',
+  },
+  {
     labelKey: 'nav.products',
     path: '/pos/productos',
     icon: 'pi pi-tag',

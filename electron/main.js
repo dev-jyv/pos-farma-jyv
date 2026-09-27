@@ -25,6 +25,7 @@ const cashSessionsDb = require('./db/cash-sessions');
 const cashMovementsDb = require('./db/cash-movements');
 const pharmacyServicesDb = require('./db/pharmacy-services');
 const promotionsDb = require('./db/promotions');
+const invoiceRagDb = require('./db/invoice-rag');
 
 app.commandLine.appendSwitch('lang', 'es-MX');
 app.commandLine.appendSwitch('accept-lang', 'es-MX,es;q=0.9');
@@ -439,6 +440,26 @@ function registrarIPCHandlers() {
     promotionsDb.listActive(await getPrisma(), new Date()));
   ipcMain.handle('promotions:upsertMany', async (_event, promotions) =>
     promotionsDb.upsertMany(await getPrisma(), promotions));
+
+  const invoiceRagDir = path.join(app.getPath('userData'), 'invoice-rag');
+  ipcMain.handle('invoiceRag:register', async (_event, input) =>
+    invoiceRagDb.register(await getPrisma(), invoiceRagDir, input));
+  ipcMain.handle('invoiceRag:readFile', async (_event, id) =>
+    invoiceRagDb.readFile(await getPrisma(), id));
+  ipcMain.handle('invoiceRag:list', async (_event, filters) =>
+    invoiceRagDb.list(await getPrisma(), filters));
+  ipcMain.handle('invoiceRag:getById', async (_event, id) =>
+    invoiceRagDb.getById(await getPrisma(), id));
+  ipcMain.handle('invoiceRag:saveExtraction', async (_event, id, input) =>
+    invoiceRagDb.saveExtraction(await getPrisma(), id, input));
+  ipcMain.handle('invoiceRag:markFailed', async (_event, id, message) =>
+    invoiceRagDb.markFailed(await getPrisma(), id, message));
+  ipcMain.handle('invoiceRag:confirm', async (_event, id, input) =>
+    invoiceRagDb.confirm(await getPrisma(), id, input));
+  ipcMain.handle('invoiceRag:search', async (_event, input) =>
+    invoiceRagDb.search(await getPrisma(), input));
+  ipcMain.handle('invoiceRag:remove', async (_event, id) =>
+    invoiceRagDb.remove(await getPrisma(), id));
 
   /**
    * El renderer recibió el aviso y va a decidir (puede tardar: cerrar un turno es

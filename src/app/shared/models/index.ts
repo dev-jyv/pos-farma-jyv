@@ -719,3 +719,74 @@ export interface DirectCharge {
   approvedAt: Date | null;
   createdAt: Date;
 }
+
+/* ── Facturas-RAG ──────────────────────────────────────────────────────── */
+
+export type InvoiceRagDocumentType = 'invoice' | 'receipt' | 'other';
+
+export type InvoiceRagStatus = 'uploaded' | 'extracted' | 'indexed' | 'failed';
+
+export interface InvoiceRagParty {
+  name: string | null;
+  rfc: string | null;
+}
+
+export interface InvoiceRagTax {
+  type: string;
+  rate: number | null;
+  amount: number;
+}
+
+export interface InvoiceRagItem {
+  description: string;
+  quantity: number | null;
+  unitPrice: number | null;
+  amount: number | null;
+}
+
+/** Contrato del JSON que devuelve `POST /invoice-rag/extract` y que el usuario confirma. */
+export interface InvoiceRagData {
+  documentType: InvoiceRagDocumentType;
+  confidence: number;
+  issuer: InvoiceRagParty;
+  receiver: InvoiceRagParty;
+  folio: string | null;
+  cfdiUuid: string | null;
+  /** `YYYY-MM-DD`. */
+  issueDate: string | null;
+  currency: string | null;
+  paymentMethod: string | null;
+  subtotal: number | null;
+  taxes: InvoiceRagTax[];
+  total: number | null;
+  items: InvoiceRagItem[];
+  notes: string | null;
+}
+
+export interface InvoiceRagDocument {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  status: InvoiceRagStatus;
+  documentType: InvoiceRagDocumentType | null;
+  confidence: number | null;
+  extracted: InvoiceRagData | null;
+  confirmed: InvoiceRagData | null;
+  extractError: string | null;
+  model: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InvoiceRagEmbedding {
+  model: string;
+  dims: number;
+  vector: number[];
+}
+
+export interface InvoiceRagSearchHit {
+  document: InvoiceRagDocument;
+  score: number;
+}

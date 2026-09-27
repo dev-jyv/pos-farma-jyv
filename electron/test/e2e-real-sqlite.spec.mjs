@@ -11,6 +11,7 @@ import catalogo from '../db/pharmacy-services.js';
 import productos from '../db/products.js';
 import ventas from '../db/sales.js';
 import promociones from '../db/promotions.js';
+import facturasRag from '../db/invoice-rag.js';
 
 /**
  * E2E del núcleo local-first: **SQLite de verdad**, migraciones de verdad y
@@ -58,6 +59,8 @@ beforeEach(async () => {
   await prisma.pharmacyService.deleteMany();
   await prisma.serviceProvider.deleteMany();
   await prisma.promotion.deleteMany();
+  await prisma.invoiceEmbedding.deleteMany();
+  await prisma.invoiceDocument.deleteMany();
 });
 
 async function unProducto({ id = 'p-1', stock = 20, salePrice = 50, remoteId = null } = {}) {
@@ -900,5 +903,41 @@ describe('promociones en SQLite real', () => {
       },
     });
     await expect(promociones.listActive(prisma, new Date())).resolves.toEqual([]);
+  });
+});
+
+describe('facturas-RAG en SQLite real', () => {
+  const PDF = new TextEncoder().encode('%PDF-1.7 factura CFE');
+
+  it('guarda el vector como BLOB, busca por coseno y borra en cascada', async () => {
+    const storageDir = path.join(tmpDir, 'invoice-rag');
+    const { document } = await facturasRag.register(prisma, storageDir, {
+      fileName: 'cfe.pdf',
+      mimeType: 'application/pdf',
+      bytes: PDF,
+      createdBy: ADMIN,
+    });
+    await facturasRag.saveExtraction(prisma, document.id, { data: { documentType: 'invoice', confidence: 0.9 }, model: 'm' });
+    await facturasRag.confirm(prisma, document.id, {
+      data: { documentType: 'invoice', total: 480 },
+      contentText: 'Factura CFE 480',
+      embedding: { model: 'emb', vector: [0.1, 0.2, 0.3] },
+    });
+
+    const [hit] = await facturasRag.search(prisma, { vector: [0.1, 0.2, 0.3], model: 'emb' });
+    expect(hit.document).toMatchObject({ id: document.id, status: 'indexed', confirmed: { total: 480 } });
+    expect(hit.score).toBeCloseTo(1, 5);
+
+    const again = await facturasRag.register(prisma, storageDir, {
+      fileName: 'copia.pdf',
+      mimeType: 'application/pdf',
+      bytes: PDF,
+      createdBy: CAJERO,
+    });
+    expect(again.duplicate).toBe(true);
+
+    await facturasRag.remove(prisma, document.id);
+    await expect(prisma.invoiceEmbedding.count()).resolves.toBe(0);
+    expect(fs.readdirSync(storageDir)).toEqual([]);
   });
 });

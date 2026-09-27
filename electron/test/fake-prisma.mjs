@@ -82,6 +82,11 @@ function applyData(row, data) {
   }
 }
 
+/** `where` de `findUnique`/`update`/`upsert`/`delete`: igualdad sobre la llave única que sea (`id`, `fileSha256`, `documentId`). */
+function matchesKey(row, where) {
+  return Object.entries(where).every(([key, value]) => row[key] === value);
+}
+
 function sortRows(rows, orderBy) {
   if (!orderBy) {
     return rows;
@@ -153,11 +158,11 @@ function createModel(db, name, defaults) {
       return model.rows.filter((row) => matchesWhere(row, where, db)).length;
     },
     async findUnique({ where, include }) {
-      const found = model.rows.find((row) => row.id === where.id);
+      const found = model.rows.find((row) => matchesKey(row, where));
       return found ? model.attachIncludes({ ...found }, include) : null;
     },
-    async findMany({ where, orderBy, include, take } = {}) {
-      const ordered = sortRows(model.rows.filter((row) => matchesWhere(row, where, db)), orderBy);
+    async findMany({ where, orderBy, include, take, skip = 0 } = {}) {
+      const ordered = sortRows(model.rows.filter((row) => matchesWhere(row, where, db)), orderBy).slice(skip);
       const rows = take ? ordered.slice(0, take) : ordered;
       return rows.map((row) => {
         const copy = { ...row };
@@ -169,7 +174,7 @@ function createModel(db, name, defaults) {
       });
     },
     async update({ where, data, include }) {
-      const found = model.rows.find((row) => row.id === where.id);
+      const found = model.rows.find((row) => matchesKey(row, where));
       if (!found) {
         // Mismo fallo que Prisma real: así una prueba nota un id equivocado.
         throw new Error('Record to update not found.');
@@ -189,15 +194,15 @@ function createModel(db, name, defaults) {
       return model.attachIncludes({ ...found }, include);
     },
     async upsert({ where, create, update }) {
-      const found = model.rows.find((row) => row.id === where.id);
+      const found = model.rows.find((row) => matchesKey(row, where));
       if (!found) {
-        return model.create({ data: { ...create, id: where.id } });
+        return model.create({ data: { ...where, ...create } });
       }
       applyData(found, update);
       return { ...found };
     },
     async delete({ where }) {
-      const index = model.rows.findIndex((row) => row.id === where.id);
+      const index = model.rows.findIndex((row) => matchesKey(row, where));
       if (index === -1) {
         throw new Error('Record to delete does not exist.');
       }
@@ -314,6 +319,20 @@ export function createFakePrisma() {
     deactivatedAt: null,
     isActive: true,
     updatedAt: new Date('2026-09-24T10:00:00Z'),
+  }));
+  db.invoiceDocument = createModel(db, 'invoiceDocument', () => ({
+    status: 'uploaded',
+    documentType: null,
+    confidence: null,
+    extractedJson: null,
+    confirmedJson: null,
+    extractError: null,
+    model: null,
+    createdAt: new Date('2026-09-26T15:00:00Z'),
+    updatedAt: new Date('2026-09-26T15:00:00Z'),
+  }));
+  db.invoiceEmbedding = createModel(db, 'invoiceEmbedding', () => ({
+    createdAt: new Date('2026-09-26T15:00:00Z'),
   }));
   db.serviceProvider = createModel(db, 'serviceProvider', () => ({
     license: null,
