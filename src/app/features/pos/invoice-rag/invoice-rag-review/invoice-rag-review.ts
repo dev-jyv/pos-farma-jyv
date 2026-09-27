@@ -1,4 +1,4 @@
-import { PercentPipe } from '@angular/common';
+import { DatePipe, PercentPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, OnDestroy, computed, inject, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -12,9 +12,11 @@ import { TagModule } from 'primeng/tag';
 import { TextareaModule } from 'primeng/textarea';
 
 import { getApiErrorMessage } from '../../../../core/api/api.utils';
+import { AuthService } from '../../../../core/auth/auth.service';
 import { NotificationService } from '../../../../core/notifications/notification.service';
 import { InvoiceRagDocument } from '../../../../shared/models';
 import { InvoiceRagPreview } from '../invoice-rag-preview/invoice-rag-preview';
+import { InvoiceRagStockDialog } from '../invoice-rag-stock/invoice-rag-stock-dialog';
 import { InvoiceRagFile, InvoiceRagService } from '../services/invoice-rag.service';
 import {
   InvoiceRagForm,
@@ -42,6 +44,8 @@ type BusyAction = 'extract' | 'confirm' | 'remove';
     TagModule,
     TextareaModule,
     InvoiceRagPreview,
+    InvoiceRagStockDialog,
+    DatePipe,
   ],
   templateUrl: './invoice-rag-review.html',
 })
@@ -64,6 +68,12 @@ export class InvoiceRagReview implements OnDestroy {
   readonly loading = signal(true);
   readonly busy = signal<BusyAction | null>(null);
   readonly confirmingRemove = signal(false);
+  readonly stockDialogOpen = signal(false);
+  readonly canEnterStock = inject(AuthService).can('stockEntry', 'write');
+  readonly canApplyStock = computed(() => {
+    const doc = this.document();
+    return doc?.status === 'indexed' && !doc.stockAppliedAt;
+  });
   readonly hasData = computed(() => {
     const doc = this.document();
     return !!(doc?.confirmed ?? doc?.extracted);

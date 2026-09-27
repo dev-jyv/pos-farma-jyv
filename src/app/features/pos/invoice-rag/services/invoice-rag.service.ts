@@ -13,6 +13,7 @@ import {
   InvoiceRagStatus,
 } from '../../../../shared/models';
 import { environment } from '../../../../../environments/environment';
+import { CreateStockEntryPayload } from '../../services/stock-entry.service';
 
 export const INVOICE_RAG_MAX_EMBED_CHARS = 8000;
 export const INVOICE_RAG_MIN_SCORE = 0.2;
@@ -45,7 +46,8 @@ function formatParty(label: string, party: { name: string | null; rfc: string | 
 function formatItem(item: InvoiceRagData['items'][number]): string {
   const quantity = item.quantity !== null ? ` x${item.quantity}` : '';
   const amount = item.amount !== null ? ` = ${item.amount}` : '';
-  return `${item.description}${quantity}${amount}`;
+  const barcode = item.barcode ? ` [${item.barcode}]` : '';
+  return `${item.description}${barcode}${quantity}${amount}`;
 }
 
 /** Texto que se embebe: los campos que tiene sentido buscar, sin los vacíos. */
@@ -141,6 +143,10 @@ export class InvoiceRagService {
     const contentText = buildEmbeddingText(data);
     const embedding = await this.embed(contentText);
     return this.store.confirm(id, { data, contentText, embedding });
+  }
+
+  applyStock(id: string, entries: CreateStockEntryPayload[]): Promise<InvoiceRagDocument> {
+    return this.store.applyStock(id, { entries, appliedBy: this.auth.user()?.uid ?? '' });
   }
 
   async search(query: string, limit = 10): Promise<InvoiceRagSearchHit[]> {

@@ -21,7 +21,7 @@ const DATA: InvoiceRagData = {
   subtotal: 413.79,
   taxes: [{ type: 'IVA', rate: 0.16, amount: 66.21 }],
   total: 480,
-  items: [{ description: 'Suministro', quantity: 1, unitPrice: 413.79, amount: 413.79 }],
+  items: [{ description: 'Suministro', barcode: '7501234567890', quantity: 1, unitPrice: 413.79, amount: 413.79 }],
 };
 
 function doc(overrides: Partial<InvoiceRagDocument> = {}): InvoiceRagDocument {
@@ -40,6 +40,8 @@ function doc(overrides: Partial<InvoiceRagDocument> = {}): InvoiceRagDocument {
     createdBy: 'u1',
     createdAt: '2026-09-26T15:00:00.000Z',
     updatedAt: '2026-09-26T15:00:00.000Z',
+    stockAppliedAt: null,
+    stockApplied: null,
     ...overrides,
   };
 }
@@ -56,7 +58,7 @@ describe('buildEmbeddingText', () => {
         'Subtotal: 413.79',
         'Impuestos: IVA 16%: 66.21',
         'Total: 480',
-        'Conceptos: Suministro x1 = 413.79',
+        'Conceptos: Suministro [7501234567890] x1 = 413.79',
       ].join('\n'),
     );
   });

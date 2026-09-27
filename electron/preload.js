@@ -116,6 +116,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     markFailed: (id, message) => ipcRenderer.invoke('invoiceRag:markFailed', id, message),
     confirm: (id, input) => ipcRenderer.invoke('invoiceRag:confirm', id, input),
     search: (input) => ipcRenderer.invoke('invoiceRag:search', input),
+    applyStock: (id, input) => ipcRenderer.invoke('invoiceRag:applyStock', id, input),
     remove: (id) => ipcRenderer.invoke('invoiceRag:remove', id),
   },
   cashMovements: {

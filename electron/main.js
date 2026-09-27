@@ -486,6 +486,8 @@ function registrarIPCHandlers() {
   ipcMain.handle('cashMovements:listBlocked', async () =>
     cashMovementsDb.listBlocked(await getPrisma()));
   ipcMain.handle('cashMovements:updateExpense', async (_event, id, patch) =>
+  ipcMain.handle('invoiceRag:applyStock', async (_event, id, input) =>
+    invoiceRagDb.applyStock(await getPrisma(), id, input));
     cashMovementsDb.updateExpense(await getPrisma(), id, patch));
   ipcMain.handle('cashMovements:listForSession', async (_event, cashSessionId) =>
     cashMovementsDb.listForSession(await getPrisma(), cashSessionId));

@@ -11,6 +11,8 @@ const crypto = require('crypto');
 const fs = require('fs/promises');
 const path = require('path');
 
+const products = require('./products');
+
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const PAGE_LIMIT_MAX = 100;
 const SEARCH_LIMIT_MAX = 50;
@@ -51,7 +53,21 @@ function toDocumentDto(row) {
     createdBy: row.createdBy,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    stockAppliedAt: row.stockAppliedAt ? row.stockAppliedAt.toISOString() : null,
+    stockApplied: parseJson(row.stockAppliedJson),
   };
+}
+
+function assertStockEntry(entry) {
+  const valid =
+    entry &&
+    typeof entry.productId === 'string' && entry.productId &&
+    typeof entry.invoiceId === 'string' && entry.invoiceId &&
+    typeof entry.lotNumber === 'string' && entry.lotNumber.trim() &&
+    typeof entry.expiryDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(entry.expiryDate) &&
+    Number.isInteger(entry.quantity) && entry.quantity >= 1 &&
+    !entry.product;
+  if (!valid) throw new Error('Partida de inventario inválida');
 }
 
 function assertPlainObject(value, label) {
@@ -246,6 +262,41 @@ async function search(prisma, { vector, model, limit = 10, minScore = 0 }) {
     .map((hit) => ({ document: toDocumentDto(byId.get(hit.documentId)), score: hit.score }));
 }
 
+/**
+ * Suma al inventario las partidas del documento, **una sola vez**: el
+ * `updateMany` condicionado reclama el documento antes de tocar stock, así que
+ * dos clics simultáneos no duplican la entrada. Todo en una transacción: si una
+ * partida falla, no entra ninguna y el documento queda sin aplicar. Cada
+ * partida pasa por `recordStockEntry`, así que sube con el push de entradas.
+ */
+async function applyStock(prisma, id, { entries, appliedBy }) {
+  if (!Array.isArray(entries) || entries.length === 0) throw new Error('No hay partidas para aplicar');
+  if (!appliedBy) throw new Error('Usuario requerido');
+  entries.forEach(assertStockEntry);
+
+  return prisma.$transaction(async (tx) => {
+    await requireDocument(tx, id);
+    const claimed = await tx.invoiceDocument.updateMany({
+      where: { id, status: 'indexed', stockAppliedAt: null },
+      data: { stockAppliedAt: new Date(), stockAppliedBy: String(appliedBy) },
+    });
+    if (claimed.count !== 1) {
+      throw new Error('El documento debe estar indexado y aún no aplicado al inventario');
+    }
+
+    const applied = [];
+    for (const entry of entries) {
+      const { product, stock } = await products.recordStockEntry(tx, entry);
+      applied.push({ productId: product.id, name: product.name, quantity: entry.quantity, stock });
+    }
+    const row = await tx.invoiceDocument.update({
+      where: { id },
+      data: { stockAppliedJson: JSON.stringify(applied) },
+    });
+    return toDocumentDto(row);
+  });
+}
+
 async function remove(prisma, id) {
   const row = await requireDocument(prisma, id);
   await prisma.$transaction([
@@ -266,5 +317,6 @@ module.exports = {
   markFailed,
   confirm,
   search,
+  applyStock,
   remove,
 };
