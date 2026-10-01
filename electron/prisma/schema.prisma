@@ -438,3 +438,22 @@ model InvoiceEmbedding {
   createdAt   DateTime        @default(now())
   document    InvoiceDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
 }
+
+/// Bitácora local de sincronización: errores de sync, bloqueos/desbloqueos de
+/// ventas, "Arreglar" y comandos remotos. Existe porque cuando una venta no
+/// sube, el `pushError` solo dice el **estado** actual; esto guarda la
+/// **historia** (qué falló, cuándo y qué se intentó), que es lo que el
+/// diagnóstico remoto le manda al admin. Se purga a los 30 días al arrancar.
+model SyncLog {
+  id      String   @id @default(uuid())
+  at      DateTime @default(now())
+  /// 'info' | 'warn' | 'error'
+  level   String
+  /// 'sale' | 'cashSession' | 'product' | 'sync' | 'command' | ...
+  entity  String
+  message String
+  /// Id local (o de comando) del registro al que se refiere, si aplica.
+  ref     String?
+
+  @@index([at])
+}

@@ -12,6 +12,9 @@ import productos from '../db/products.js';
 import ventas from '../db/sales.js';
 import promociones from '../db/promotions.js';
 import facturasRag from '../db/invoice-rag.js';
+import bitacora from '../db/sync-log.js';
+import diagnostico from '../db/diagnostics.js';
+import bloqueadores from '../db/sale-blockers.js';
 
 /**
  * E2E del núcleo local-first: **SQLite de verdad**, migraciones de verdad y
@@ -61,6 +64,8 @@ beforeEach(async () => {
   await prisma.promotion.deleteMany();
   await prisma.invoiceEmbedding.deleteMany();
   await prisma.invoiceDocument.deleteMany();
+  await prisma.syncLog.deleteMany();
+  await prisma.syncRun.deleteMany();
 });
 
 async function unProducto({ id = 'p-1', stock = 20, salePrice = 50, remoteId = null } = {}) {
@@ -969,7 +974,8 @@ describe('sincronización: la cola contra el backend', () => {
     }
 
     const [fila] = await prisma.sale.findMany();
-    expect(fila.pushError).toMatch(/espera a que su turno o alguno de sus productos sincronice/i);
+    // Nombra al bloqueador concreto, no "su turno o alguno de sus productos".
+    expect(fila.pushError).toMatch(/^Espera al producto Producto p-1 \(alta local sin subir/);
   });
 
   it('el cierre de un turno no se puede subir antes que su alta', async () => {
@@ -1411,5 +1417,63 @@ describe('lo pendiente de subir sobrevive al pull y a los filtros por dueño', (
     await ventas.markPushFailed(prisma, ajena.id, 'rechazada');
     expect(await ventas.listBlocked(prisma, { ownerUid: CAJERO })).toHaveLength(0);
     expect(await ventas.listBlocked(prisma)).toHaveLength(1);
+  });
+});
+
+describe('salud del sync en SQLite real', () => {
+  it('la bitácora se escribe, se lista y se purga con fechas reales', async () => {
+    await prisma.syncLog.create({
+      data: { level: 'info', entity: 'sync', message: 'viejo', at: new Date('2026-08-01T10:00:00Z') },
+    });
+    await bitacora.append(prisma, { level: 'error', entity: 'sale', message: 'rechazo', ref: 's-1' });
+
+    expect((await bitacora.listRecent(prisma, 10)).map((r) => r.message)).toEqual(['rechazo', 'viejo']);
+    expect(await bitacora.purgeOld(prisma, new Date())).toBe(1);
+    expect(await prisma.syncLog.count()).toBe(1);
+  });
+
+  it('venta atorada por un turno rechazado: diagnóstico, healing al subir el turno y foto', async () => {
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openedByLabel: 'ana@farma.mx', openingAmount: 0 });
+    await cashSessions.markPushFailed(prisma, turno.id, 'Turno remoto ya abierto');
+    const venta = await ventas.createLocal(prisma, {
+      ...ventaPayload([partidaServicio()]),
+      cashSessionId: turno.id,
+      payload: { cashSessionId: turno.id, items: [partidaServicio()] },
+    });
+    for (let ciclo = 0; ciclo < ventas.MAX_RESOLVE_ATTEMPTS; ciclo += 1) {
+      await ventas.getPendingPush(prisma, { contarIntentos: true });
+    }
+
+    const [bloqueador] = await bloqueadores.diagnoseSale(prisma, venta.id);
+    expect(bloqueador).toMatchObject({ kind: 'cashSession', localId: turno.id, error: 'Turno remoto ya abierto' });
+    const atorada = await prisma.sale.findUnique({ where: { id: venta.id } });
+    expect(atorada.pushError).toMatch(/^Espera al turno de ana@farma\.mx del .* \(su apertura falló: Turno remoto ya abierto\)/);
+
+    const foto = await diagnostico.buildSnapshot(prisma, {
+      deviceId: 'caja-1', deviceName: 'caja-1', appVersion: '1.0.5', platform: 'darwin-arm64',
+    });
+    expect(foto.blockedSales[0]).toMatchObject({ localId: venta.id, waitingFor: 'turno' });
+    expect(foto.blockedCashSessions[0]).toMatchObject({ localId: turno.id, pushError: 'Turno remoto ya abierto' });
+    expect(foto.syncLog.some((r) => r.ref === venta.id && r.level === 'warn')).toBe(true);
+
+    // El turno sube (tras "Arreglar"): la venta vuelve sola a la cola.
+    await cashSessions.retryPush(prisma, turno.id);
+    await cashSessions.markCreateSynced(prisma, turno.id, 'remote-cs-1');
+    const pendientes = await ventas.getPendingPush(prisma, { contarIntentos: true });
+    expect(pendientes.map((p) => p.payload?.cashSessionId)).toEqual(['remote-cs-1']);
+  });
+
+  it('un producto con id de Firestore sin fila local sube tal cual', async () => {
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    await cashSessions.markCreateSynced(prisma, turno.id, 'remote-cs-2');
+    await ventas.createLocal(prisma, {
+      ...ventaPayload([partidaProducto('Ab3dE6gH9jK2mN5pQ8sT')]),
+      cashSessionId: turno.id,
+      payload: { cashSessionId: turno.id, items: [partidaProducto('Ab3dE6gH9jK2mN5pQ8sT')] },
+    });
+
+    const [pendiente] = await ventas.getPendingPush(prisma, { contarIntentos: true });
+
+    expect(pendiente.payload.items[0].productId).toBe('Ab3dE6gH9jK2mN5pQ8sT');
   });
 });

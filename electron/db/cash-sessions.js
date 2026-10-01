@@ -567,6 +567,23 @@ async function clearPushError(prisma, localId) {
   await prisma.cashSession.update({ where: { id: localId }, data: { pushError: null } });
 }
 
+/**
+ * "Arreglar" de un turno que bloquea ventas: limpia el error del alta (y del
+ * cierre, si lo tiene) para que `flushQueue`/`flushCloses` lo vuelvan a subir.
+ * `false` si el turno no existe en esta caja.
+ */
+async function retryPush(prisma, localId) {
+  const session = await prisma.cashSession.findUnique({ where: { id: localId } });
+  if (!session) {
+    return false;
+  }
+  await prisma.cashSession.update({
+    where: { id: localId },
+    data: { pushError: null, closePushError: null },
+  });
+  return true;
+}
+
 async function clearClosePushError(prisma, localId) {
   await prisma.cashSession.update({ where: { id: localId }, data: { closePushError: null } });
 }
@@ -599,6 +616,7 @@ async function updateAdjustmentStatus(prisma, localId, { status, reviewedBy, rev
 }
 
 module.exports = {
+  retryPush,
   // Exportada para poder probar la aritmética del corte sin pasar por SQLite:
   // es el espejo del `buildSummary` autoritativo del backend y cualquier
   // divergencia se paga en el arqueo del cajero.

@@ -10,6 +10,7 @@ import { ProductCatalogService } from '../../features/pos/services/product-catal
 import { SaleService } from '../../features/pos/services/sale.service';
 import { StockEntryService } from '../../features/pos/services/stock-entry.service';
 import { SyncScheduler } from './sync-scheduler.service';
+import { PosDiagnosticsService } from './pos-diagnostics.service';
 import { AuthService } from '../auth/auth.service';
 
 /**
@@ -970,5 +971,66 @@ describe('SyncScheduler — pull de promociones cada hora', () => {
       scheduler.stop();
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * Diagnóstico remoto: se manda tras cada sync completo y tras el pull horario
+ * de promociones, sin esperar ni romper nada.
+ */
+describe('SyncScheduler — diagnóstico remoto', () => {
+  let scheduler: SyncScheduler;
+  let report: Mock;
+
+  beforeEach(() => {
+    report = vi.fn().mockResolvedValue(undefined);
+    window.electronAPI = {} as unknown as Window['electronAPI'];
+    const flushAsync = { flushQueue: vi.fn(), flushQueueAsync: vi.fn().mockResolvedValue(undefined) };
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ApiHealthService, useValue: { checkNow: vi.fn() } },
+        { provide: AuthService, useValue: { user: () => ({ uid: 'uid-cajero' }), isAdmin: () => false } },
+        { provide: PosDiagnosticsService, useValue: { report } },
+        { provide: SaleService, useValue: flushAsync },
+        { provide: StockEntryService, useValue: flushAsync },
+        { provide: ProductCatalogService, useValue: flushAsync },
+        {
+          provide: CashSessionService,
+          useValue: { ...flushAsync, flushClosesAsync: vi.fn().mockResolvedValue(undefined), pullAdjustmentStatus: vi.fn() },
+        },
+        { provide: CashMovementService, useValue: flushAsync },
+      ],
+    });
+    scheduler = TestBed.inject(SyncScheduler);
+    const privado = scheduler as unknown as Record<string, unknown>;
+    vi.spyOn(privado as { pullProducts: () => Promise<unknown> }, 'pullProducts').mockResolvedValue({ ok: true, pulled: 0 });
+    vi.spyOn(privado as { pushPending: () => Promise<void> }, 'pushPending').mockResolvedValue(undefined);
+    vi.spyOn(privado as { pullCatalog: () => Promise<boolean> }, 'pullCatalog').mockResolvedValue(true);
+  });
+
+  async function drenar(): Promise<void> {
+    for (let i = 0; i < 10; i += 1) {
+      await Promise.resolve();
+    }
+  }
+
+  it('tras el sync manual', async () => {
+    await scheduler.syncNow();
+    expect(report).toHaveBeenCalledTimes(1);
+  });
+
+  it('tras la corrida de horario, cuando terminaron pull y push', async () => {
+    scheduler.runNow();
+    expect(report).not.toHaveBeenCalled();
+    await drenar();
+    expect(report).toHaveBeenCalledTimes(1);
+  });
+
+  it('tras el pull horario de promociones', async () => {
+    await scheduler.pullPromotions();
+    expect(report).toHaveBeenCalledTimes(1);
   });
 });

@@ -12,6 +12,7 @@ import { StockEntryService } from '../../features/pos/services/stock-entry.servi
 import { environment } from '../../../environments/environment';
 import { AuthService } from '../auth/auth.service';
 import { AutoPushService } from './auto-push.service';
+import { PosDiagnosticsService } from './pos-diagnostics.service';
 import { pushOwnerFilter } from './push-owner';
 import { PROMOTIONS_SYNCED_EVENT, SERVICES_SYNCED_EVENT } from './sync-events';
 
@@ -96,6 +97,7 @@ export class SyncScheduler {
   private readonly cashMovementService = inject(CashMovementService);
   private readonly apiHealth = inject(ApiHealthService);
   private readonly auth = inject(AuthService);
+  private readonly diagnostics = inject(PosDiagnosticsService);
   private readonly apiUrl = environment.apiUrl;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -232,6 +234,9 @@ export class SyncScheduler {
     // Se avisa aunque falle: `PromoService` relee lo que haya en SQLite, que no
     // cambió, y quien espera la recarga no se queda colgado.
     window.dispatchEvent(new Event(PROMOTIONS_SYNCED_EVENT));
+    // El pull horario es el latido más frecuente de la caja: entre los horarios
+    // fijos hay hasta 14 h, y un comando del admin no debe esperar tanto.
+    void this.diagnostics.report();
     return ok;
   }
 
@@ -249,7 +254,11 @@ export class SyncScheduler {
     // que todavía no descuenta las ventas que aún no subieron.
     void this.pushPending()
       .catch((error: unknown) => console.error('[sync] falló el push programado', error))
-      .finally(() => void this.pullProducts());
+      .finally(() =>
+        // Diagnóstico al terminar **ambos**: la foto debe reflejar lo que este
+        // sync dejó, no lo que había antes de correrlo.
+        void this.pullProducts().finally(() => void this.diagnostics.report()),
+      );
   }
 
   /**
@@ -333,6 +342,8 @@ export class SyncScheduler {
       // Después del push, no en paralelo: ver `runNow`.
       void this.pullProducts();
     }
+    // Sin esperar: el corte no debe quedarse colgado de un reporte.
+    void this.diagnostics.report();
   }
 
   /**
@@ -552,6 +563,9 @@ export class SyncScheduler {
       return outcome;
     } finally {
       this.syncing.set(false);
+      // Best-effort y sin esperar: el modal de sync no debe quedarse abierto
+      // mientras se manda la foto ni mientras corren los comandos remotos.
+      void this.diagnostics.report();
     }
   }
 

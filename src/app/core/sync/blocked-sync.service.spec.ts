@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthService } from '../auth/auth.service';
 import { BlockedSyncRecord } from '../electron/window.d';
+import { PosBlocker } from '../../shared/models';
 import { BlockedSyncService } from './blocked-sync.service';
 
 function build(isAdmin: boolean) {
@@ -138,5 +139,54 @@ describe('BlockedSyncService', () => {
       await build(true).discard(entrada);
       expect(discardStockEntry).toHaveBeenCalledWith('b1');
     });
+  });
+});
+
+/** Cuándo el panel ofrece "Arreglar" y cuándo "Mandar a conciliación". */
+describe('BlockedSyncService — reparación', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  const ventaCon = (blockers: PosBlocker[]): BlockedSyncRecord => ({
+    kind: 'sale',
+    id: 's-1',
+    label: 'F-1',
+    detail: '$1.00',
+    occurredAt: '2026-10-01T10:00:00Z',
+    reason: 'x',
+    blockers,
+  });
+  const turnoRechazado: PosBlocker = {
+    kind: 'cashSession',
+    localId: 'cs-1',
+    remoteId: null,
+    label: 'Turno',
+    error: 'rechazado',
+    missingLocally: false,
+  };
+  const productoPendiente: PosBlocker = {
+    kind: 'product',
+    localId: 'p-1',
+    remoteId: null,
+    label: 'Paracetamol',
+    error: null,
+    missingLocally: false,
+  };
+
+  it('Arreglar solo en ventas con bloqueadores locales', () => {
+    const service = build(false);
+    expect(service.canRepair(ventaCon([turnoRechazado]))).toBe(true);
+    expect(service.canRepair(ventaCon([]))).toBe(false);
+    expect(service.canRepair({ ...ventaCon([turnoRechazado]), kind: 'cashMovement' })).toBe(false);
+  });
+
+  it('conciliación solo tras un Arreglar fallido y con un bloqueador sin arreglo local', () => {
+    const service = build(false);
+    expect(service.canSendToUnreconciled(ventaCon([turnoRechazado]), false)).toBe(false);
+    expect(service.canSendToUnreconciled(ventaCon([turnoRechazado]), true)).toBe(true);
+    expect(service.canSendToUnreconciled(ventaCon([{ ...turnoRechazado, error: null }]), true)).toBe(false);
+    expect(service.canSendToUnreconciled(ventaCon([productoPendiente]), true)).toBe(false);
+    expect(
+      service.canSendToUnreconciled(ventaCon([{ ...productoPendiente, missingLocally: true }]), true),
+    ).toBe(true);
   });
 });

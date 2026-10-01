@@ -17,6 +17,7 @@ import { BlockedSyncRecord } from '../electron/window.d';
 import { BlockedSyncService } from '../sync/blocked-sync.service';
 import { describeBlocked } from '../sync/sync-diagnosis';
 import { SyncHelpReply, SyncHelpService } from '../sync/sync-help.service';
+import { SyncRepairService } from '../sync/sync-repair.service';
 import { NotificationService } from '../notifications/notification.service';
 import { CashSessionDialog } from '../../features/pos/cash-session/cash-session-dialog';
 import { CashMovementService } from '../../features/pos/services/cash-movement.service';
@@ -53,6 +54,7 @@ export class Shell {
   private readonly router = inject(Router);
   private readonly health = inject(ApiHealthService);
   private readonly blockedSync = inject(BlockedSyncService);
+  private readonly syncRepair = inject(SyncRepairService);
   private readonly syncScheduler = inject(SyncScheduler);
   private readonly notifications = inject(NotificationService);
   private readonly saleService = inject(SaleService);
@@ -150,6 +152,84 @@ export class Shell {
       this.retryingBlockedId.set(null);
     }
     this.closeBlockedIfEmpty();
+  }
+
+  /** Venta que se está arreglando ahora (deshabilita sus botones). */
+  readonly repairingId = signal<string | null>(null);
+  /**
+   * Ventas cuyo "Arreglar" ya falló en esta sesión: solo a ellas se les ofrece
+   * "Mandar a conciliación", para no saltarse el intento normal.
+   */
+  readonly failedRepairIds = signal<ReadonlySet<string>>(new Set());
+
+  canRepairBlocked(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.canRepair(record);
+  }
+
+  canSendBlockedToUnreconciled(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.canSendToUnreconciled(record, this.failedRepairIds().has(record.id));
+  }
+
+  /**
+   * Reintenta lo que detiene a la venta (turno o producto), sube, y si quedó
+   * resuelto la devuelve a la cola. El resultado se avisa siempre: un botón que
+   * no dice nada hace que el cajero lo pulse diez veces.
+   */
+  async repairBlocked(record: BlockedSyncRecord): Promise<void> {
+    if (this.repairingId()) {
+      return;
+    }
+    this.repairingId.set(record.id);
+    try {
+      const outcome = await this.syncRepair.fixSale(record.id);
+      this.failedRepairIds.update((ids) => {
+        const next = new Set(ids);
+        if (outcome.ok) {
+          next.delete(record.id);
+        } else {
+          next.add(record.id);
+        }
+        return next;
+      });
+      if (outcome.ok) {
+        this.notifications.success(`${record.label}: ${outcome.message}`);
+      } else {
+        this.notifications.warn(outcome.message, `No se pudo arreglar ${record.label}`);
+      }
+    } finally {
+      this.repairingId.set(null);
+      await this.blockedSync.refresh();
+      this.closeBlockedIfEmpty();
+    }
+  }
+
+  /**
+   * Último recurso: registra la venta en conciliación del servidor sin su turno
+   * local. Saca la venta de la cola para siempre, así que se confirma
+   * nombrándola.
+   */
+  async sendBlockedToUnreconciled(record: BlockedSyncRecord): Promise<void> {
+    const confirmado = window.confirm(
+      `¿Mandar "${record.label}" (${record.detail}) a conciliación?\n\n` +
+        'Su turno nunca se registró en el servidor. La venta quedará registrada ' +
+        'aparte para que un administrador la concilie, y saldrá de la cola de esta caja.',
+    );
+    if (!confirmado) {
+      return;
+    }
+    this.repairingId.set(record.id);
+    try {
+      const outcome = await this.syncRepair.sendSaleToUnreconciled(record.id);
+      if (outcome.ok) {
+        this.notifications.success(`${record.label}: ${outcome.message}`);
+      } else {
+        this.notifications.error(outcome.message);
+      }
+    } finally {
+      this.repairingId.set(null);
+      await this.blockedSync.refresh();
+      this.closeBlockedIfEmpty();
+    }
   }
 
   canFixBlocked(record: BlockedSyncRecord): boolean {

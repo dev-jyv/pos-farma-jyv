@@ -12,6 +12,9 @@ import {
   InvoiceRagSearchHit,
   InvoiceRagStatus,
   PaymentMethod,
+  PosBlocker,
+  PosDiagnosticsInput,
+  PosSyncLogEntry,
   Product,
   ProductBatch,
   ProductFieldsPayload,
@@ -192,6 +195,11 @@ export interface BlockedSyncRecord {
   reason: string;
   /** Causa ya clasificada (`electron/db/blocked-diagnosis.js`); ver `core/sync/sync-diagnosis.ts`. */
   diagnosis?: BlockedDiagnosis;
+  /**
+   * Solo ventas: lo que la detiene en la caja (turno o productos sin
+   * `remoteId`). Vacío si el bloqueo es un rechazo del servidor.
+   */
+  blockers?: PosBlocker[];
 }
 
 export type BlockedCode =
@@ -215,6 +223,21 @@ export interface BlockedDiagnosis {
   code: BlockedCode;
   /** Lo que la venta espera: con qué nombre lo reconoce el cajero. */
   dependency?: { kind: 'cashSession' | 'product'; label: string };
+}
+
+
+/** Venta lista para `POST /sales/unreconciled` aunque su turno nunca haya subido. */
+export interface UnreconciledSaleDraft extends Omit<Sale, 'cashSessionId'> {
+  /** Remoto del turno, o `null` si nunca subió (entonces no se manda). */
+  cashSessionId: string | null;
+  payload: Record<string, unknown>;
+}
+
+export interface SyncLogInput {
+  level: 'info' | 'warn' | 'error';
+  entity: string;
+  message: string;
+  ref?: string | null;
 }
 
 export interface PendingCashMovement extends CashMovement {
@@ -294,6 +317,11 @@ declare global {
         markCatalogSynced: (localId: string, remoteId?: string | null, pushedVersion?: string | null) => Promise<void>;
         markCatalogPushFailed: (localId: string, message: string) => Promise<void>;
         clearCatalogPushError: (localId: string) => Promise<void>;
+        /**
+         * Limpia los errores de alta del producto (catálogo y lotes) para que su
+         * cola lo reintente. `false` si no existe en local.
+         */
+        retryProductPush: (localId: string) => Promise<boolean>;
       };
       sales: {
         createLocal: (sale: LocalSaleInput) => Promise<Sale>;
@@ -316,6 +344,10 @@ declare global {
         >;
         markSynced: (localId: string, remoteId: string, remoteFolio: string) => Promise<void>;
         markPushFailed: (localId: string, message: string) => Promise<void>;
+        /** Bloqueadores de una venta; `null` si no existe. */
+        diagnose: (saleId: string) => Promise<PosBlocker[] | null>;
+        /** Payload para conciliación, sin turno local; `null` si no existe. */
+        prepareUnreconciled: (localId: string) => Promise<UnreconciledSaleDraft | null>;
         /** Guardada en `unreconciledSales` del servidor: sale de la cola, no del historial. */
         markUnreconciled: (localId: string, reason: string) => Promise<void>;
         voidLocal: (
@@ -339,6 +371,15 @@ declare global {
       sync: {
         getStatus: () => Promise<SyncRunStatus[]>;
         recordRun: (run: SyncRunInput) => Promise<{ id: string }>;
+      };
+      /** Bitácora local de sincronización. `append` nunca lanza. */
+      syncLog: {
+        append: (entry: SyncLogInput) => Promise<PosSyncLogEntry | null>;
+        list: (limit?: number) => Promise<PosSyncLogEntry[]>;
+      };
+      diagnostics: {
+        /** Foto para `POST /pos/diagnostics`, con la identidad del equipo. */
+        buildSnapshot: () => Promise<PosDiagnosticsInput>;
       };
       cashSessions: {
         /** El único turno sin cerrar de este cajero, si existe. */
@@ -391,6 +432,8 @@ declare global {
         markPushFailed: (localId: string, message: string) => Promise<void>;
         markClosePushFailed: (localId: string, message: string) => Promise<void>;
         clearPushError: (localId: string) => Promise<void>;
+        /** Limpia errores de alta y cierre para reintentar. `false` si no existe. */
+        retryPush: (localId: string) => Promise<boolean>;
         clearClosePushError: (localId: string) => Promise<void>;
         /** Todos los turnos locales, para la pantalla de auditoría del POS. */
         listLocal: (filters?: { openedBy?: string; adjustmentStatus?: CashAdjustmentStatus }) => Promise<CashSession[]>;
