@@ -15,6 +15,8 @@ import { AuthService } from '../auth/auth.service';
 import { ApiHealthService } from '../health/api-health.service';
 import { BlockedSyncRecord } from '../electron/window.d';
 import { BlockedSyncService } from '../sync/blocked-sync.service';
+import { describeBlocked } from '../sync/sync-diagnosis';
+import { SyncHelpReply, SyncHelpService } from '../sync/sync-help.service';
 import { NotificationService } from '../notifications/notification.service';
 import { CashSessionDialog } from '../../features/pos/cash-session/cash-session-dialog';
 import { CashMovementService } from '../../features/pos/services/cash-movement.service';
@@ -73,6 +75,10 @@ export class Shell {
   /** Registros que el servidor rechazó: se avisan aparte de los pendientes. */
   readonly blockedCount = this.blockedSync.count;
   readonly blockedRecords = this.blockedSync.records;
+  /** Cada registro con su causa en palabras del cajero y qué hacer primero. */
+  readonly blockedItems = computed(() =>
+    this.blockedRecords().map((record) => ({ record, help: describeBlocked(record) })),
+  );
   readonly blockedDialogVisible = signal(false);
 
   openBlocked(): void {
@@ -80,8 +86,63 @@ export class Shell {
     void this.blockedSync.refresh();
   }
 
+  private readonly syncHelp = inject(SyncHelpService);
+
+  /**
+   * Ayuda con IA por registro (llave `kind:id`). Solo para lo que las reglas
+   * locales no reconocen, y solo con red: sin conexión la IA no responde, y las
+   * causas conocidas ya traen su explicación sin preguntarle a nadie.
+   */
+  readonly aiHelp = signal<Record<string, { loading: boolean; reply?: SyncHelpReply; error?: string }>>({});
+
+  canAskAi(record: BlockedSyncRecord): boolean {
+    return (record.diagnosis?.code ?? 'desconocido') === 'desconocido' && !this.health.degraded();
+  }
+
+  aiHelpFor(record: BlockedSyncRecord) {
+    return this.aiHelp()[`${record.kind}:${record.id}`];
+  }
+
+  async askAi(record: BlockedSyncRecord): Promise<void> {
+    const key = `${record.kind}:${record.id}`;
+    if (this.aiHelp()[key]?.loading) {
+      return;
+    }
+    this.aiHelp.update((estado) => ({ ...estado, [key]: { loading: true } }));
+    try {
+      const reply = await this.syncHelp.ask(record);
+      this.aiHelp.update((estado) => ({ ...estado, [key]: { loading: false, reply } }));
+    } catch (error: unknown) {
+      const mensaje = error instanceof Error ? error.message : 'La ayuda con IA no está disponible.';
+      this.aiHelp.update((estado) => ({ ...estado, [key]: { loading: false, error: mensaje } }));
+    }
+  }
+
+  /** Registro que se está reintentando: deshabilita sus botones mientras viaja. */
+  readonly retryingBlockedId = signal<string | null>(null);
+
+  /**
+   * Destraba y **empuja en el acto**, en el orden completo del sincronizador
+   * (catálogo → turnos → ventas). Antes solo se limpiaba el `pushError`: el
+   * registro esperaba al próximo horario fijo (hasta seis horas) y al cajero le
+   * parecía que el botón no hacía nada. Empujar solo las ventas tampoco bastaba:
+   * si lo que faltaba era el turno o un producto, la venta volvía a esperar.
+   * `flushPendingNow` no gasta el cupo del sync manual: reintentar no es
+   * sincronizar a mano.
+   */
   async retryBlocked(record: BlockedSyncRecord): Promise<void> {
-    await this.blockedSync.retry(record);
+    this.retryingBlockedId.set(record.id);
+    try {
+      await this.blockedSync.retry(record);
+      await this.syncScheduler.flushPendingNow();
+      await this.blockedSync.refresh();
+    } catch (error: unknown) {
+      this.notifications.error(
+        error instanceof Error ? error.message : 'No se pudo reintentar el registro.',
+      );
+    } finally {
+      this.retryingBlockedId.set(null);
+    }
     this.closeBlockedIfEmpty();
   }
 

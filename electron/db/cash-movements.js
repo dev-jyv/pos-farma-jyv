@@ -1,3 +1,5 @@
+const { codeFromReason } = require('./blocked-diagnosis');
+
 /** Categorías de gasto que exigen describir en qué se gastó (no basta el motivo corto). */
 const CATEGORIES_REQUIRING_DESCRIPTION = new Set(['supplies', 'supplier', 'other']);
 
@@ -288,6 +290,7 @@ async function listBlocked(prisma) {
     detail: `$${Number(row.amount ?? 0).toFixed(2)}`,
     occurredAt: row.createdAt,
     reason: row.pushError,
+    diagnosis: { code: codeFromReason(row.pushError) },
   }));
 }
 

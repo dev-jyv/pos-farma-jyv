@@ -538,18 +538,6 @@ export class SaleService {
   }
 
   /**
-   * Vuelve a intentar una venta bloqueada. Se usa después de corregir la causa
-   * (abrir turno, reponer stock): la `idempotencyKey` es la misma, así que si el
-   * intento anterior sí llegó, el backend devuelve la venta ya registrada.
-   */
-  retryBlockedSale(queueId: string): void {
-    from(this.api().sales.clearPushError(queueId)).subscribe(() => {
-      this.refreshPending();
-      this.flushQueue();
-    });
-  }
-
-  /**
    * Envía TODAS las ventas locales pendientes en una sola llamada a
    * `POST /sales/bulk`, en el orden en que se capturaron — nunca un `POST
    * /sales` por venta. Cada una viaja con su `idempotencyKey` original: si un

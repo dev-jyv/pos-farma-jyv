@@ -869,11 +869,6 @@ describe('SaleService', () => {
     });
   });
 
-  it('retryBlockedSale limpia el error y vuelve a intentar', () => {
-    service.retryBlockedSale('local-1');
-    expect(sales.clearPushError).toHaveBeenCalledWith('local-1');
-  });
-
   it('discardBlockedSale descarta la venta local', () => {
     service.discardBlockedSale('local-1');
     expect(sales.discard).toHaveBeenCalledWith('local-1');

@@ -358,6 +358,8 @@ export class SyncScheduler {
    * Empuje **esperable**, para el camino de salida: `syncNow()` dispara el push
    * sin esperarlo (`void this.pushPending()`) porque su trabajo visible es traer
    * el catálogo. Al cerrar sesión o la app no hay después: hay que esperar.
+   * También lo usa "Reintentar" en el panel de rechazados, que necesita el orden
+   * completo (catálogo y turnos antes que ventas) y no debe gastar el cupo manual.
    */
   async flushPendingNow(): Promise<void> {
     if (!window.electronAPI) {

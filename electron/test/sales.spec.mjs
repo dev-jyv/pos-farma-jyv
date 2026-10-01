@@ -58,6 +58,11 @@ function partidaServicio(serviceId = 'sv-1', overrides = {}) {
   };
 }
 
+/** Como la que arma el checkout: el payload lleva el id **local** del turno. */
+function ventaDeTurno(items, cashSessionId = 'cs-1') {
+  return venta(items, { payload: { cashSessionId, items: items.map((item) => ({ ...item })) } });
+}
+
 function venta(items, overrides = {}) {
   const total = items.reduce((suma, item) => suma + item.subtotal - item.discountAmount, 0);
   return {
@@ -418,6 +423,62 @@ describe('cola de push', () => {
     expect(prisma.sale.rows[0].payloadResolveAttempts).toBe(0);
     // Un solo push posterior no la vuelve a bloquear.
     await getPendingPush(prisma, { contarIntentos: true });
+    expect(prisma.sale.rows[0].pushError).toBeNull();
+  });
+
+  /**
+   * Regresión (PENDIENTE-1790364657061): `runPush` empuja ventas antes del alta
+   * de turnos, y con el alta fallando por red cada "sincronizar" gastaba dos
+   * intentos. Tres clics y la venta salía como rechazada sin que el servidor la
+   * hubiera visto. Un turno que sigue en su cola no condena a sus ventas.
+   */
+  it('no gasta intentos mientras su turno sigue en cola sin rechazo', async () => {
+    await producto('p-1', { remoteId: 'remote-p1' });
+    await prisma.cashSession.create({ data: { id: 'cs-1', remoteId: null, pendingPush: true, pushError: null } });
+    await createLocal(prisma, ventaDeTurno([partidaProducto('p-1')]));
+
+    for (let ciclo = 0; ciclo < 10; ciclo += 1) {
+      expect(await getPendingPush(prisma, { contarIntentos: true })).toHaveLength(0);
+    }
+
+    expect(prisma.sale.rows[0].payloadResolveAttempts ?? 0).toBe(0);
+    expect(prisma.sale.rows[0].pushError).toBeNull();
+  });
+
+  it('si su turno fue rechazado, cuenta intentos hasta mandarla a revisión', async () => {
+    await producto('p-1', { remoteId: 'remote-p1' });
+    await prisma.cashSession.create({
+      data: { id: 'cs-1', remoteId: null, pendingPush: true, pushError: 'Turno inválido' },
+    });
+    await createLocal(prisma, ventaDeTurno([partidaProducto('p-1')]));
+
+    for (let ciclo = 0; ciclo < 6; ciclo += 1) {
+      await getPendingPush(prisma, { contarIntentos: true });
+    }
+
+    expect(prisma.sale.rows[0].pushError).toMatch(/demasiados intentos/i);
+  });
+
+  it('no gasta intentos mientras su producto sigue en la cola del catálogo', async () => {
+    await prisma.product.create({
+      data: {
+        id: 'p-1',
+        remoteId: null,
+        name: 'Nuevo',
+        sku: 'p-1',
+        salePrice: 100,
+        totalStock: 10,
+        pendingCatalogPush: true,
+        catalogPushError: null,
+      },
+    });
+    await createLocal(prisma, venta([partidaProducto('p-1')]));
+
+    for (let ciclo = 0; ciclo < 10; ciclo += 1) {
+      await getPendingPush(prisma, { contarIntentos: true });
+    }
+
+    expect(prisma.sale.rows[0].payloadResolveAttempts ?? 0).toBe(0);
     expect(prisma.sale.rows[0].pushError).toBeNull();
   });
 

@@ -1,8 +1,20 @@
+const { codeFromReason } = require('./blocked-diagnosis');
+
 /**
  * Ciclos de sync que una venta puede esperar a que su producto suba antes de
  * mandarla a revisión manual. Con los tres horarios fijos del día, son ~2 días.
  */
 const MAX_RESOLVE_ATTEMPTS = 6;
+
+/**
+ * `pushError` que pone la propia caja al agotar `MAX_RESOLVE_ATTEMPTS`. Es un
+ * bloqueo **local** (el servidor nunca vio la venta): `listBlocked` lo reconoce
+ * por este texto para diagnosticar qué dependencia sigue sin subir.
+ */
+const BLOQUEO_POR_INTENTOS =
+  'Esta venta espera a que su turno o alguno de sus productos ' +
+  'sincronice, y ya lleva demasiados intentos. Revísala: ' +
+  'reintenta cuando el catálogo esté al día o descártala.';
 
 /**
  * Partidas que mueven inventario. **La regla de "los servicios no tocan stock"
@@ -364,14 +376,73 @@ async function listBlocked(prisma) {
     where: { pushError: { not: null } },
     orderBy: { createdAt: 'asc' },
   });
-  return rows.map((row) => ({
-    kind: 'sale',
-    id: row.id,
-    label: row.folio ?? row.id,
-    detail: `$${Number(row.total ?? 0).toFixed(2)}`,
-    occurredAt: row.createdAt,
-    reason: row.pushError,
-  }));
+  const registros = [];
+  for (const row of rows) {
+    registros.push({
+      kind: 'sale',
+      id: row.id,
+      label: row.folio ?? row.id,
+      detail: `$${Number(row.total ?? 0).toFixed(2)}`,
+      occurredAt: row.createdAt,
+      reason: row.pushError,
+      diagnosis:
+        row.pushError === BLOQUEO_POR_INTENTOS
+          ? await diagnoseDependency(prisma, row)
+          : { code: codeFromReason(row.pushError) },
+    });
+  }
+  return registros;
+}
+
+/**
+ * Qué le falta **hoy** a una venta bloqueada por intentos. Se mira en vivo, no
+ * se guarda: entre el bloqueo y que el cajero abra el panel, el turno o el
+ * producto pudieron haber subido (`listo-para-reintentar`).
+ */
+async function diagnoseDependency(prisma, row) {
+  let payload;
+  try {
+    payload = JSON.parse(row.payloadJson);
+  } catch {
+    return { code: 'desconocido' };
+  }
+  const ids = idsDePartidas(payload?.items ?? []);
+  const remoteByAnyId = await buildRemoteIdMap(prisma, ids);
+  const faltantes = ids.filter((id) => !remoteByAnyId.has(id));
+  if (faltantes.length) {
+    const productos = await prisma.product.findMany({
+      where: { id: { in: faltantes } },
+      select: { id: true, name: true, catalogPushError: true },
+    });
+    if (productos.length < faltantes.length) {
+      return { code: 'producto-no-encontrado' };
+    }
+    const rechazado = productos.find((producto) => producto.catalogPushError);
+    const producto = rechazado ?? productos[0];
+    return {
+      code: rechazado ? 'producto-rechazado' : 'producto-sin-subir',
+      dependency: { kind: 'product', label: producto.name ?? 'Producto' },
+    };
+  }
+  const sessionId = payload?.cashSessionId;
+  const session = sessionId ? await prisma.cashSession.findUnique({ where: { id: sessionId } }) : null;
+  if (session && !session.remoteId) {
+    return {
+      code: session.pushError ? 'turno-rechazado' : 'turno-sin-subir',
+      dependency: { kind: 'cashSession', label: etiquetaTurno(session) },
+    };
+  }
+  return { code: 'listo-para-reintentar' };
+}
+
+/** Cómo reconoce el cajero un turno: quién lo abrió y cuándo. */
+function etiquetaTurno(session) {
+  const abierto = session.openedAt ? new Date(session.openedAt) : null;
+  const cuando = abierto
+    ? abierto.toLocaleString('es-MX', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '';
+  const quien = session.openedByLabel ?? '';
+  return ['Turno', quien && `de ${quien}`, cuando && `abierto el ${cuando}`].filter(Boolean).join(' ');
 }
 
 /**
@@ -401,6 +472,49 @@ async function resolvePayloadCashSession(prisma, payload) {
     return null;
   }
   return { ...payload, cashSessionId: session.remoteId };
+}
+
+/**
+ * ¿Lo que le falta a esta venta va **en camino** o está **atorado**?
+ *
+ * En camino = el turno o el producto siguen en su propia cola sin rechazo: van a
+ * subir en este mismo ciclo o en el siguiente, y la venta solo tiene que
+ * esperar. Contar ese intento la condenaba sin motivo: `SyncScheduler.runPush`
+ * empuja ventas antes del alta de turnos (paso 2), así que una venta de turno
+ * nuevo gastaba un intento en **cada** ciclo aunque todo fuera bien, y con el
+ * alta fallando por red cada "sincronizar" gastaba dos. Con tres clics, la
+ * venta salía como rechazada sin que el servidor la hubiera visto.
+ *
+ * Atorado = rechazado, o fuera de toda cola (nunca va a subir solo): ahí sí se
+ * cuenta, para que acabe visible en el panel de rechazadas.
+ *
+ * `cache` evita repetir la consulta del turno: tras una caída de red, cientos de
+ * ventas esperan al mismo.
+ */
+async function dependenciaEnCamino(prisma, payload, conProductos, remoteByAnyId, cache) {
+  if (!conProductos) {
+    const faltantes = idsDePartidas(payload?.items ?? []).filter((id) => !remoteByAnyId.has(id));
+    if (!faltantes.length) {
+      return false;
+    }
+    const productos = await prisma.product.findMany({
+      where: { id: { in: faltantes } },
+      select: { id: true, pendingCatalogPush: true, catalogPushError: true },
+    });
+    return (
+      productos.length === faltantes.length &&
+      productos.every((producto) => producto.pendingCatalogPush && !producto.catalogPushError)
+    );
+  }
+  const sessionId = payload?.cashSessionId;
+  if (!sessionId) {
+    return false;
+  }
+  if (!cache.has(sessionId)) {
+    const session = await prisma.cashSession.findUnique({ where: { id: sessionId } });
+    cache.set(sessionId, Boolean(session?.pendingPush && !session.pushError));
+  }
+  return cache.get(sessionId);
 }
 
 /**
@@ -460,6 +574,7 @@ async function getPendingPush(prisma, { ownerUid, contarIntentos = false } = {})
   const { payloads, remoteByAnyId } = await prepararCola(prisma, rows);
 
   const pending = [];
+  const turnosEnCamino = new Map();
   for (const [indice, row] of rows.entries()) {
     const conProductos = await resolvePayloadProductIds(prisma, payloads[indice], remoteByAnyId);
     const payload = conProductos && (await resolvePayloadCashSession(prisma, conProductos));
@@ -482,6 +597,9 @@ async function getPendingPush(prisma, { ownerUid, contarIntentos = false } = {})
         });
         continue;
       }
+      if (await dependenciaEnCamino(prisma, payloads[indice], conProductos, remoteByAnyId, turnosEnCamino)) {
+        continue;
+      }
       const attempts = (row.payloadResolveAttempts ?? 0) + 1;
       await prisma.sale.update({
         where: { id: row.id },
@@ -489,10 +607,7 @@ async function getPendingPush(prisma, { ownerUid, contarIntentos = false } = {})
           attempts >= MAX_RESOLVE_ATTEMPTS
             ? {
                 payloadResolveAttempts: attempts,
-                pushError:
-                  'Esta venta espera a que su turno o alguno de sus productos ' +
-                  'sincronice, y ya lleva demasiados intentos. Revísala: ' +
-                  'reintenta cuando el catálogo esté al día o descártala.',
+                pushError: BLOQUEO_POR_INTENTOS,
               }
             : { payloadResolveAttempts: attempts },
       });

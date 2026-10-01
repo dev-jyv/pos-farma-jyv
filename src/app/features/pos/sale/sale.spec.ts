@@ -84,7 +84,6 @@ describe('Sale', () => {
     pendingSales: ReturnType<typeof signal<unknown[]>>;
     void: ReturnType<typeof vi.fn>;
     flushQueue: ReturnType<typeof vi.fn>;
-    retryBlockedSale: ReturnType<typeof vi.fn>;
     discardBlockedSale: ReturnType<typeof vi.fn>;
   };
 
@@ -109,7 +108,6 @@ describe('Sale', () => {
       pendingSales: signal<unknown[]>([]),
       void: vi.fn(() => of({ id: 'v1', folio: 'V-1' } as SaleModel)),
       flushQueue: vi.fn(),
-      retryBlockedSale: vi.fn(),
       discardBlockedSale: vi.fn(),
     };
 

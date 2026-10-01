@@ -45,6 +45,8 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 
 - `core/sync/sync-scheduler.service.ts`: sync completo en horario fijo (10:30/14:00/20:00) más el manual limitado del cajero. Aparte, `pullPromotions()` corre **cada hora** solo el pull incremental de promociones (mismo cursor), emite `PROMOTIONS_SYNCED_EVENT`, no corre sin sesión/`electronAPI`, no se encima con otro igual ni con un sync completo y no cuenta para el límite manual.
 - Si al cobrar una promo del ticket ya cerró (la detecta el checkout, o el backend responde 400 `La promoción "X" no está vigente`), la venta no se registra: `Sale.onPromotionClosed` baja promociones, recalcula y pide volver a cobrar. Excepción: con la tarjeta ya aprobada en la terminal sí se registra.
+- Una venta cuyo turno o producto aún no tiene `remoteId` solo gasta `payloadResolveAttempts` si esa dependencia está **atorada** (rechazada o fuera de su cola); si va en camino, espera sin contar (`dependenciaEnCamino` en `electron/db/sales.js`).
+- Panel "Rechazados al sincronizar" (`shell`): cada registro trae `diagnosis.code` (`electron/db/blocked-diagnosis.js`, sin red) y su texto/acción sale de `core/sync/sync-diagnosis.ts`. "Reintentar" corre `SyncScheduler.flushPendingNow()` (orden completo, sin gastar el cupo manual). Solo para `desconocido` y con red se ofrece la IA: `SyncHelpService` → `POST /assistant/sync-help` del backend (resumen sin cliente ni partidas; nunca propone descartar).
 - `electron/db/promotions.js#purgeStale` borra al arrancar (best-effort, tras migraciones) las promos dadas de baja o terminadas hace más de 30 días.
 
 ### Entornos

@@ -14,6 +14,7 @@ import { AuthService } from '../auth/auth.service';
 import { NotificationService } from '../notifications/notification.service';
 import { BlockedSyncService } from '../sync/blocked-sync.service';
 import { SyncScheduler } from '../sync/sync-scheduler.service';
+import { SyncHelpService } from '../sync/sync-help.service';
 import { NAV_ITEMS } from './nav.config';
 import { Shell } from './shell';
 
@@ -91,6 +92,7 @@ describe('Shell', () => {
         },
         { provide: SaleService, useValue: { pendingCount: signal(0) } },
         { provide: CashMovementService, useValue: { pendingCount: signal(0) } },
+        { provide: SyncHelpService, useValue: { ask: vi.fn() } },
         {
           provide: BlockedSyncService,
           useValue: {
@@ -435,6 +437,86 @@ describe('Shell', () => {
 
       expect(component.flushingBeforeExit()).toBe(false);
       expect(logout).toHaveBeenCalled();
+    });
+  });
+  describe('reintentar un rechazado', () => {
+    const registro = {
+      kind: 'sale' as const,
+      id: 'v-1',
+      label: 'PENDIENTE-1',
+      detail: '$292.00',
+      occurredAt: new Date(),
+      reason: 'x',
+      diagnosis: { code: 'turno-sin-subir' as const },
+    };
+
+    /**
+     * Regresión: "Reintentar" solo limpiaba el `pushError` y el registro
+     * esperaba al próximo horario fijo; parecía que el botón no hacía nada.
+     */
+    it('destraba y empuja en el acto, en el orden completo del sincronizador', async () => {
+      const blocked = TestBed.inject(BlockedSyncService);
+      const orden: string[] = [];
+      blocked.retry = vi.fn().mockImplementation(async () => void orden.push('retry'));
+      flushPendingNow.mockImplementation(async () => void orden.push('push'));
+
+      await component.retryBlocked(registro);
+
+      expect(orden).toEqual(['retry', 'push']);
+      expect(blocked.refresh).toHaveBeenCalled();
+      expect(component.retryingBlockedId()).toBeNull();
+    });
+
+    it('un fallo del envío no deja el botón cargando', async () => {
+      flushPendingNow.mockRejectedValue(new Error('sin red'));
+
+      await component.retryBlocked(registro);
+
+      expect(component.retryingBlockedId()).toBeNull();
+    });
+  });
+  describe('ayuda con IA', () => {
+    const desconocido = {
+      kind: 'sale' as const,
+      id: 'v-9',
+      label: 'PENDIENTE-9',
+      detail: '$10.00',
+      occurredAt: new Date(),
+      reason: 'Internal error 0x55',
+      diagnosis: { code: 'desconocido' as const },
+    };
+
+    it('solo se ofrece para causas que las reglas no reconocen', () => {
+      expect(component.canAskAi(desconocido)).toBe(true);
+      expect(component.canAskAi({ ...desconocido, diagnosis: { code: 'turno-sin-subir' } })).toBe(false);
+    });
+
+    it('sin red no se ofrece', () => {
+      (TestBed.inject(ApiHealthService).degraded as ReturnType<typeof signal<boolean>>).set(true);
+
+      expect(component.canAskAi(desconocido)).toBe(false);
+    });
+
+    it('guarda la sugerencia por registro', async () => {
+      const reply = { explicacion: 'Avisa.', pasos: ['avisar-admin' as const], avisarAdmin: true };
+      (TestBed.inject(SyncHelpService).ask as ReturnType<typeof vi.fn>).mockResolvedValue(reply);
+
+      await component.askAi(desconocido);
+
+      expect(component.aiHelpFor(desconocido)).toEqual({ loading: false, reply });
+    });
+
+    it('un fallo deja el mensaje y apaga la carga', async () => {
+      (TestBed.inject(SyncHelpService).ask as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('Sin conexión: la ayuda con IA necesita internet.'),
+      );
+
+      await component.askAi(desconocido);
+
+      expect(component.aiHelpFor(desconocido)).toEqual({
+        loading: false,
+        error: 'Sin conexión: la ayuda con IA necesita internet.',
+      });
     });
   });
 });

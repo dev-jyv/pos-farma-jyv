@@ -188,6 +188,30 @@ export interface BlockedSyncRecord {
   detail: string;
   occurredAt: string | Date;
   reason: string;
+  /** Causa ya clasificada (`electron/db/blocked-diagnosis.js`); ver `core/sync/sync-diagnosis.ts`. */
+  diagnosis?: BlockedDiagnosis;
+}
+
+export type BlockedCode =
+  | 'turno-sin-subir'
+  | 'turno-rechazado'
+  | 'producto-sin-subir'
+  | 'producto-rechazado'
+  | 'producto-no-encontrado'
+  | 'listo-para-reintentar'
+  | 'turno-duplicado'
+  | 'turno-abierto-existente'
+  | 'turno-ajeno'
+  | 'turno-cerrado'
+  | 'turno-no-encontrado'
+  | 'sin-stock'
+  | 'promocion-no-vigente'
+  | 'desconocido';
+
+export interface BlockedDiagnosis {
+  code: BlockedCode;
+  /** Lo que la venta espera: con qué nombre lo reconoce el cajero. */
+  dependency?: { kind: 'cashSession' | 'product'; label: string };
 }
 
 export interface PendingCashMovement extends CashMovement {
