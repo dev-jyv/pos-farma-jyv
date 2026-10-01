@@ -10,8 +10,18 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const ORIGEN = 'release';
-const DESTINO = 'dist-updates';
+/**
+ * `--dev` prepara el feed de la nube de pruebas (`farma-jyv-dev-updates`) con
+ * carpetas propias: `release:dev:*` compila a `release-dev/` y aquí se publica a
+ * `dist-updates-dev/` (target de Hosting `updates-dev`). Nunca se mezclan con
+ * los de producción: un `latest*.yml` de dev en `dist-updates/` haría que las
+ * cajas reales se "actualizaran" a un build que habla con `farma-jyv-dev`.
+ */
+const ES_DEV = process.argv.includes('--dev');
+const ORIGEN = ES_DEV ? 'release-dev' : 'release';
+const DESTINO = ES_DEV ? 'dist-updates-dev' : 'dist-updates';
+const PRODUCTO = ES_DEV ? 'FarmaJyV Venta DEV' : 'FarmaJyV Venta';
+const COMPILAR = ES_DEV ? 'npm run electron:dist:dev:mac' : 'npm run electron:dist:mac';
 
 /** Lo que consume `electron-updater`; el resto de `release/` es intermedio. */
 const PUBLICABLE = /\.(yml|zip|dmg|exe|blockmap)$/i;
@@ -19,7 +29,7 @@ const PUBLICABLE = /\.(yml|zip|dmg|exe|blockmap)$/i;
 const EXCLUIDO = /^builder-debug\.yml$/i;
 
 if (!existsSync(ORIGEN)) {
-  console.error(`No existe ${ORIGEN}/. Compila primero: npm run electron:dist:mac`);
+  console.error(`No existe ${ORIGEN}/. Compila primero: ${COMPILAR}`);
   process.exit(1);
 }
 
@@ -83,7 +93,7 @@ for (const nombre of readdirSync(ORIGEN)) {
 
 if (!copiados.some((archivo) => archivo.nombre.endsWith('.yml'))) {
   // Sin feed no hay actualización: el updater no sabría qué versión hay.
-  console.error('Falta el archivo latest*.yml en release/. ¿Compilaste con electron-builder?');
+  console.error(`Falta el archivo latest*.yml en ${ORIGEN}/. ¿Compilaste con electron-builder?`);
   process.exit(1);
 }
 
@@ -123,7 +133,7 @@ function escribirPortada() {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FarmaJyV Venta ${version}</title>
+<title>${PRODUCTO} ${version}</title>
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0 auto; padding: 2.5rem 1.25rem; max-width: 40rem; font: 16px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; }
@@ -144,15 +154,20 @@ function escribirPortada() {
 </style>
 </head>
 <body>
-  <h1>FarmaJyV Venta</h1>
-  <p class="version">Versión ${version} · descarga para instalar en una caja</p>
+  <h1>${PRODUCTO}</h1>
+  <p class="version">Versión ${version} · descarga para instalar en una caja</p>${
+    ES_DEV
+      ? `
+  <p class="aviso"><strong>Build de pruebas:</strong> habla con <code>farma-jyv-dev</code>, no con la farmacia. No instalar en una caja real.</p>`
+      : ''
+  }
   <ul>
 ${instaladores}
   </ul>
   <p class="aviso">
     <strong>Primera vez en Mac:</strong> el sistema dirá que no puede comprobar
     el desarrollador. Abre la app con <strong>clic derecho → Abrir</strong>, o
-    ejecuta <code>xattr -d com.apple.quarantine "/Applications/FarmaJyV Venta.app"</code>.
+    ejecuta <code>xattr -d com.apple.quarantine "/Applications/${PRODUCTO}.app"</code>.
     Es porque la app aún no está firmada con un Apple Developer ID.
   </p>
 </body>

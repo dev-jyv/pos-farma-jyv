@@ -10,6 +10,20 @@
       @if (doc.confidence !== null) {
         <span class="text-xs text-slate-500">{{ 'invoiceRag.confidence' | translate }}: {{ doc.confidence | percent: '1.0-0' }}</span>
       }
+      @if (doc.storagePath) {
+        <p-tag severity="info" icon="pi pi-cloud" [value]="'invoiceRag.cloud.uploaded' | translate" />
+      } @else if (doc.status === 'indexed') {
+        <p-button
+          icon="pi pi-cloud-upload"
+          [label]="'invoiceRag.cloud.upload' | translate"
+          severity="secondary"
+          size="small"
+          [outlined]="true"
+          [loading]="busy() === 'upload'"
+          [disabled]="!!busy()"
+          (onClick)="upload()"
+        />
+      }
     }
   </div>
 
@@ -32,6 +46,18 @@
         } @else if (!hasData()) {
           <div class="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
             {{ 'invoiceRag.notExtracted' | translate }}
+          </div>
+        }
+        @if (doc.stockAppliedAt) {
+          <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            <p class="font-semibold">
+              <i class="pi pi-box"></i> {{ 'invoiceRag.stock.appliedAt' | translate: { date: (doc.stockAppliedAt | date: 'dd/MM/yyyy HH:mm') } }}
+            </p>
+            <ul class="mt-1 list-inside list-disc text-xs">
+              @for (line of doc.stockApplied ?? []; track line.productId + $index) {
+                <li>{{ line.name }}: +{{ line.quantity }} ({{ 'invoiceRag.stock.stock' | translate }} {{ line.stock }})</li>
+              }
+            </ul>
           </div>
         }
 
@@ -107,12 +133,17 @@
             </div>
             <div formArrayName="items" class="flex flex-col gap-2">
               @for (item of f.controls.items.controls; track item; let i = $index) {
-                <div [formGroupName]="i" class="grid grid-cols-[1fr_5rem_7rem_7rem_2.5rem] items-center gap-2">
+                <div [formGroupName]="i" class="grid grid-cols-[1fr_5rem_7rem_7rem_2.5rem] items-center gap-2 rounded-lg border border-slate-100 p-2">
                   <input pInputText formControlName="description" [placeholder]="'invoiceRag.description' | translate" class="w-full" />
                   <p-inputnumber formControlName="quantity" [placeholder]="'invoiceRag.quantity' | translate" [maxFractionDigits]="3" styleClass="w-full" inputStyleClass="w-full" />
                   <p-inputnumber formControlName="unitPrice" [placeholder]="'invoiceRag.unitPrice' | translate" [minFractionDigits]="2" [maxFractionDigits]="2" styleClass="w-full" inputStyleClass="w-full" />
                   <p-inputnumber formControlName="amount" [placeholder]="'invoiceRag.amount' | translate" [minFractionDigits]="2" [maxFractionDigits]="2" styleClass="w-full" inputStyleClass="w-full" />
                   <p-button icon="pi pi-trash" severity="danger" [text]="true" size="small" (onClick)="removeItem(i)" [ariaLabel]="'invoiceRag.remove' | translate" />
+                  <div class="col-span-4 grid grid-cols-[1fr_1fr_10rem] gap-2">
+                    <input pInputText formControlName="barcode" inputmode="numeric" maxlength="14" [placeholder]="'invoiceRag.barcode' | translate" class="w-full font-mono text-sm" />
+                    <input pInputText formControlName="lotNumber" maxlength="40" [placeholder]="'invoiceRag.lotNumber' | translate" class="w-full text-sm" />
+                    <input type="date" formControlName="expiryDate" [attr.aria-label]="'invoiceRag.expiryDate' | translate" class="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  </div>
                 </div>
               } @empty {
                 <p class="text-xs text-slate-400">{{ 'invoiceRag.noItems' | translate }}</p>
@@ -182,9 +213,25 @@
               [loading]="busy() === 'confirm'"
               [disabled]="!!busy()"
             />
+            @if (canEnterStock && !doc.stockAppliedAt) {
+              <p-button
+                type="button"
+                icon="pi pi-box"
+                severity="success"
+                [label]="'invoiceRag.stock.open' | translate"
+                [disabled]="!!busy() || !canApplyStock()"
+                (onClick)="stockDialogOpen.set(true)"
+              />
+              @if (!canApplyStock()) {
+                <span class="w-full text-right text-xs text-slate-500">{{ 'invoiceRag.stock.needsIndexed' | translate }}</span>
+              }
+            }
           </div>
         </form>
       </div>
     </div>
+    @if (canEnterStock) {
+      <app-invoice-rag-stock-dialog [document]="doc" [(visible)]="stockDialogOpen" (applied)="document.set($event)" />
+    }
   }
 </div>

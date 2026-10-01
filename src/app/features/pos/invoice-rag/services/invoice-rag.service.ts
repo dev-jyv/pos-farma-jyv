@@ -13,6 +13,8 @@ import {
   InvoiceRagStatus,
 } from '../../../../shared/models';
 import { environment } from '../../../../../environments/environment';
+import { CreateStockEntryPayload } from '../../services/stock-entry.service';
+import { UploadsService } from '../../services/uploads.service';
 
 export const INVOICE_RAG_MAX_EMBED_CHARS = 8000;
 export const INVOICE_RAG_MIN_SCORE = 0.2;
@@ -45,7 +47,8 @@ function formatParty(label: string, party: { name: string | null; rfc: string | 
 function formatItem(item: InvoiceRagData['items'][number]): string {
   const quantity = item.quantity !== null ? ` x${item.quantity}` : '';
   const amount = item.amount !== null ? ` = ${item.amount}` : '';
-  return `${item.description}${quantity}${amount}`;
+  const barcode = item.barcode ? ` [${item.barcode}]` : '';
+  return `${item.description}${barcode}${quantity}${amount}`;
 }
 
 /** Texto que se embebe: los campos que tiene sentido buscar, sin los vacíos. */
@@ -80,6 +83,7 @@ export function buildEmbeddingText(data: InvoiceRagData): string {
 export class InvoiceRagService {
   private readonly http = inject(HttpClient);
   private readonly auth = inject(AuthService);
+  private readonly uploads = inject(UploadsService);
   private readonly apiUrl = `${environment.apiUrl}/invoice-rag`;
 
   readonly available = !!window.electronAPI?.invoiceRag;
@@ -141,6 +145,19 @@ export class InvoiceRagService {
     const contentText = buildEmbeddingText(data);
     const embedding = await this.embed(contentText);
     return this.store.confirm(id, { data, contentText, embedding });
+  }
+
+  /** Respalda el archivo en R2 (`POST /uploads/facturas`) y anota la ruta en SQLite. */
+  async upload(id: string): Promise<InvoiceRagDocument> {
+    const { blob, fileName } = await this.readBlob(id);
+    const { storagePath } = await firstValueFrom(
+      this.uploads.uploadInvoice(new File([blob], fileName, { type: blob.type })),
+    );
+    return this.store.markUploaded(id, storagePath);
+  }
+
+  applyStock(id: string, entries: CreateStockEntryPayload[]): Promise<InvoiceRagDocument> {
+    return this.store.applyStock(id, { entries, appliedBy: this.auth.user()?.uid ?? '' });
   }
 
   async search(query: string, limit = 10): Promise<InvoiceRagSearchHit[]> {

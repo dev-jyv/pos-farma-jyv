@@ -739,6 +739,11 @@ export interface InvoiceRagTax {
 
 export interface InvoiceRagItem {
   description: string;
+  /** Ausentes en documentos extraídos antes de pedirlos. EAN/UPC de 8 a 14 dígitos. */
+  barcode?: string | null;
+  lotNumber?: string | null;
+  /** `YYYY-MM-DD`. */
+  expiryDate?: string | null;
   quantity: number | null;
   unitPrice: number | null;
   amount: number | null;
@@ -778,6 +783,19 @@ export interface InvoiceRagDocument {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  stockAppliedAt: string | null;
+  stockApplied: InvoiceRagStockApplied[] | null;
+  /** Ruta del respaldo en R2; `null` mientras no se haya subido. */
+  storagePath: string | null;
+  uploadedAt: string | null;
+}
+
+/** Una partida que ya entró al inventario desde el documento. */
+export interface InvoiceRagStockApplied {
+  productId: string;
+  name: string;
+  quantity: number;
+  stock: number;
 }
 
 export interface InvoiceRagEmbedding {

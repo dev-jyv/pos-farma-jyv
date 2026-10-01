@@ -3,6 +3,7 @@
 # Compiled output
 /dist
 /release
+/release-dev
 /tmp
 /out-tsc
 /bazel-out
@@ -50,6 +51,7 @@ Thumbs.db
 # Artefactos de auditoría con Playwright MCP
 /.playwright-mcp/
 /dist-updates
+/dist-updates-dev
 
 # Caché de despliegue de Firebase Hosting (feed de actualizaciones)
 /.firebase/

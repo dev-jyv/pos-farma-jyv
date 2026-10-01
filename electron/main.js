@@ -4,6 +4,35 @@ const os = require('os');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
+const { resolveAppEnvironment, userDataDirFor } = require('./app-environment');
+
+const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
+
+/**
+ * Carpeta de datos por entorno. Tiene que ir **antes** de cualquier
+ * `app.getPath('userData')` —el cliente Prisma (`db/client.js`), `invoice-rag/`,
+ * los flags de migración—, así que se resuelve aquí, antes de requerir la capa
+ * de base de datos y antes de `app.whenReady()`. Ver `app-environment.js`.
+ */
+const APP_ENV = resolveAppEnvironment({
+  envVar: process.env.FARMAJYV_ENV,
+  bakedEnv: leerEntornoHorneado(),
+  isDev,
+});
+const userDataPorEntorno = userDataDirFor(APP_ENV, app.getPath('appData'));
+if (userDataPorEntorno) {
+  app.setPath('userData', userDataPorEntorno);
+}
+console.log(`[env] entorno=${APP_ENV} userData=${app.getPath('userData')}`);
+
+/** `farmajyvEnv` del `package.json` empaquetado (lo pone `release:dev:*`). */
+function leerEntornoHorneado() {
+  try {
+    return require('../package.json').farmajyvEnv;
+  } catch {
+    return undefined;
+  }
+}
 
 const execFileAsync = promisify(execFile);
 const CASH_DRAWER_TIMEOUT_MS = 5000;
@@ -30,9 +59,8 @@ const invoiceRagDb = require('./db/invoice-rag');
 app.commandLine.appendSwitch('lang', 'es-MX');
 app.commandLine.appendSwitch('accept-lang', 'es-MX,es;q=0.9');
 
-const DEV_SERVER_URL = process.env.ELECTRON_DEV_SERVER_URL ?? 'http://localhost:4200';
+const DEV_SERVER_URL = process.env.ELECTRON_DEV_SERVER_URL ?? 'http://localhost:4400';
 const DIST_INDEX = path.join(__dirname, '..', 'dist', 'farma-jyv-pos', 'browser', 'index.html');
-const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
 
 let mainWindow;
 
@@ -458,6 +486,10 @@ function registrarIPCHandlers() {
     invoiceRagDb.confirm(await getPrisma(), id, input));
   ipcMain.handle('invoiceRag:search', async (_event, input) =>
     invoiceRagDb.search(await getPrisma(), input));
+  ipcMain.handle('invoiceRag:markUploaded', async (_event, id, storagePath) =>
+    invoiceRagDb.markUploaded(await getPrisma(), id, storagePath));
+  ipcMain.handle('invoiceRag:applyStock', async (_event, id, input) =>
+    invoiceRagDb.applyStock(await getPrisma(), id, input));
   ipcMain.handle('invoiceRag:remove', async (_event, id) =>
     invoiceRagDb.remove(await getPrisma(), id));
 

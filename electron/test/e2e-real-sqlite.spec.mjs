@@ -940,4 +940,89 @@ describe('facturas-RAG en SQLite real', () => {
     await expect(prisma.invoiceEmbedding.count()).resolves.toBe(0);
     expect(fs.readdirSync(storageDir)).toEqual([]);
   });
+
+  describe('aplicar al inventario', () => {
+    const entrada = (overrides = {}) => ({
+      invoiceId: 'inv-1',
+      productId: 'remote-1',
+      lotNumber: 'L-1',
+      expiryDate: '2099-12-31',
+      quantity: 5,
+      costPrice: 12.5,
+      ...overrides,
+    });
+
+    async function documentoIndexado() {
+      const { document } = await facturasRag.register(prisma, path.join(tmpDir, 'invoice-rag'), {
+        fileName: 'nadro.pdf',
+        mimeType: 'application/pdf',
+        bytes: PDF,
+        createdBy: ADMIN,
+      });
+      await facturasRag.confirm(prisma, document.id, {
+        data: { documentType: 'invoice', total: 100 },
+        contentText: 'Factura Nadro',
+        embedding: { model: 'emb', vector: [1, 0] },
+      });
+      return document.id;
+    }
+
+    it('suma las piezas, encola la entrada para el push y solo deja aplicarlo una vez', async () => {
+      await unProducto({ id: 'p-1', remoteId: 'remote-1', stock: 3 });
+      const id = await documentoIndexado();
+
+      const doc = await facturasRag.applyStock(prisma, id, {
+        entries: [entrada({ productUpdate: { barcode: '7501234567890' } })],
+        appliedBy: ADMIN,
+      });
+
+      expect(doc.stockAppliedAt).not.toBeNull();
+      expect(doc.stockApplied).toEqual([{ productId: 'p-1', name: 'Producto p-1', quantity: 5, stock: 8 }]);
+      const producto = await prisma.product.findUnique({ where: { id: 'p-1' } });
+      expect(producto).toMatchObject({ totalStock: 8, barcode: '7501234567890', pendingPush: true });
+      const [lote] = await prisma.batch.findMany({ where: { productId: 'p-1' } });
+      expect(lote).toMatchObject({ lotNumber: 'L-1', quantity: 5, pendingPush: true });
+      expect(JSON.parse(lote.payloadJson)).toMatchObject({ invoiceId: 'inv-1', productId: 'remote-1' });
+
+      await expect(
+        facturasRag.applyStock(prisma, id, { entries: [entrada()], appliedBy: ADMIN }),
+      ).rejects.toThrow('aún no aplicado');
+      await expect(prisma.product.findUnique({ where: { id: 'p-1' } })).resolves.toMatchObject({ totalStock: 8 });
+    });
+
+    it('si una partida falla no entra ninguna y el documento sigue sin aplicar', async () => {
+      await unProducto({ id: 'p-1', remoteId: 'remote-1', stock: 3 });
+      const id = await documentoIndexado();
+
+      await expect(
+        facturasRag.applyStock(prisma, id, {
+          entries: [entrada(), entrada({ productId: 'no-existe' })],
+          appliedBy: ADMIN,
+        }),
+      ).rejects.toThrow('No se encontró el producto local');
+
+      await expect(prisma.product.findUnique({ where: { id: 'p-1' } })).resolves.toMatchObject({ totalStock: 3 });
+      await expect(prisma.batch.count()).resolves.toBe(0);
+      await expect(facturasRag.getById(prisma, id)).resolves.toMatchObject({ stockAppliedAt: null });
+    });
+
+    it('rechaza documentos sin indexar y partidas mal formadas', async () => {
+      const { document } = await facturasRag.register(prisma, path.join(tmpDir, 'invoice-rag'), {
+        fileName: 'sin-indexar.pdf',
+        mimeType: 'application/pdf',
+        bytes: new TextEncoder().encode('%PDF-1.7 sin indexar'),
+        createdBy: ADMIN,
+      });
+
+      await expect(
+        facturasRag.applyStock(prisma, document.id, { entries: [entrada()], appliedBy: ADMIN }),
+      ).rejects.toThrow('indexado');
+      await expect(
+        facturasRag.applyStock(prisma, document.id, { entries: [entrada({ quantity: 1.5 })], appliedBy: ADMIN }),
+      ).rejects.toThrow('Partida de inventario inválida');
+      await expect(
+        facturasRag.applyStock(prisma, document.id, { entries: [entrada({ lotNumber: ' ' })], appliedBy: ADMIN }),
+      ).rejects.toThrow('Partida de inventario inválida');
+    });
+  });
 });

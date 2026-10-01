@@ -431,6 +431,11 @@ declare global {
           limit?: number;
           minScore?: number;
         }) => Promise<InvoiceRagSearchHit[]>;
+        markUploaded: (id: string, storagePath: string) => Promise<InvoiceRagDocument>;
+        applyStock: (
+          id: string,
+          input: { entries: unknown[]; appliedBy: string },
+        ) => Promise<InvoiceRagDocument>;
         remove: (id: string) => Promise<{ id: string }>;
       };
       cashMovements: {

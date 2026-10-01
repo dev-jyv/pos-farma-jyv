@@ -1,15 +1,12 @@
 /**
- * Entorno `development` (default de `ng serve` / `npm start`).
- * TEMPORAL: apunta a **producción** (API y Firebase de `farma-jyv`), no a los
- * emuladores. Para volver a los emuladores: `useEmulators: true`, `apiUrl`
- * `http://127.0.0.1:5001/demo-farmajyv/us-central1/api/v1` y el proyecto
- * `demo-farmajyv` (ver historial de git).
+ * Entorno `dev-cloud` (`npm run start:dev-cloud`). TEMPORAL: apunta a
+ * **producción** (`farma-jyv`) mientras `farma-jyv-dev` no esté listo.
  */
 export const environment = {
   production: false,
   isElectron: false,
   useEmulators: false,
-  version: 'vB1.0.4',
+  version: 'vB1.0.4-dev',
   apiUrl: 'https://api-vykfsskx3q-uc.a.run.app/v1',
   primeNgLicense:
     'eyJpZCI6ImIyYTFiMmZkLWVjYzItNDMxNi1iZGU2LTJhOWE1YTg0YTg5MyIsInByb2R1Y3QiOiJwcmltZXVpIiwidGllciI6ImNvbW11bml0eSIsInR5cGUiOiJkZXYiLCJpYXQiOjE3ODU1NDU5MTcsImV4cCI6MTgxNzA4MTkxN30.qU9mWYPh-N38tjPZluyU8GWqThw0DFVabnjlJf50TeU0aBBs8_dqlIBN7Mk5GSS-TfSPk-hxC0v-16yEhzehAQ',

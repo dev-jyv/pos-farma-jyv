@@ -26,6 +26,7 @@ export const EMPTY_INVOICE_RAG_DATA: InvoiceRagData = {
 
 const RFC_PATTERN = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/i;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const BARCODE_PATTERN = /^\d{8,14}$/;
 
 const toPercent = (rate: number | null): number | null => (rate === null ? null : Math.round(rate * 1_000_000) / 10_000);
 const fromPercent = (percent: number | null): number | null => (percent === null ? null : percent / 100);
@@ -42,6 +43,9 @@ export function buildTaxGroup(fb: NonNullableFormBuilder, tax?: InvoiceRagTax) {
 export function buildItemGroup(fb: NonNullableFormBuilder, item?: InvoiceRagItem) {
   return fb.group({
     description: [item?.description ?? '', [Validators.required, Validators.maxLength(500)]],
+    barcode: [item?.barcode ?? '', Validators.pattern(BARCODE_PATTERN)],
+    lotNumber: [item?.lotNumber ?? '', Validators.maxLength(40)],
+    expiryDate: [item?.expiryDate ?? ''],
     quantity: fb.control<number | null>(item?.quantity ?? null),
     unitPrice: fb.control<number | null>(item?.unitPrice ?? null),
     amount: fb.control<number | null>(item?.amount ?? null),
@@ -90,7 +94,13 @@ export function readInvoiceRagForm(form: InvoiceRagForm, confidence: number): In
     subtotal: value.subtotal,
     taxes: value.taxes.map((tax) => ({ type: tax.type.trim(), rate: fromPercent(tax.ratePercent), amount: tax.amount })),
     total: value.total,
-    items: value.items.map((item) => ({ ...item, description: item.description.trim() })),
+    items: value.items.map((item) => ({
+      ...item,
+      description: item.description.trim(),
+      barcode: textOrNull(item.barcode),
+      lotNumber: textOrNull(item.lotNumber),
+      expiryDate: textOrNull(item.expiryDate),
+    })),
     notes: textOrNull(value.notes),
   };
 }

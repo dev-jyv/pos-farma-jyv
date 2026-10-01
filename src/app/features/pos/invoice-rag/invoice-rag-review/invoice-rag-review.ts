@@ -1,4 +1,4 @@
-import { PercentPipe } from '@angular/common';
+import { DatePipe, PercentPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, OnDestroy, computed, inject, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -12,9 +12,11 @@ import { TagModule } from 'primeng/tag';
 import { TextareaModule } from 'primeng/textarea';
 
 import { getApiErrorMessage } from '../../../../core/api/api.utils';
+import { AuthService } from '../../../../core/auth/auth.service';
 import { NotificationService } from '../../../../core/notifications/notification.service';
 import { InvoiceRagDocument } from '../../../../shared/models';
 import { InvoiceRagPreview } from '../invoice-rag-preview/invoice-rag-preview';
+import { InvoiceRagStockDialog } from '../invoice-rag-stock/invoice-rag-stock-dialog';
 import { InvoiceRagFile, InvoiceRagService } from '../services/invoice-rag.service';
 import {
   InvoiceRagForm,
@@ -25,7 +27,7 @@ import {
 } from './invoice-rag-form';
 import { INVOICE_RAG_STATUS_SEVERITY, INVOICE_RAG_TYPE_OPTIONS } from '../invoice-rag.constants';
 
-type BusyAction = 'extract' | 'confirm' | 'remove';
+type BusyAction = 'extract' | 'confirm' | 'remove' | 'upload';
 
 @Component({
   selector: 'app-invoice-rag-review',
@@ -42,6 +44,8 @@ type BusyAction = 'extract' | 'confirm' | 'remove';
     TagModule,
     TextareaModule,
     InvoiceRagPreview,
+    InvoiceRagStockDialog,
+    DatePipe,
   ],
   templateUrl: './invoice-rag-review.html',
 })
@@ -64,6 +68,12 @@ export class InvoiceRagReview implements OnDestroy {
   readonly loading = signal(true);
   readonly busy = signal<BusyAction | null>(null);
   readonly confirmingRemove = signal(false);
+  readonly stockDialogOpen = signal(false);
+  readonly canEnterStock = inject(AuthService).can('stockEntry', 'write');
+  readonly canApplyStock = computed(() => {
+    const doc = this.document();
+    return doc?.status === 'indexed' && !doc.stockAppliedAt;
+  });
   readonly hasData = computed(() => {
     const doc = this.document();
     return !!(doc?.confirmed ?? doc?.extracted);
@@ -130,8 +140,26 @@ export class InvoiceRagReview implements OnDestroy {
       const data = readInvoiceRagForm(form, (doc.confirmed ?? doc.extracted)?.confidence ?? 0);
       this.applyDocument(await this.invoiceRag.confirm(doc.id, data));
       this.notifications.success('Documento guardado e indexado.');
+      if (!this.document()?.storagePath) {
+        await this.backup(doc.id);
+      }
     } catch (error) {
       this.notifications.error(getApiErrorMessage(error));
+    } finally {
+      this.busy.set(null);
+    }
+  }
+
+  async upload(): Promise<void> {
+    const doc = this.document();
+    if (!doc || this.busy()) {
+      return;
+    }
+    this.busy.set('upload');
+    try {
+      if (await this.backup(doc.id)) {
+        this.notifications.success('Archivo subido a la nube.');
+      }
     } finally {
       this.busy.set(null);
     }
@@ -180,6 +208,17 @@ export class InvoiceRagReview implements OnDestroy {
     const doc = await this.invoiceRag.getById(id).catch(() => null);
     if (doc) {
       this.document.set(doc);
+    }
+  }
+
+  /** Un fallo aquí no deshace el indexado: el archivo queda local y se reintenta a mano. */
+  private async backup(id: string): Promise<boolean> {
+    try {
+      this.document.set(await this.invoiceRag.upload(id));
+      return true;
+    } catch (error) {
+      this.notifications.warn(`No se pudo subir el archivo a la nube: ${getApiErrorMessage(error)}`);
+      return false;
     }
   }
 

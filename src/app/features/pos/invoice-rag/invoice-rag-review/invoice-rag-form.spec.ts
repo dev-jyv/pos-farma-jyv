@@ -24,7 +24,17 @@ const DATA: InvoiceRagData = {
   subtotal: 413.79,
   taxes: [{ type: 'IVA', rate: 0.16, amount: 66.21 }],
   total: 480,
-  items: [{ description: 'Suministro', quantity: 1, unitPrice: 413.79, amount: 413.79 }],
+  items: [
+    {
+      description: 'Suministro',
+      barcode: '7501234567890',
+      lotNumber: 'L-9',
+      expiryDate: '2027-03-31',
+      quantity: 1,
+      unitPrice: 413.79,
+      amount: 413.79,
+    },
+  ],
   notes: null,
 };
 
@@ -85,7 +95,26 @@ describe('invoice-rag-form', () => {
     form.controls.items.at(0).patchValue({ description: '  Paracetamol ', amount: 35 });
 
     const data = readInvoiceRagForm(form, 0);
-    expect(data.items).toEqual([{ description: 'Paracetamol', quantity: null, unitPrice: null, amount: 35 }]);
+    expect(data.items).toEqual([
+      {
+        description: 'Paracetamol',
+        barcode: null,
+        lotNumber: null,
+        expiryDate: null,
+        quantity: null,
+        unitPrice: null,
+        amount: 35,
+      },
+    ]);
     expect(data.taxes).toEqual([{ type: 'IVA', rate: null, amount: 0 }]);
+  });
+
+  it('acepta partidas extraídas antes de pedir código, lote y caducidad, y valida el código', () => {
+    const item = buildItemGroup(fb, { description: 'Viejo', quantity: 2, unitPrice: 1, amount: 2 });
+    expect(item.getRawValue()).toMatchObject({ barcode: '', lotNumber: '', expiryDate: '' });
+    expect(item.valid).toBe(true);
+
+    item.controls.barcode.setValue('12AB');
+    expect(item.controls.barcode.invalid).toBe(true);
   });
 });

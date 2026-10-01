@@ -19,6 +19,18 @@ const WINDOWS_PRINTER_SHARE = /^\\\\[^\\/:*?"<>|]+\\[^\\/:*?"<>|]+$/;
 const MAX_PRINTER_NAME = 255;
 
 /**
+ * Orígenes extra que solo existen en desarrollo: el dev server del renderer del
+ * POS (4400, ver `angular.json`) y los emuladores del backend (functions 5001,
+ * auth 9099). Nada de esto se consulta con `isDev: false`: la app empaquetada
+ * sigue sin poder salir de su `index.html`.
+ */
+const DEV_ONLY_ORIGINS = Object.freeze([
+  'http://localhost:4400',
+  'http://127.0.0.1:5001',
+  'http://127.0.0.1:9099',
+]);
+
+/**
  * ¿La ventana puede navegar a `targetUrl`?
  *
  * El POS es una sola pantalla: en producción vive en el `index.html` del bundle
@@ -45,15 +57,24 @@ function isAllowedNavigation(targetUrl, { isDev = false, devServerUrl = '', appI
     return isInside(appDir, fileUrlToPath(url));
   }
 
-  if (isDev && devServerUrl) {
-    try {
-      return url.origin === new URL(devServerUrl).origin;
-    } catch {
-      return false;
-    }
+  if (isDev) {
+    return devOrigins(devServerUrl).includes(url.origin);
   }
 
   return false;
+}
+
+/** Origen del dev server configurado (si es una URL válida) más `DEV_ONLY_ORIGINS`. */
+function devOrigins(devServerUrl) {
+  const origins = [...DEV_ONLY_ORIGINS];
+  if (devServerUrl) {
+    try {
+      origins.push(new URL(devServerUrl).origin);
+    } catch {
+      // URL inválida: se ignora, quedan solo los orígenes fijos de desarrollo.
+    }
+  }
+  return origins;
 }
 
 /** `file:///C:/x/y` → `C:\x\y`; `file:///x/y` → `/x/y`. */
@@ -145,4 +166,4 @@ function isDevToolsShortcut(input) {
   return Boolean(conModificador) && ['i', 'j', 'c'].includes(key);
 }
 
-module.exports = { isAllowedNavigation, isSafePrinterTarget, isDevToolsShortcut };
+module.exports = { DEV_ONLY_ORIGINS, isAllowedNavigation, isSafePrinterTarget, isDevToolsShortcut };

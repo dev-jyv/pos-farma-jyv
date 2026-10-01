@@ -1,8 +1,14 @@
+/**
+ * Build empaquetado de Electron DEV (configuración `electron-dev-cloud`,
+ * `npm run release:dev:mac|win`). TEMPORAL: API y Firebase de **producción**
+ * (`farma-jyv`) mientras `farma-jyv-dev` no esté listo. Sigue siendo otra app
+ * (`mx.farmajyv.pos.dev`) con su propio feed de actualizaciones.
+ */
 export const environment = {
-  production: false,
-  isElectron: false,
+  production: true,
+  isElectron: true,
   useEmulators: false,
-  version: 'v1.0.4',
+  version: 'vE1.0.4-dev',
   apiUrl: 'https://api-vykfsskx3q-uc.a.run.app/v1',
   primeNgLicense:
     'eyJpZCI6ImIyYTFiMmZkLWVjYzItNDMxNi1iZGU2LTJhOWE1YTg0YTg5MyIsInByb2R1Y3QiOiJwcmltZXVpIiwidGllciI6ImNvbW11bml0eSIsInR5cGUiOiJkZXYiLCJpYXQiOjE3ODU1NDU5MTcsImV4cCI6MTgxNzA4MTkxN30.qU9mWYPh-N38tjPZluyU8GWqThw0DFVabnjlJf50TeU0aBBs8_dqlIBN7Mk5GSS-TfSPk-hxC0v-16yEhzehAQ',
@@ -32,10 +38,15 @@ export const environment = {
      * emparejada; el flujo de orders sigue intacto en el código.
      */
     terminalEnabled: false,
-    storeId: '79847455',
-    posId: '136414381',
-    terminalId: 'NEWLAND_N950__N950NCCA05098242',
+    storeId: '',
+    posId: '',
+    terminalId: '',
   },
+  /**
+   * TEMPORAL: claves de **producción** (`farma-jyv`) mientras `farma-jyv-dev`
+   * no esté listo. Todo lo que se haga aquí cae en los datos reales de la
+   * farmacia. La terminal Point sigue apagada y sin ids (ver `mercadoPago`).
+   */
   firebase: {
     apiKey: 'AIzaSyCDkNTzuKSvhXzC716e9fGjGSrk-BctJS0',
     authDomain: 'farma-jyv.firebaseapp.com',

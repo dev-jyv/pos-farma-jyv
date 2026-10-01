@@ -21,7 +21,7 @@ const DATA: InvoiceRagData = {
   subtotal: 413.79,
   taxes: [{ type: 'IVA', rate: 0.16, amount: 66.21 }],
   total: 480,
-  items: [{ description: 'Suministro', quantity: 1, unitPrice: 413.79, amount: 413.79 }],
+  items: [{ description: 'Suministro', barcode: '7501234567890', quantity: 1, unitPrice: 413.79, amount: 413.79 }],
 };
 
 function doc(overrides: Partial<InvoiceRagDocument> = {}): InvoiceRagDocument {
@@ -40,6 +40,10 @@ function doc(overrides: Partial<InvoiceRagDocument> = {}): InvoiceRagDocument {
     createdBy: 'u1',
     createdAt: '2026-09-26T15:00:00.000Z',
     updatedAt: '2026-09-26T15:00:00.000Z',
+    stockAppliedAt: null,
+    stockApplied: null,
+    storagePath: null,
+    uploadedAt: null,
     ...overrides,
   };
 }
@@ -56,7 +60,7 @@ describe('buildEmbeddingText', () => {
         'Subtotal: 413.79',
         'Impuestos: IVA 16%: 66.21',
         'Total: 480',
-        'Conceptos: Suministro x1 = 413.79',
+        'Conceptos: Suministro [7501234567890] x1 = 413.79',
       ].join('\n'),
     );
   });
@@ -82,6 +86,7 @@ describe('InvoiceRagService', () => {
       ),
       markFailed: vi.fn(async () => doc({ status: 'failed' })),
       confirm: vi.fn(async () => doc({ status: 'indexed' })),
+      markUploaded: vi.fn(async (_id: string, storagePath: string) => doc({ status: 'indexed', storagePath })),
       search: vi.fn(async () => []),
       list: vi.fn(),
       getById: vi.fn(),
@@ -159,6 +164,19 @@ describe('InvoiceRagService', () => {
       contentText: buildEmbeddingText(DATA),
       embedding: { model: 'emb', dims: 2, vector: [0.1, 0.2] },
     });
+  });
+
+  it('upload respalda el archivo local en R2 y anota la ruta en SQLite', async () => {
+    const promise = service.upload('d1');
+
+    const req = await vi.waitFor(() => http.expectOne(`${environment.apiUrl}/uploads/facturas`));
+    const file = (req.request.body as FormData).get('file') as File;
+    expect(file.name).toBe('cfe.pdf');
+    expect(file.type).toBe('application/pdf');
+    req.flush({ data: { storagePath: 'facturas/abc/cfe.pdf', fileName: 'cfe.pdf', mimeType: 'application/pdf', fileUrl: 'https://r2' } });
+
+    await expect(promise).resolves.toMatchObject({ storagePath: 'facturas/abc/cfe.pdf' });
+    expect(store['markUploaded']).toHaveBeenCalledWith('d1', 'facturas/abc/cfe.pdf');
   });
 
   it('search embebe la consulta y busca con el mismo modelo', async () => {

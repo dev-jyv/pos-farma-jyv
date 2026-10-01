@@ -1,6 +1,7 @@
 export const environment = {
   production: true,
   isElectron: true,
+  useEmulators: false,
   version: 'vE1.0.4',
   apiUrl: 'https://api-vykfsskx3q-uc.a.run.app/v1',
   primeNgLicense:

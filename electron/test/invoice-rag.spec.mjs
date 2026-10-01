@@ -6,8 +6,19 @@ import path from 'path';
 import invoiceRag from '../db/invoice-rag.js';
 import { createFakePrisma } from './fake-prisma.mjs';
 
-const { register, readFile, list, getById, saveExtraction, markFailed, confirm, search, remove, MAX_FILE_BYTES } =
-  invoiceRag;
+const {
+  register,
+  readFile,
+  list,
+  getById,
+  saveExtraction,
+  markFailed,
+  confirm,
+  markUploaded,
+  search,
+  remove,
+  MAX_FILE_BYTES,
+} = invoiceRag;
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 const PDF = new TextEncoder().encode('%PDF-1.7 factura');
@@ -123,6 +134,22 @@ describe('extracción', () => {
 
   it('falla con un id inexistente', async () => {
     await expect(saveExtraction(prisma, 'nope', { data: {} })).rejects.toThrow('Documento no encontrado');
+  });
+});
+
+describe('markUploaded', () => {
+  it('anota la ruta de R2 y cuándo se subió', async () => {
+    const { document } = await upload();
+    expect(document).toMatchObject({ storagePath: null, uploadedAt: null });
+
+    const uploaded = await markUploaded(prisma, document.id, ' facturas/abc/ticket.png ');
+    expect(uploaded.storagePath).toBe('facturas/abc/ticket.png');
+    expect(uploaded.uploadedAt).toEqual(expect.any(String));
+  });
+
+  it('rechaza rutas vacías', async () => {
+    const { document } = await upload();
+    await expect(markUploaded(prisma, document.id, '  ')).rejects.toThrow('Ruta de almacenamiento inválida');
   });
 });
 

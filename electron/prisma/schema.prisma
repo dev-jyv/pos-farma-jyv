@@ -414,6 +414,14 @@ model InvoiceDocument {
   createdBy     String
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
+  /// Se aplica al inventario una sola vez; lo marca `applyStock`.
+  stockAppliedAt   DateTime?
+  stockAppliedBy   String?
+  /// Resumen `[{productId, name, quantity, stock}]` de lo que entró.
+  stockAppliedJson String?
+  /// Ruta del archivo en R2 (`POST /uploads/facturas`), subido al indexar.
+  storagePath      String?
+  uploadedAt       DateTime?
   embedding     InvoiceEmbedding?
 
   @@index([status])

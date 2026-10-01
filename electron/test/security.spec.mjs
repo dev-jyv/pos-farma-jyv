@@ -51,6 +51,29 @@ describe('isAllowedNavigation', () => {
     expect(isAllowedNavigation('https://evil.example/', dev)).toBe(false);
   });
 
+  it('en desarrollo permite el dev server 4400 y los emuladores, y nada más', () => {
+    for (const url of [
+      'http://localhost:4400/pos/venta',
+      'http://127.0.0.1:5001/demo-farmajyv/us-central1/api/v1/health',
+      'http://127.0.0.1:9099/emulator/auth/handler',
+    ]) {
+      expect(isAllowedNavigation(url, dev)).toBe(true);
+    }
+    expect(isAllowedNavigation('http://127.0.0.1:8080/', dev)).toBe(false);
+    expect(isAllowedNavigation('http://localhost:5001/', dev)).toBe(false);
+    expect(isAllowedNavigation('https://127.0.0.1:9099/', dev)).toBe(false);
+  });
+
+  it('en producción los orígenes de desarrollo siguen bloqueados', () => {
+    for (const url of [
+      'http://localhost:4400/',
+      'http://127.0.0.1:5001/demo-farmajyv/us-central1/api/v1',
+      'http://127.0.0.1:9099/',
+    ]) {
+      expect(isAllowedNavigation(url, prod)).toBe(false);
+    }
+  });
+
   it('bloquea esquemas no navegables y basura', () => {
     for (const url of [
       'javascript:alert(1)',
