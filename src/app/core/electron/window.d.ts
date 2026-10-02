@@ -259,6 +259,7 @@ declare global {
       catalog: {
         search: (term: string) => Promise<Product[]>;
         getByBarcode: (code: string) => Promise<Product | null>;
+        getByIds: (ids: string[]) => Promise<Product[]>;
         /** Local-first de `POST /stock-entries`; acepta el mismo `CreateStockEntryPayload`. */
         recordStockEntry: (payload: unknown) => Promise<StockEntryLocalResult>;
         upsertMany: (products: unknown[]) => Promise<{ count: number }>;
@@ -287,12 +288,12 @@ declare global {
         getPendingPush: (
           filters?: { ownerUid?: string; contarIntentos?: boolean },
         ) => Promise<PendingSale[]>;
-        listBlocked: () => Promise<BlockedSyncRecord[]>;
+        listBlocked: (filters?: { ownerUid?: string }) => Promise<BlockedSyncRecord[]>;
         /**
          * Anuladas que nunca llegaron al servidor: se crean y se anulan allá,
          * para que el movimiento quede completo.
          */
-        getPendingVoided: () => Promise<
+        getPendingVoided: (filters?: { ownerUid?: string }) => Promise<
           Array<PendingSale & { voidedAt: string | null; voidedBy: string | null }>
         >;
         markSynced: (localId: string, remoteId: string, remoteFolio: string) => Promise<void>;
@@ -310,7 +311,7 @@ declare global {
         clearPushError: (localId: string) => Promise<void>;
         discard: (localId: string) => Promise<void>;
         /** Ventas ya sincronizadas que se anularon en local durante la carrera de `markSynced`. */
-        getNeedingRemoteVoid: () => Promise<
+        getNeedingRemoteVoid: (filters?: { ownerUid?: string }) => Promise<
           Array<{ id: string; remoteId: string; voidedAt: string | null; voidedBy: string | null }>
         >;
         /** Anulada sin red: queda pendiente de anularse también en el servidor. */

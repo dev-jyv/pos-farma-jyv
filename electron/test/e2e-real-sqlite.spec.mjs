@@ -1026,3 +1026,93 @@ describe('facturas-RAG en SQLite real', () => {
     });
   });
 });
+
+describe('lo pendiente de subir sobrevive al pull y a los filtros por dueño', () => {
+  const remoto = (overrides = {}) => ({
+    id: 'remote-1',
+    sku: 'SKU-p-1',
+    name: 'Producto p-1',
+    salePrice: 50,
+    stock: 20,
+    batches: [],
+    ...overrides,
+  });
+
+  async function ventaDeDos(cajero = CAJERO) {
+    const turno = await cashSessions.createLocal(prisma, { openedBy: cajero, openingAmount: 0 });
+    return ventas.createLocal(prisma, {
+      ...ventaPayload([partidaProducto()], { cashierId: cajero }),
+      cashSessionId: turno.id,
+    });
+  }
+
+  it('el pull no devuelve al stock lo vendido que aún no subió', async () => {
+    await unProducto({ stock: 20, remoteId: 'remote-1' });
+    await ventaDeDos();
+    expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(18);
+
+    // El servidor todavía tiene las 20: no ha visto la venta.
+    await productos.upsertMany(prisma, [remoto({ stock: 20 })]);
+
+    expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(18);
+  });
+
+  it('cuando la venta ya subió, el pull manda el stock del servidor', async () => {
+    await unProducto({ stock: 20, remoteId: 'remote-1' });
+    const venta = await ventaDeDos();
+    await ventas.markSynced(prisma, venta.id, 'remote-sale-1', 'F-1');
+
+    await productos.upsertMany(prisma, [remoto({ stock: 18 })]);
+
+    expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(18);
+  });
+
+  it('el pull no borra la mercancía recibida que aún no subió', async () => {
+    await unProducto({ stock: 0, remoteId: 'remote-1' });
+    await productos.recordStockEntry(prisma, {
+      productId: 'p-1',
+      lotNumber: 'L-1',
+      expiryDate: '2028-01-31',
+      quantity: 5,
+      invoiceId: 'inv-1',
+    });
+
+    await productos.upsertMany(prisma, [remoto({ stock: 0 })]);
+
+    expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(5);
+  });
+
+  it('los lotes ya descuentan lo vendido sin subir, del más próximo al más lejano', async () => {
+    await unProducto({ stock: 10, remoteId: 'remote-1' });
+    await productos.upsertMany(prisma, [
+      remoto({
+        stock: 10,
+        batches: [
+          { id: 'b-1', lotNumber: 'A', expiryDate: '2027-01-31', quantity: 4 },
+          { id: 'b-2', lotNumber: 'B', expiryDate: '2028-01-31', quantity: 6 },
+        ],
+      }),
+    ]);
+    await ventaDeDos();
+
+    const lotes = await productos.getBatchesByProduct(prisma, 'p-1');
+
+    expect(lotes.map((lote) => [lote.lotNumber, lote.quantity])).toEqual([
+      ['A', 2],
+      ['B', 6],
+    ]);
+  });
+
+  it('las anuladas y los rechazados se acotan al cajero dueño', async () => {
+    await unProducto({ stock: 20, remoteId: 'remote-1' });
+    const ajena = await ventaDeDos('uid-otro');
+    await ventas.voidLocal(prisma, ajena.id, ADMIN);
+
+    expect(await ventas.getPendingVoided(prisma, { ownerUid: CAJERO })).toHaveLength(0);
+    expect(await ventas.getPendingVoided(prisma, { ownerUid: 'uid-otro' })).toHaveLength(1);
+
+    await ventas.markPushFailed(prisma, ajena.id, 'rechazada');
+    expect(await ventas.listBlocked(prisma, { ownerUid: CAJERO })).toHaveLength(0);
+    expect(await ventas.listBlocked(prisma)).toHaveLength(1);
+  });
+});

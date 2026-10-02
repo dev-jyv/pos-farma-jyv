@@ -225,9 +225,10 @@ export class SyncScheduler {
   runNow(): void {
     // Sin polling propio: aquí es donde de verdad importa saber si hay red.
     this.apiHealth.checkNow();
-    void this.pullProducts();
     this.cashSessionService.pullAdjustmentStatus();
-    void this.pushPending();
+    // El pull va **después** del push: el catálogo trae el stock del servidor,
+    // que todavía no descuenta las ventas que aún no subieron.
+    void this.pushPending().finally(() => void this.pullProducts());
   }
 
   /**
@@ -304,9 +305,13 @@ export class SyncScheduler {
       return;
     }
     this.apiHealth.checkNow();
-    void this.pullProducts();
     this.cashSessionService.pullAdjustmentStatus();
-    await this.pushPending();
+    try {
+      await this.pushPending();
+    } finally {
+      // Después del push, no en paralelo: ver `runNow`.
+      void this.pullProducts();
+    }
   }
 
   /**
@@ -335,13 +340,13 @@ export class SyncScheduler {
     const owner = pushOwnerFilter(this.auth);
     const queues = await Promise.allSettled([
       api.sales.getPendingPush(owner),
-      api.sales.getPendingVoided(),
+      api.sales.getPendingVoided(owner),
       /**
        * Anulaciones que el servidor todavía no aplicó. No aparecían en este
        * conteo, así que el aviso de salida decía "0 pendientes" con una venta
        * viva en el servidor que en la caja ya estaba anulada.
        */
-      api.sales.getNeedingRemoteVoid(),
+      api.sales.getNeedingRemoteVoid(owner),
       api.catalog.getPendingCatalogPush(),
       api.catalog.getPendingStockEntries(),
       api.cashMovements.getPendingPush(owner),

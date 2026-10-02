@@ -17,7 +17,7 @@ import { DialogModule } from 'primeng/dialog';
 import { InputTextModule } from 'primeng/inputtext';
 import { TableModule } from 'primeng/table';
 import { TooltipModule } from 'primeng/tooltip';
-import { debounceTime, from, Subject, switchMap } from 'rxjs';
+import { debounceTime, from, Observable, Subject, switchMap } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { environment } from '../../../../environments/environment';
@@ -130,7 +130,6 @@ function isTypingTarget(target: EventTarget | null): boolean {
     '(document:keydown.f9)': 'openCheckout($event)',
     '(document:keydown.escape)': 'onEscape($event)',
     '(document:keydown.delete)': 'onDeleteLine($event)',
-    '(document:keydown.backspace)': 'onDeleteLine($event)',
     '(document:keydown)': 'onSignedQtyKey($event)',
   },
 })
@@ -184,12 +183,12 @@ export class Sale {
   readonly pendingSales = this.saleService.pendingSales;
 
   readonly subtotal = computed(() =>
-    this.cart().reduce((sum, line) => sum + lineUnitPrice(line) * line.quantity, 0),
+    roundMoney(this.cart().reduce((sum, line) => sum + lineUnitPrice(line) * line.quantity, 0)),
   );
   readonly discountTotal = computed(() =>
-    this.cart().reduce((sum, line) => sum + line.discountAmount, 0),
+    roundMoney(this.cart().reduce((sum, line) => sum + line.discountAmount, 0)),
   );
-  readonly total = computed(() => Math.max(0, this.subtotal() - this.discountTotal()));
+  readonly total = computed(() => Math.max(0, roundMoney(this.subtotal() - this.discountTotal())));
   readonly itemCount = computed(() => this.cart().reduce((sum, line) => sum + line.quantity, 0));
   readonly lastLineId = computed(() => {
     const lines = this.cart();
@@ -455,7 +454,9 @@ export class Sale {
   }
 
   onDeleteLine(event: Event): void {
-    if (this.dialogOpen) {
+    // Una tecla sostenida repite el evento: sin esto vaciaba el ticket partida
+    // por partida.
+    if (this.dialogOpen || (event instanceof KeyboardEvent && event.repeat)) {
       return;
     }
     if (isTypingTarget(event.target) && this.searchTerm()) {
@@ -925,10 +926,73 @@ export class Sale {
     for (const line of held.lines) {
       this.recortarDescuentoAlTope(lineKey(line));
     }
+    this.refreshStaleProducts();
     this.heldSales.update((list) => {
       const next = list.filter((item) => item.id !== id);
       this.persistHeld(next);
       return next;
+    });
+  }
+
+  /**
+   * Un ticket guardado o en pausa trae el producto tal como estaba al capturarse:
+   * precio, existencias y grupo controlado de entonces. Se relee del catálogo
+   * local y se corrige lo que cambió, avisando al cajero; cobrar con la copia
+   * vieja vendía a precio anterior, de más, o sin receta un producto que ya la pide.
+   */
+  private refreshStaleProducts(): void {
+    const ids = this.cart()
+      .filter(isProductLine)
+      .map((line) => line.product.id);
+    if (!ids.length) {
+      return;
+    }
+    let fresh$: Observable<Product[]>;
+    try {
+      fresh$ = this.productService.getByIds(ids);
+    } catch {
+      return;
+    }
+    fresh$.subscribe({
+      next: (fresh) => {
+        const byId = new Map(fresh.map((product) => [product.id, product]));
+        const cambios: string[] = [];
+        const lines: CartLine[] = [];
+        for (const line of this.cart()) {
+          const current = isProductLine(line) ? byId.get(line.product.id) : undefined;
+          if (!isProductLine(line) || !current) {
+            lines.push(line);
+            continue;
+          }
+          const name = line.product.name;
+          if (current.stock <= 0) {
+            cambios.push(`${name}: sin existencias, se quitó del ticket`);
+            continue;
+          }
+          let quantity = line.quantity;
+          if (quantity > current.stock) {
+            quantity = current.stock;
+            cambios.push(`${name}: solo hay ${current.stock} en existencia`);
+          }
+          if (current.salePrice !== line.product.salePrice) {
+            cambios.push(`${name}: el precio ahora es $${current.salePrice.toFixed(2)}`);
+          }
+          if (
+            current.controlledGroup !== line.product.controlledGroup ||
+            current.requiresPrescription !== line.product.requiresPrescription
+          ) {
+            cambios.push(`${name}: cambió su control de receta`);
+          }
+          lines.push({ ...line, product: current, quantity });
+        }
+        if (!cambios.length) {
+          return;
+        }
+        this.setCart(lines);
+        this.notifications.error(`El ticket se actualizó con el catálogo: ${cambios.join('; ')}.`);
+      },
+      // Sin catálogo no hay con qué comparar: se deja el ticket como estaba.
+      error: () => undefined,
     });
   }
 
@@ -1013,23 +1077,6 @@ export class Sale {
   flushPendingSales(): void {
     this.saleService.flushQueue();
     this.notifications.success('Enviando las ventas pendientes.');
-  }
-
-  /**
-   * Una venta que sigue en la cola no existe en el servidor: anularla es imposible y
-   * lo único correcto es sacarla de la cola antes de que se envíe al reconectar.
-   */
-  discardLastSaleFromQueue(): void {
-    const queueId = this.lastSaleQueueId();
-    if (!queueId) {
-      return;
-    }
-    if (!window.confirm('¿Descartar esta venta? Aún no se envió al servidor y no se registrará.')) {
-      return;
-    }
-    this.saleService.discardBlockedSale(queueId);
-    this.lastSale.set(null);
-    this.notifications.success('Venta descartada de la cola.');
   }
 
   voidLastSale(): void {
@@ -1197,6 +1244,7 @@ export class Sale {
     }
     this.manualDiscounts.set(stored.manualDiscounts);
     this.setCart(stored.lines);
+    this.refreshStaleProducts();
     this.notifications.success(
       `Se recuperó el ticket en curso (${stored.lines.length} ${stored.lines.length === 1 ? 'partida' : 'partidas'}).`,
     );

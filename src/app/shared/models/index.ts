@@ -470,6 +470,8 @@ export interface SaleBilling {
 export interface Sale {
   id: string;
   folio: string;
+  /** Folio impreso en el ticket al cobrar; distinto de `folio` cuando ya hay uno del servidor. */
+  localFolio?: string;
   items: SaleItem[];
   subtotal: number;
   discountTotal: number;

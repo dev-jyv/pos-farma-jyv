@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   catalog: {
     search: (term) => ipcRenderer.invoke('catalog:search', term),
     getByBarcode: (code) => ipcRenderer.invoke('catalog:getByBarcode', code),
+    getByIds: (ids) => ipcRenderer.invoke('catalog:getByIds', ids),
     getBatchesByProduct: (productId) => ipcRenderer.invoke('catalog:getBatchesByProduct', productId),
     recordStockEntry: (payload) => ipcRenderer.invoke('catalog:recordStockEntry', payload),
     upsertMany: (products) => ipcRenderer.invoke('catalog:upsertMany', products),
@@ -47,8 +48,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createLocal: (sale) => ipcRenderer.invoke('sales:createLocal', sale),
     list: (filters) => ipcRenderer.invoke('sales:list', filters),
     getPendingPush: (filters) => ipcRenderer.invoke('sales:getPendingPush', filters),
-    listBlocked: () => ipcRenderer.invoke('sales:listBlocked'),
-    getPendingVoided: () => ipcRenderer.invoke('sales:getPendingVoided'),
+    listBlocked: (filters) => ipcRenderer.invoke('sales:listBlocked', filters),
+    getPendingVoided: (filters) => ipcRenderer.invoke('sales:getPendingVoided', filters),
     markSynced: (localId, remoteId, remoteFolio) =>
       ipcRenderer.invoke('sales:markSynced', localId, remoteId, remoteFolio),
     markUnreconciled: (localId, reason) =>
@@ -59,7 +60,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listMovements: (saleId) => ipcRenderer.invoke('sales:listMovements', saleId),
     clearPushError: (localId) => ipcRenderer.invoke('sales:clearPushError', localId),
     discard: (localId) => ipcRenderer.invoke('sales:discard', localId),
-    getNeedingRemoteVoid: () => ipcRenderer.invoke('sales:getNeedingRemoteVoid'),
+    getNeedingRemoteVoid: (filters) => ipcRenderer.invoke('sales:getNeedingRemoteVoid', filters),
     markNeedsRemoteVoid: (localId) => ipcRenderer.invoke('sales:markNeedsRemoteVoid', localId),
     markRemoteVoided: (localId) => ipcRenderer.invoke('sales:markRemoteVoided', localId),
   },

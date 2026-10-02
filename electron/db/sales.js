@@ -30,7 +30,10 @@ function toSaleDto(row) {
   return {
     id: row.id,
     remoteId: row.remoteId ?? null,
-    folio: row.folio,
+    // El real cuando ya existe; `localFolio` es el que se imprimió en el ticket y
+    // sigue siendo lo que el cliente trae en la mano.
+    folio: row.remoteFolio ?? row.folio,
+    localFolio: row.folio,
     remoteFolio: row.remoteFolio ?? null,
     pendingPush: row.pendingPush,
     pushError: row.pushError ?? null,
@@ -270,6 +273,7 @@ async function list(prisma, filters = {}) {
     sales = sales.filter(
       (sale) =>
         sale.folio.toLowerCase().includes(term) ||
+        sale.localFolio.toLowerCase().includes(term) ||
         sale.items.some((item) => item.productName.toLowerCase().includes(term)),
     );
   }
@@ -371,9 +375,9 @@ async function prepararCola(prisma, rows) {
  * los rechazos quedaban invisibles —ni pendientes ni avisados— y una venta ya
  * cobrada podía llevar días sin llegar al servidor.
  */
-async function listBlocked(prisma) {
+async function listBlocked(prisma, { ownerUid } = {}) {
   const rows = await prisma.sale.findMany({
-    where: { pushError: { not: null } },
+    where: { pushError: { not: null }, ...(ownerUid ? { cashierId: ownerUid } : {}) },
     orderBy: { createdAt: 'asc' },
   });
   const registros = [];
@@ -381,7 +385,7 @@ async function listBlocked(prisma) {
     registros.push({
       kind: 'sale',
       id: row.id,
-      label: row.folio ?? row.id,
+      label: row.remoteFolio ?? row.folio ?? row.id,
       detail: `$${Number(row.total ?? 0).toFixed(2)}`,
       occurredAt: row.createdAt,
       reason: row.pushError,
@@ -627,9 +631,15 @@ async function getPendingPush(prisma, { ownerUid, contarIntentos = false } = {})
  * el contra-asiento del libro de control y la auditoría. Sin esto, el backend no
  * se entera de que esa venta ocurrió.
  */
-async function getPendingVoided(prisma) {
+async function getPendingVoided(prisma, { ownerUid } = {}) {
   const rows = await prisma.sale.findMany({
-    where: { pendingPush: true, pushError: null, remoteId: null, voidedAt: { not: null } },
+    where: {
+      pendingPush: true,
+      pushError: null,
+      remoteId: null,
+      voidedAt: { not: null },
+      ...(ownerUid ? { cashierId: ownerUid } : {}),
+    },
     include: { items: true },
     orderBy: { createdAt: 'asc' },
   });
@@ -672,7 +682,7 @@ async function markSynced(prisma, localId, remoteId, remoteFolio) {
   }
   await prisma.sale.update({
     where: { id: localId },
-    data: { remoteId, remoteFolio, folio: remoteFolio, pendingPush: false, pushError: null },
+    data: { remoteId, remoteFolio, pendingPush: false, pushError: null },
   });
 }
 
@@ -698,9 +708,13 @@ async function markPushFailed(prisma, localId, message) {
 }
 
 /** Ventas ya sincronizadas que se anularon en local durante la carrera de `markSynced`. */
-async function getNeedingRemoteVoid(prisma) {
+async function getNeedingRemoteVoid(prisma, { ownerUid } = {}) {
   const rows = await prisma.sale.findMany({
-    where: { needsRemoteVoid: true, remoteId: { not: null } },
+    where: {
+      needsRemoteVoid: true,
+      remoteId: { not: null },
+      ...(ownerUid ? { cashierId: ownerUid } : {}),
+    },
     // El instante y el cajero de **entonces**: el backend los usa para no sellar
     // la anulación con la hora del sync ni a nombre de quien sincronizó.
     select: { id: true, remoteId: true, voidedAt: true, voidedBy: true },

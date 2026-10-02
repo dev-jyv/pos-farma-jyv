@@ -1,6 +1,8 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, inject, signal } from '@angular/core';
 
+import { AuthService } from '../auth/auth.service';
 import { BlockedSyncRecord } from '../electron/window.d';
+import { pushOwnerFilter } from './push-owner';
 
 /**
  * Registros que el servidor rechazó al sincronizar.
@@ -14,6 +16,8 @@ import { BlockedSyncRecord } from '../electron/window.d';
  */
 @Injectable({ providedIn: 'root' })
 export class BlockedSyncService {
+  private readonly auth = inject(AuthService);
+
   readonly records = signal<BlockedSyncRecord[]>([]);
   readonly count = signal(0);
 
@@ -25,7 +29,7 @@ export class BlockedSyncService {
     }
     try {
       const [sales, movements, sessions] = await Promise.all([
-        api.sales.listBlocked(),
+        api.sales.listBlocked(pushOwnerFilter(this.auth)),
         api.cashMovements.listBlocked(),
         api.cashSessions.listBlocked(),
       ]);
@@ -52,7 +56,12 @@ export class BlockedSyncService {
    * huérfanos. Para ese caso la salida es corregir la causa y reintentar.
    */
   canDiscard(record: BlockedSyncRecord): boolean {
-    return record.kind === 'sale' || record.kind === 'cashMovement';
+    if (record.kind === 'sale') {
+      // Descartar una venta cobrada la saca del efectivo esperado y del libro de
+      // control sin dejar rastro: igual que en la cola normal, solo el admin.
+      return this.auth.isAdmin();
+    }
+    return record.kind === 'cashMovement';
   }
 
   /**

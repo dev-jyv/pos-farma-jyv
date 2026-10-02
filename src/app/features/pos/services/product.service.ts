@@ -23,6 +23,11 @@ export class ProductService {
     return from(this.api().getByBarcode(code));
   }
 
+  /** Productos actuales por id: refresca precio, stock y banderas de un ticket guardado. */
+  getByIds(ids: string[]): Observable<Product[]> {
+    return from(this.api().getByIds(ids));
+  }
+
   private api() {
     const api = window.electronAPI;
     if (!api) {

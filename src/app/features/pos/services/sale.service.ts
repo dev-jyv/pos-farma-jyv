@@ -814,7 +814,7 @@ flushQueueAsync(): Promise<void> {
     if (!api) {
       return of(null);
     }
-    return from(api.sales.getPendingVoided())
+    return from(api.sales.getPendingVoided(pushOwnerFilter(this.auth)))
       .pipe(
         catchError(() => of([])),
         switchMap((pending) => {
@@ -877,7 +877,7 @@ flushQueueAsync(): Promise<void> {
     if (!api) {
       return of(null);
     }
-    return from(api.sales.getNeedingRemoteVoid())
+    return from(api.sales.getNeedingRemoteVoid(pushOwnerFilter(this.auth)))
       .pipe(
         switchMap((pending) => {
           if (!pending.length) {

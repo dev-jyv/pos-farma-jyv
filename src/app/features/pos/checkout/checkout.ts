@@ -42,6 +42,7 @@ import {
   CONTROLLED_GROUP_RULES,
   ControlledGroupRule,
   getControlledRule,
+  isValidDoctorLicense,
   resolveControlledRequirements,
   validatePrescription,
 } from '../../../shared/utils/controlled';
@@ -69,6 +70,10 @@ import { SaleService, newIdempotencyKey } from '../services/sale.service';
 import { PromoService, closedPromotionFromError } from '../services/promo.service';
 import { roundMoney } from '../../../shared/utils/money';
 import { resolveTender } from '../../../shared/utils/tender';
+
+/** Mismas reglas que el backend (`schemas/common.ts`): un RFC que pasa aquí y no allá deja la venta cobrada y rechazada. */
+const RFC_PATTERN = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/i;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const CASH_QUICK_AMOUNTS = [0, 10, 20, 50, 100, 200];
 
@@ -376,13 +381,18 @@ export class Checkout {
    * (grupos V/VI) si el cajero la capturó: es trazabilidad que ya escribió a mano.
    */
   readonly hasPrescriptionData = computed(
-    () => this.doctorName().trim().length > 0 && this.doctorLicense().trim().length > 0,
+    () => this.doctorName().trim().length > 0 && isValidDoctorLicense(this.doctorLicense()),
   );
   readonly billingOk = computed(() => {
     if (!this.requiresInvoice()) {
       return true;
     }
-    return this.billingRfc().trim().length >= 12 && this.billingName().trim().length > 0;
+    const email = this.billingEmail().trim();
+    return (
+      RFC_PATTERN.test(this.billingRfc().trim()) &&
+      this.billingName().trim().length > 0 &&
+      (!email || EMAIL_PATTERN.test(email))
+    );
   });
   readonly itemCount = computed(() =>
     this.cart().reduce((sum, line) => sum + line.quantity, 0),
@@ -415,7 +425,7 @@ export class Checkout {
     if (this.requiresInvoice() && !this.billingOk()) {
       reasons.push({
         id: 'billing',
-        texto: 'Para facturar se requiere RFC (12–13 caracteres) y razón social.',
+        texto: 'Para facturar se requiere un RFC válido, razón social y, si se captura, un correo válido.',
       });
     }
     return reasons;

@@ -355,6 +355,8 @@ function registrarIPCHandlers() {
   ipcMain.handle('catalog:search', async (_event, term) => productsDb.search(await getPrisma(), term));
   ipcMain.handle('catalog:getByBarcode', async (_event, code) =>
     productsDb.getByBarcode(await getPrisma(), code));
+  ipcMain.handle('catalog:getByIds', async (_event, ids) =>
+    productsDb.getByIds(await getPrisma(), ids));
   ipcMain.handle('catalog:recordStockEntry', async (_event, payload) =>
     productsDb.recordStockEntry(await getPrisma(), payload));
   ipcMain.handle('catalog:upsertMany', async (_event, products) =>
@@ -389,7 +391,8 @@ function registrarIPCHandlers() {
   ipcMain.handle('sales:list', async (_event, filters) => salesDb.list(await getPrisma(), filters));
   ipcMain.handle('sales:getPendingPush', async (_event, filters) =>
     salesDb.getPendingPush(await getPrisma(), filters));
-  ipcMain.handle('sales:listBlocked', async () => salesDb.listBlocked(await getPrisma()));
+  ipcMain.handle('sales:listBlocked', async (_event, filters) =>
+    salesDb.listBlocked(await getPrisma(), filters));
   ipcMain.handle('sales:markSynced', async (_event, localId, remoteId, remoteFolio) =>
     salesDb.markSynced(await getPrisma(), localId, remoteId, remoteFolio));
   ipcMain.handle('sales:markUnreconciled', async (_event, localId, reason) =>
@@ -405,8 +408,10 @@ function registrarIPCHandlers() {
   ipcMain.handle('sales:clearPushError', async (_event, localId) =>
     salesDb.clearPushError(await getPrisma(), localId));
   ipcMain.handle('sales:discard', async (_event, localId) => salesDb.discard(await getPrisma(), localId));
-  ipcMain.handle('sales:getPendingVoided', async () => salesDb.getPendingVoided(await getPrisma()));
-  ipcMain.handle('sales:getNeedingRemoteVoid', async () => salesDb.getNeedingRemoteVoid(await getPrisma()));
+  ipcMain.handle('sales:getPendingVoided', async (_event, filters) =>
+    salesDb.getPendingVoided(await getPrisma(), filters));
+  ipcMain.handle('sales:getNeedingRemoteVoid', async (_event, filters) =>
+    salesDb.getNeedingRemoteVoid(await getPrisma(), filters));
   ipcMain.handle('sales:markNeedsRemoteVoid', async (_event, localId) =>
     salesDb.markNeedsRemoteVoid(await getPrisma(), localId),
   );

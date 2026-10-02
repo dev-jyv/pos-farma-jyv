@@ -82,6 +82,16 @@ async function search(prisma, term) {
   return rows.map(toProductDto);
 }
 
+/** Productos por id local, para refrescar precio y stock de un ticket guardado. */
+async function getByIds(prisma, ids) {
+  const lista = [...new Set((ids ?? []).filter(Boolean))];
+  if (!lista.length) {
+    return [];
+  }
+  const rows = await prisma.product.findMany({ where: { id: { in: lista } } });
+  return rows.map(toProductDto);
+}
+
 async function getByBarcode(prisma, code) {
   const normalized = code?.trim();
   if (!normalized) {
@@ -151,6 +161,38 @@ async function recordStockEntry(prisma, payload) {
 }
 
 /**
+ * Unidades que el servidor todavía no descuenta de cada producto: ventas sin
+ * subir (incluidas las bloqueadas) menos las que se anularon en local pero siguen
+ * vivas allá, más la mercancía de entradas de stock sin subir. `db` es el cliente
+ * o la transacción. Con esto el pull no pisa el stock local con una foto del
+ * servidor que no incluye lo recién vendido o recibido.
+ */
+async function pendingStockDelta(db, localProductId) {
+  const sold = await db.saleItem.findMany({
+    where: {
+      productId: localProductId,
+      kind: 'product',
+      sale: { pendingPush: true, voidedAt: null },
+    },
+    select: { quantity: true },
+  });
+  const voidedPending = await db.saleItem.findMany({
+    where: {
+      productId: localProductId,
+      kind: 'product',
+      sale: { needsRemoteVoid: true, remoteId: { not: null } },
+    },
+    select: { quantity: true },
+  });
+  const entries = await db.batch.findMany({
+    where: { productId: localProductId, pendingPush: true },
+    select: { quantity: true },
+  });
+  const sum = (rows) => rows.reduce((total, row) => total + row.quantity, 0);
+  return { sold: sum(sold) - sum(voidedPending), entries: sum(entries) };
+}
+
+/**
  * Upsert por `remoteId`: usado por el pull periódico desde `GET /products/sync`.
  * El backend manda solo los campos que esta tabla persiste, así que aquí no hay
  * nada que descartar: lo que llega es lo que se guarda.
@@ -185,6 +227,10 @@ async function upsertMany(prisma, remoteProducts) {
     // avanza si `upsertMany` completa sin lanzar, así que un producto fallido
     // se reintenta entero en el siguiente pull.
     await prisma.$transaction(async (tx) => {
+      const existing = await tx.product.findUnique({ where: { remoteId: remote.id } });
+      if (existing) {
+        data.totalStock = Math.max(0, data.totalStock + (({ sold, entries }) => entries - sold)(await pendingStockDelta(tx, existing.id)));
+      }
       const product = await tx.product.upsert({
         where: { remoteId: remote.id },
         update: data,
@@ -220,17 +266,36 @@ async function upsertMany(prisma, remoteProducts) {
 
 /** Lotes de un producto (local + ya sincronizados), para caducidad/FEFO al agregar al carrito. */
 async function getBatchesByProduct(prisma, productId) {
-  const rows = await prisma.batch.findMany({
-    where: { productId },
-    orderBy: { expiryDate: 'asc' },
+  const rows = await prisma.batch.findMany({ where: { productId } });
+  // Más próximo a vencer primero; los lotes sin caducidad al final (FEFO).
+  rows.sort((a, b) => {
+    if (!a.expiryDate && !b.expiryDate) return 0;
+    if (!a.expiryDate) return 1;
+    if (!b.expiryDate) return -1;
+    return a.expiryDate.getTime() - b.expiryDate.getTime();
   });
-  return rows.map((row) => ({
-    id: row.id,
-    productId: row.productId,
-    lotNumber: row.lotNumber ?? '',
-    expiryDate: row.expiryDate,
-    quantity: row.quantity,
-  }));
+  // La venta local solo baja `totalStock`; los lotes se refrescan en el pull. Sin
+  // esto, una segunda venta pasaba la validación de lote con unidades que ya se
+  // habían vendido. Lo pendiente de subir se descuenta de los lotes vigentes
+  // (los vencidos no se consumen), igual que lo hará el servidor.
+  let toConsume = Math.max(0, (await pendingStockDelta(prisma, productId)).sold);
+  const now = Date.now();
+  return rows.map((row) => {
+    let quantity = row.quantity;
+    const vencido = row.expiryDate && row.expiryDate.getTime() < now;
+    if (!vencido && toConsume > 0 && !row.pendingPush) {
+      const taken = Math.min(quantity, toConsume);
+      quantity -= taken;
+      toConsume -= taken;
+    }
+    return {
+      id: row.id,
+      productId: row.productId,
+      lotNumber: row.lotNumber ?? '',
+      expiryDate: row.expiryDate,
+      quantity,
+    };
+  });
 }
 
 async function getPendingStockEntries(prisma) {
@@ -374,6 +439,7 @@ async function clearCatalogPushError(prisma, localId) {
 module.exports = {
   search,
   getByBarcode,
+  getByIds,
   recordStockEntry,
   upsertMany,
   getBatchesByProduct,

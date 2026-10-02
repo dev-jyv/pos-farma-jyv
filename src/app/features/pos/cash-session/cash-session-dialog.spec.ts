@@ -772,7 +772,8 @@ describe('CashSessionDialog (local-first)', () => {
     describe('cierre', () => {
       beforeEach(() => build(session));
 
-      it('el campo del conteo tiene etiqueta y llega precargado con lo esperado', () => {
+      it('el campo del conteo tiene etiqueta y llega precargado con lo esperado', async () => {
+        await esperarSubida();
         expect(host().querySelector('label[for="countedCash"]')?.textContent).toContain(
           'Efectivo contado',
         );

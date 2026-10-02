@@ -20,6 +20,7 @@ import { finalize } from 'rxjs';
 import { AuthService } from '../../../core/auth/auth.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { CashSession, CashSessionSummary, PaymentMethod } from '../../../shared/models';
+import { roundMoney } from '../../../shared/utils/money';
 import { CashSessionService } from '../services/cash-session.service';
 import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
 import { TicketPrintService } from '../ticket/ticket-print.service';
@@ -31,6 +32,9 @@ import { TicketPrintService } from '../ticket/ticket-print.service';
  * el cajero **in-dialog** (no `window.confirm`) que quedará como ajuste
  * pendiente de un administrador — nunca bloquea el cierre en sí.
  */
+/** Máximo que el corte espera a sincronizar antes de mostrarse con lo que haya. */
+const SYNC_BEFORE_CLOSE_TIMEOUT_MS = 20_000;
+
 @Component({
   selector: 'app-cash-session-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -131,7 +135,9 @@ export class CashSessionDialog {
     cashDifference: number;
   } | null>(null);
 
-  readonly difference = computed(() => this.countedCashAmount() - this.expectedTotalCash());
+  readonly difference = computed(() =>
+    roundMoney(this.countedCashAmount() - this.expectedTotalCash()),
+  );
 
   readonly methods: PaymentMethod[] = ['cash', 'card', 'transfer', 'mixed'];
 
@@ -166,11 +172,18 @@ export class CashSessionDialog {
     // Mismo motor que el botón Sincronizar (push + pull), no solo el push.
     this.syncPhase.set('pre');
     this.syncing.set(true);
+    // Tope de espera: sin red, el diálogo no se puede cerrar mientras sincroniza
+    // y el cajero quedaba atrapado hasta que vencieran los timeouts de red.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tope = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, SYNC_BEFORE_CLOSE_TIMEOUT_MS);
+    });
     try {
-      await this.syncScheduler.syncNow();
+      await Promise.race([this.syncScheduler.syncNow(), tope]);
     } catch {
       // Sin red se corta igual: el corte es local y lo pendiente sube después.
     } finally {
+      clearTimeout(timer);
       this.syncing.set(false);
       this.syncPhase.set(null);
     }

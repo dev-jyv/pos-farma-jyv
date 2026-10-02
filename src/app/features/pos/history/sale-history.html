@@ -87,7 +87,12 @@
       </ng-template>
       <ng-template #body let-sale>
         <tr>
-          <td class="font-mono text-sm font-semibold">{{ sale.folio }}</td>
+          <td class="font-mono text-sm font-semibold">
+            {{ sale.folio }}
+            @if (sale.localFolio && sale.localFolio !== sale.folio) {
+              <span class="block text-xs font-normal text-slate-500">Ticket: {{ sale.localFolio }}</span>
+            }
+          </td>
           <td class="tabular-nums text-sm text-slate-600">{{ sale.createdAt | date: 'HH:mm' }}</td>
           <td class="text-sm">{{ methodLabelKey(sale.paymentMethod) | translate }}</td>
           <td class="text-right text-sm font-bold tabular-nums">${{ sale.total | number: '1.2-2' }}</td>
