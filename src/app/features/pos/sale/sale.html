@@ -1,6 +1,6 @@
 <div class="flex h-full min-h-0">
   <section class="flex min-w-0 flex-1 flex-col">
-    <div class="shrink-0 border-b border-[var(--pos-border)] bg-white px-4 py-3">
+    <div class="shrink-0 border-b border-(--pos-border) bg-white px-4 py-3">
       <div class="relative">
         <i class="pi pi-search pointer-events-none absolute top-1/2 left-3.5 z-10 -translate-y-1/2 text-slate-400"></i>
         <input
@@ -36,24 +36,23 @@
         <span class="text-[11px] text-slate-600">Qty</span>
         <span class="pos-kbd">Esc</span>
         <span class="text-[11px] text-slate-600">Limpiar</span>
-        @if (pendingOfflineSales() > 0) {
+        <!-- Las **rechazadas** las lleva el shell (insignia "Rechazados N"), que
+             abarca ventas, gastos y catálogo. Aquí van solo las de esta pantalla
+             que siguen en cola: es el único sitio desde donde se puede forzar el
+             envío, y sin este botón el diálogo era inalcanzable. -->
+        @if (pendingSales().length > 0) {
           <button
             type="button"
-            class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-200"
+            class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900 transition hover:bg-amber-200"
             (click)="reviewPendingSales()"
           >
-            {{ pendingOfflineSales() }} pendiente(s) de sync
+            {{ pendingSales().length }} venta(s) sin sincronizar
           </button>
         }
-        @if (blockedSales().length > 0) {
-          <button
-            type="button"
-            class="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800 transition hover:bg-red-200"
-            (click)="reviewBlockedSales()"
-          >
-            {{ blockedSales().length }} venta(s) rechazada(s) al sincronizar
-          </button>
-        }
+        <!-- Sin turno: el aviso sí vive aquí, porque bloquea la venta y hay que
+             resolverlo en el momento. Cerrar el turno ya no: se hace al salir
+             (menú de usuario → Cerrar sesión), y tenerlo junto a los atajos de
+             cobro invitaba a cerrar caja a media jornada por error. -->
         @if (!cashSessionOpen()) {
           <button
             type="button"
@@ -61,23 +60,6 @@
             (click)="cashSessionDialogVisible.set(true)"
           >
             {{ 'sale.openShiftToSell' | translate }}
-          </button>
-        } @else {
-          @if (isAdmin()) {
-            <button
-              type="button"
-              class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-200"
-              (click)="cashMovementDialogVisible.set(true)"
-            >
-              Movimiento de caja
-            </button>
-          }
-          <button
-            type="button"
-            class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-200"
-            (click)="cashSessionDialogVisible.set(true)"
-          >
-            Cerrar turno
           </button>
         }
         @for (held of heldSales(); track held.id) {
@@ -92,7 +74,99 @@
       </div>
     </div>
 
+    <!-- Pestañas solo si la farmacia tiene servicios: quien no los usa no ve
+         nada nuevo. El buscador de arriba sigue siendo el mismo y el escáner
+         resuelve primero contra medicamentos sea cual sea la pestaña activa. -->
+    @if (hasServices()) {
+      <div class="flex shrink-0 gap-1 border-b border-(--pos-border) px-4 pt-2">
+        <button
+          type="button"
+          data-testid="tab-products"
+          class="pos-nav-btn"
+          [class.active]="catalogTab() === 'products'"
+          (click)="catalogTab.set('products')"
+        >
+          <span class="pos-kbd">Alt+M</span>
+          <span>{{ 'sale.services.tabProducts' | translate }}</span>
+        </button>
+        <button
+          type="button"
+          data-testid="tab-services"
+          class="pos-nav-btn"
+          [class.active]="catalogTab() === 'services'"
+          (click)="catalogTab.set('services')"
+        >
+          <span class="pos-kbd">Alt+S</span>
+          <span>{{ 'sale.services.tab' | translate }}</span>
+        </button>
+      </div>
+    }
+
     <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+      @if (catalogTab() === 'services') {
+        <label for="service-search" class="sr-only">{{ 'sale.services.tab' | translate }}</label>
+        <input
+          pInputText
+          id="service-search"
+          name="serviceSearch"
+          type="search"
+          autocomplete="off"
+          class="mb-3 w-full"
+          [ngModel]="serviceSearchTerm()"
+          (ngModelChange)="serviceSearchTerm.set($event ?? '')"
+          [placeholder]="'sale.services.searchPlaceholder' | translate"
+        />
+        @if (serviceResults().length) {
+          <!-- Tarjetas y no tabla: son decenas, caben sin scroll y se tocan con
+               el dedo en la tableta del mostrador. Sin columna de stock. -->
+          <ul class="grid gap-2 sm:grid-cols-2">
+            @for (service of serviceResults(); track service.id) {
+              <li>
+                <button
+                  type="button"
+                  data-testid="service-card"
+                  class="flex w-full flex-col items-start gap-1 rounded-xl border border-(--pos-border) bg-white px-3 py-2.5 text-left transition hover:border-sky-300 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-45"
+                  [disabled]="!cashSessionOpen()"
+                  [attr.aria-label]="service.name"
+                  (click)="addServiceToCart(service)"
+                >
+                  <span class="flex w-full items-start justify-between gap-2">
+                    <span class="truncate text-sm font-semibold text-slate-900">{{ service.name }}</span>
+                    <span class="shrink-0 text-sm font-bold tabular-nums text-slate-900">
+                      ${{ service.price | number: '1.2-2' }}
+                    </span>
+                  </span>
+                  <span class="flex flex-wrap items-center gap-1.5">
+                    <span class="font-mono text-xs text-slate-500">{{ service.code }}</span>
+                    @if (service.commissionRate > 0) {
+                      <span class="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">
+                        {{ 'sale.services.commission' | translate: { percent: service.commissionRate } }}
+                      </span>
+                    }
+                    @if (service.requiresPerformer) {
+                      <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
+                        {{ 'sale.services.performer' | translate }}
+                      </span>
+                    }
+                  </span>
+                </button>
+              </li>
+            }
+          </ul>
+        } @else {
+          <!-- Dos vacíos distintos: "el catálogo está vacío" (nada que hacer en
+               la caja) no es lo mismo que "tu búsqueda no encontró nada" (borra
+               el texto y vuelve a ver todo). Decir lo primero cuando pasó lo
+               segundo mandaba al cajero a pedir alta de servicios que ya existen. -->
+          <p data-testid="services-empty" class="py-10 text-center text-sm text-slate-500">
+            @if (serviceSearchTerm().trim()) {
+              {{ 'sale.services.noResults' | translate: { term: serviceSearchTerm().trim() } }}
+            } @else {
+              {{ 'sale.services.empty' | translate }}
+            }
+          </p>
+        }
+      } @else {
       <p-table [value]="results()" dataKey="id" styleClass="pos-product-table" [rowHover]="true">
         <ng-template #header>
           <tr>
@@ -123,9 +197,24 @@
                 <span class="font-mono text-[11px] tracking-wide text-slate-400">
                   {{ product.barcode || product.sku }}
                 </span>
-                @if (product.requiresPrescription) {
-                  <span class="mt-0.5 inline-flex w-fit rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800">
-                    Receta
+                @if (product.requiresPrescription || hasPromotion(product)) {
+                  <span class="mt-0.5 flex flex-wrap gap-1">
+                    @if (product.requiresPrescription) {
+                      <span class="inline-flex w-fit rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800">
+                        Receta
+                      </span>
+                    }
+                    <!-- Mismo color que la promo aplicada en el ticket: el cajero
+                         puede ofrecerla antes de agregar el producto. -->
+                    @if (hasPromotion(product)) {
+                      <span
+                        data-testid="search-promo-badge"
+                        class="inline-flex w-fit items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800"
+                      >
+                        <i class="pi pi-tag text-[9px]"></i>
+                        Promo
+                      </span>
+                    }
                   </span>
                 }
               </div>
@@ -183,6 +272,7 @@
           </tr>
         </ng-template>
       </p-table>
+      }
     </div>
   </section>
 
@@ -219,31 +309,81 @@
         </div>
       } @else {
         <ul class="space-y-2">
-          @for (line of cart(); track line.product.id) {
+          @for (line of cart(); track keyOf(line)) {
             <li class="rounded-xl border border-slate-100 bg-slate-50 p-3">
               <div class="flex items-start justify-between gap-2">
                 <div class="min-w-0">
                   <span class="block truncate text-sm font-semibold capitalize text-slate-900">
-                    {{ line.product.name }}
+                    {{ nameOf(line) }}
                   </span>
-                  @if (line.product.activeIngredient) {
-                    <span class="mt-0.5 block truncate text-xs capitalize text-emerald-700">
-                      {{ line.product.activeIngredient }}
+                  @if (isProduct(line)) {
+                    @if (line.product.activeIngredient) {
+                      <span class="mt-0.5 block truncate text-xs capitalize text-emerald-700">
+                        {{ line.product.activeIngredient }}
+                      </span>
+                    }
+                    @if (line.product.requiresPrescription) {
+                      <span class="mt-0.5 inline-flex rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800">
+                        Receta
+                      </span>
+                    }
+                    @if (isUnsynced(line)) {
+                      <span
+                        data-testid="unsynced-badge"
+                        class="ml-1 mt-0.5 inline-flex items-center gap-1 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600"
+                        pTooltip="Sin sincronizar: no entra a promociones hasta el próximo sync"
+                        tooltipPosition="top"
+                        tabindex="0"
+                        aria-label="Sin sincronizar: no entra a promociones hasta el próximo sync"
+                      >
+                        <i class="pi pi-cloud-upload text-[10px]"></i>
+                        Sin sincronizar
+                      </span>
+                    }
+                  } @else {
+                    <!-- Un servicio se distingue a simple vista: no es mercancía y
+                         su corte va aparte. -->
+                    <span class="mt-0.5 inline-flex rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-sky-800">
+                      {{ 'sale.services.badge' | translate }}
                     </span>
-                  }
-                  @if (line.product.requiresPrescription) {
-                    <span class="mt-0.5 inline-flex rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800">
-                      Receta
-                    </span>
+                    <!-- El doctor se puede corregir desde la partida: un ticket
+                         recuperado de `localStorage` (o en pausa) puede llegar
+                         con la partida sin doctor, y el cobro lo bloquea. Sin
+                         este botón el cajero no tenía forma de asignarlo: solo
+                         quitar la partida y volver a capturarla. -->
+                    @if (line.provider) {
+                      <span class="mt-0.5 block truncate text-xs text-slate-600">
+                        {{ 'sale.services.performer' | translate }}: {{ line.provider.name }}
+                        <button
+                          type="button"
+                          data-testid="change-performer"
+                          class="ml-1 font-medium text-sky-700 underline transition hover:text-sky-900"
+                          [attr.aria-label]="'sale.services.changePerformer' | translate"
+                          (click)="changeLineProvider(line)"
+                        >
+                          {{ 'sale.services.changePerformer' | translate }}
+                        </button>
+                      </span>
+                    } @else if (line.service.requiresPerformer) {
+                      <button
+                        type="button"
+                        data-testid="assign-performer"
+                        class="mt-0.5 inline-flex rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900 transition hover:bg-amber-200"
+                        [attr.aria-label]="'sale.services.performerMissing' | translate"
+                        (click)="changeLineProvider(line)"
+                      >
+                        {{ 'sale.services.performerMissing' | translate }}
+                      </button>
+                    }
                   }
                   <span class="mt-1 block text-xs tabular-nums text-slate-500">
-                    ${{ line.product.salePrice | number: '1.2-2' }} c/u
+                    ${{ unitPriceOf(line) | number: '1.2-2' }} c/u
                   </span>
                 </div>
                 <button
                   type="button"
                   class="shrink-0 rounded-md p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                  (click)="removeFromCart(line.product.id)"
+                  (click)="removeFromCart(keyOf(line))"
                   aria-label="Quitar del ticket"
                 >
                   <i class="pi pi-trash text-sm"></i>
@@ -251,24 +391,26 @@
               </div>
 
               <div class="mt-3 flex items-center gap-2">
-                <div class="inline-flex items-center overflow-hidden rounded-lg border border-slate-200 bg-white">
+                <div class="inline-flex h-8 items-stretch overflow-hidden rounded-lg border border-slate-200 bg-white">
                   <button
                     type="button"
-                    class="px-2.5 py-1.5 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
+                    class="flex w-8 items-center justify-center text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
+                    [attr.aria-label]="'Quitar una pieza de ' + nameOf(line)"
                     [disabled]="line.quantity <= 1"
-                    (click)="bumpQuantity(line.product.id, -1)"
+                    (click)="bumpQuantity(keyOf(line), -1)"
                   >
                     <i class="pi pi-minus text-xs"></i>
                   </button>
-                  <span class="min-w-9 border-x border-slate-200 px-2 py-1.5 text-center text-sm font-bold tabular-nums">
-                    @if (line.product.id === lastLineId()) {
+                  <span class="flex w-11 items-center justify-center border-x border-slate-200 text-sm font-bold tabular-nums">
+                    @if (keyOf(line) === lastLineId()) {
                       <input
                         #lastQtyInput
                         type="number"
                         min="1"
-                        class="w-10 border-0 bg-transparent text-center outline-none"
+                        class="[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none h-full w-full border-0 bg-transparent text-center outline-none"
+                        [attr.aria-label]="'Cantidad de ' + nameOf(line)"
                         [ngModel]="line.quantity"
-                        (ngModelChange)="updateQuantity(line.product.id, $event)"
+                        (ngModelChange)="updateQuantity(keyOf(line), $event)"
                       />
                     } @else {
                       {{ line.quantity }}
@@ -276,35 +418,58 @@
                   </span>
                   <button
                     type="button"
-                    class="px-2.5 py-1.5 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
-                    [disabled]="line.quantity >= line.product.stock"
-                    (click)="bumpQuantity(line.product.id, 1)"
+                    class="flex w-8 items-center justify-center text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
+                    [attr.aria-label]="'Agregar una pieza de ' + nameOf(line)"
+                    [disabled]="maxQuantityOf(line) !== null && line.quantity >= maxQuantityOf(line)!"
+                    (click)="bumpQuantity(keyOf(line), 1)"
                   >
                     <i class="pi pi-plus text-xs"></i>
                   </button>
                 </div>
 
+                <span class="ml-auto text-sm font-bold tabular-nums text-slate-900">
+                  ${{ unitPriceOf(line) * line.quantity - line.discountAmount | number: '1.2-2' }}
+                </span>
+              </div>
+
+              <div class="mt-2 flex flex-wrap items-center gap-2">
                 <label class="flex items-center gap-1 text-xs text-slate-500">
                   Desc.
+                  <!-- El `<label>` ya nombra el campo, pero dice "Desc." en las
+                       cinco líneas del ticket: con lector de pantalla no se sabe
+                       de cuál producto es el descuento que se está tecleando. -->
                   <input
                     type="number"
                     min="0"
                     step="0.01"
-                    class="w-16 rounded-md border border-slate-200 bg-white px-1.5 py-1 text-right text-sm tabular-nums outline-none focus:border-emerald-500"
-                    [ngModel]="line.discountAmount"
-                    (ngModelChange)="updateLineDiscount(line.product.id, $event)"
+                    class="[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none h-7 w-20 rounded-md border border-slate-200 bg-white px-2 text-right text-sm tabular-nums outline-none focus:border-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                    [attr.aria-label]="'Descuento de ' + nameOf(line)"
+                    [disabled]="promotionOf(line) !== null"
+                    [attr.title]="promotionOf(line) ? 'El descuento lo fija la promoción' : null"
+                    [value]="line.discountAmount"
+                    (change)="updateLineDiscount(keyOf(line), $any($event.target).valueAsNumber || 0, $any($event.target))"
                   />
                 </label>
-                @if (promoDiscount(line) > 0) {
-                  <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">
-                    Promo
+                @if (promotionOf(line); as promo) {
+                  <span
+                    class="inline-flex min-w-0 items-center gap-1 rounded-md bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-800"
+                    [attr.title]="promo.name + ' −$' + (promo.discountAmount | number: '1.2-2')"
+                  >
+                    <i class="pi pi-tag text-[10px]"></i>
+                    <span class="truncate">{{ promo.name }}</span>
+                    <span class="shrink-0 tabular-nums">−${{ promo.discountAmount | number: '1.2-2' }}</span>
                   </span>
                 }
-
-                <span class="ml-auto text-sm font-bold tabular-nums text-slate-900">
-                  ${{ line.product.salePrice * line.quantity - line.discountAmount | number: '1.2-2' }}
-                </span>
               </div>
+              @if (stepHintOf(line); as hint) {
+                <!-- Sugerencia discreta: solo aparece si llevar más de verdad
+                     baja el precio por pieza (ver PromoService.nextStepHint). -->
+                <p data-testid="promo-step-hint" class="mt-1.5 text-[11px] text-amber-700">
+                  <i class="pi pi-lightbulb text-[10px]"></i>
+                  Lleva {{ hint.extraQty }} más: {{ line.quantity + hint.extraQty }} por
+                  ${{ hint.totalForAll | number: '1.0-2' }} (ahorras ${{ hint.savings | number: '1.2-2' }})
+                </p>
+              }
             </li>
           }
         </ul>
@@ -355,38 +520,6 @@
         </button>
       </div>
 
-      @if (lastSale(); as sale) {
-        <div class="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-          <div class="flex items-center justify-between">
-            <span class="font-medium text-slate-700">Folio {{ sale.folio }}</span>
-            <span class="tabular-nums text-slate-900">${{ sale.total | number: '1.2-2' }}</span>
-          </div>
-          <div class="mt-1 flex flex-wrap items-center gap-3">
-            <button type="button" class="text-xs font-medium text-emerald-700" (click)="printSale(sale)">
-              {{ 'ticket.print' | translate }}
-            </button>
-            @if (lastSaleQueueId()) {
-              <!-- La venta solo existe en la cola local: no hay id que anular en el
-                   servidor, lo único posible es sacarla antes de que se envíe. -->
-              <button
-                type="button"
-                class="text-xs font-medium text-red-600"
-                (click)="discardLastSaleFromQueue()"
-              >
-                Descartar de la cola
-              </button>
-              <span class="text-xs text-amber-700">Pendiente de sincronizar</span>
-            } @else if (isAdmin() && !sale.voidedAt) {
-              <button type="button" class="text-xs font-medium text-red-600" (click)="voidLastSale()">
-                Anular venta
-              </button>
-            }
-            @if (sale.voidedAt) {
-              <span class="text-xs text-red-600">Venta anulada</span>
-            }
-          </div>
-        </div>
-      }
     </div>
   </aside>
 </div>
@@ -400,21 +533,53 @@
   [cashSessionId]="cashSession()?.id ?? ''"
   (closed)="checkoutVisible.set(false)"
   (completed)="onSaleCompleted($event)"
+  (promotionClosed)="onPromotionClosed($event)"
 />
+
+<app-performer-dialog
+  [visible]="performerDialogVisible()"
+  [serviceName]="pendingServiceName()"
+  [suggestedProviderId]="lastProviderId()"
+  (chosen)="onPerformerChosen($event)"
+  (dismissed)="onPerformerDismissed()"
+/>
+
+<!--
+  Liquidación del turno que quedó abierto de un día anterior. Bloquea de verdad:
+  sin botones, sin ×, sin Esc y sin clic fuera. Cancelarlo a medias dejaría al
+  cajero operando encima de un turno que se está cerrando, y el aviso que
+  aparece durante la subida es justo el que nadie debe poder descartar por error.
+-->
+<p-dialog
+  [visible]="settlingStaleShift()"
+  [modal]="true"
+  [closable]="false"
+  [closeOnEscape]="false"
+  [dismissableMask]="false"
+  [draggable]="false"
+  [resizable]="false"
+  [showHeader]="false"
+  [style]="{ width: '24rem', maxWidth: '95vw' }"
+>
+  <div
+    data-testid="settling-stale-shift"
+    class="flex flex-col items-center justify-center gap-3 py-8 text-center"
+    role="status"
+    aria-live="polite"
+  >
+    <i class="pi pi-spin pi-spinner text-3xl text-[var(--pos-primary)]"></i>
+    <div class="text-sm font-semibold text-slate-800">{{ 'cashCut.settlingStale' | translate }}</div>
+    <div class="max-w-xs text-xs text-slate-500">{{ 'cashCut.settlingStaleHint' | translate }}</div>
+  </div>
+</p-dialog>
 
 <app-cash-session-dialog
   [visible]="cashSessionDialogVisible()"
   [session]="cashSession()"
+  [dismissible]="isAdmin()"
   (closed)="cashSessionDialogVisible.set(false)"
 />
 
-@if (isAdmin()) {
-  <app-cash-movement-dialog
-    [visible]="cashMovementDialogVisible()"
-    [sessionId]="cashSession()?.id ?? ''"
-    (closed)="cashMovementDialogVisible.set(false)"
-  />
-}
 <p-dialog
   [visible]="pendingDialogVisible()"
   [modal]="true"
@@ -431,11 +596,33 @@
 
   <ul class="space-y-2">
     @for (item of pendingSales(); track item.queueId) {
-      <li class="flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2">
-        <span class="text-sm text-slate-700">{{ item.folioHint }}</span>
-        <span class="text-sm font-semibold tabular-nums text-slate-900">
-          ${{ item.total | number: '1.2-2' }}
+      <li class="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2">
+        <span class="text-sm text-slate-700">
+          {{ item.folioHint }}
+          @if (item.waitingFor) {
+            <!-- Sin esto la venta salía en la lista sin explicación de por qué
+                 "Enviar ahora" no la mueve: le falta que suba su turno. -->
+            <span class="mt-0.5 block text-xs text-amber-800">{{ item.waitingFor }}</span>
+          }
         </span>
+        <div class="flex shrink-0 items-center gap-2">
+          <span class="text-sm font-semibold tabular-nums text-slate-900">
+            ${{ item.total | number: '1.2-2' }}
+          </span>
+          @if (isAdmin()) {
+            <!-- Solo admin: esta venta subiría sola, así que descartarla es tirar
+                 una venta buena, no resolver un rechazo. -->
+            <p-button
+              icon="pi pi-trash"
+              severity="danger"
+              [text]="true"
+              size="small"
+              [ariaLabel]="'Descartar venta pendiente de ' + (item.total | number: '1.2-2')"
+              pTooltip="Descartar"
+              (onClick)="discardPendingSale(item)"
+            />
+          }
+        </div>
       </li>
     } @empty {
       <li class="rounded-xl bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">
@@ -461,52 +648,6 @@
       />
     </div>
   </ng-template>
-</p-dialog>
-
-<p-dialog
-  [visible]="blockedDialogVisible()"
-  [modal]="true"
-  [draggable]="false"
-  [style]="{ width: '34rem', maxWidth: '95vw' }"
-  header="Ventas rechazadas al sincronizar"
-  [closeAriaLabel]="'Cerrar'"
-  (onHide)="blockedDialogVisible.set(false)"
->
-  <p class="mb-3 text-sm text-slate-600">
-    El servidor rechazó estas ventas de la cola. Corrige la causa y reintenta, o descártalas
-    si ya no deben registrarse.
-  </p>
-
-  <ul class="space-y-2">
-    @for (item of blockedSales(); track item.queueId) {
-      <li class="rounded-xl border border-red-200 bg-red-50/60 p-3">
-        <p class="text-sm font-semibold text-slate-900">{{ item.folioHint }}</p>
-        <p class="mt-0.5 text-xs leading-relaxed text-red-800">{{ item.reason }}</p>
-        <div class="mt-2 flex gap-2">
-          <p-button
-            label="Reintentar"
-            icon="pi pi-refresh"
-            size="small"
-            styleClass="flex-1"
-            (onClick)="retryBlockedSale(item.queueId)"
-          />
-          <p-button
-            label="Descartar"
-            icon="pi pi-trash"
-            size="small"
-            severity="danger"
-            [outlined]="true"
-            styleClass="flex-1"
-            (onClick)="discardBlockedSale(item.queueId)"
-          />
-        </div>
-      </li>
-    } @empty {
-      <li class="rounded-xl bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">
-        No hay ventas rechazadas.
-      </li>
-    }
-  </ul>
 </p-dialog>
 
 <app-substitutes-dialog

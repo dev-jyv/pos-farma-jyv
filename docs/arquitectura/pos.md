@@ -7,21 +7,32 @@ turno de caja, consulta e impresión. Todo lo afirmado aquí está anclado a `ru
 
 ## 1. Mapa de pantallas y rutas
 
-`POS_ROUTES` se monta lazy bajo el shell autenticado
-(`src/app/app.routes.ts:18-21`), y todo el árbol está protegido por `authGuard`
-(`src/app/app.routes.ts:12`).
+`POS_ROUTES` se monta lazy bajo el shell autenticado (`src/app/app.routes.ts`), y todo el
+árbol está protegido por `authGuard`. **Actualización 2026-09-03**: cada ruta (salvo `/pos`)
+ahora lleva `canActivate: [permissionGuard(area, level)]` con el mismo permiso que exige su
+endpoint — el estado anterior ("pos.routes.ts no declara ningún guard") quedó resuelto.
 
-| Ruta | Componente | Archivo | Guard de ruta | Permiso efectivo |
-| --- | --- | --- | --- | --- |
-| `/pos` | `Sale` | `src/app/features/pos/pos.routes.ts:4-7` | solo `authGuard` | `sales:write` verificado en runtime por `ensureShiftOpen()` (`sale/sale.ts:666-679`) |
-| `/pos/historial` | `SaleHistory` | `pos.routes.ts:8-11` | solo `authGuard` | ninguno declarado; anular exige `isAdmin` (`history/sale-history.ts:105`) |
-| `/pos/reportes` | `PosReports` | `pos.routes.ts:12-15` | solo `authGuard` | ninguno declarado |
-| `/pos/libro-control` | `ControlledLedger` | `pos.routes.ts:16-20` | solo `authGuard` | `inventory:read`, comprobado en el componente (`controlled-ledger/controlled-ledger.ts:63,131-135`) |
+| Ruta | Componente | Guard | Permiso |
+| --- | --- | --- | --- |
+| `/pos` | `Sale` | sin guard (destino de rebote del guard; se autoprotege con `ensureShiftOpen()`) | `sales:write` verificado en runtime |
+| `/pos/historial` | `SaleHistory` | `permissionGuard('sales','read')` | anular exige además `isAdmin` en el componente |
+| `/pos/cobro-directo` | `DirectChargeScreen` | `permissionGuard('directCharges','write')` | área propia, no `sales` — mover dinero sin ticket es atribución de supervisión |
+| `/pos/entrada-stock` | `StockEntryScreen` | `permissionGuard('stockEntry','write')` | área propia, distinta de `inventory` |
+| `/pos/reportes` | `PosReports` | `permissionGuard('dashboard','read')` | mismo área que el dashboard del backend |
+| `/pos/libro-control` | `ControlledLedger` | `permissionGuard('inventory','write')` | a propósito `write` y no el `read` del endpoint (ver `pos.routes.ts`) |
+| `/pos/categorias[/nuevo\|/:id/editar]` | `CategoryList`/`CategoryForm` | `permissionGuard('categories','write')` | módulo nuevo (2026-08-30), online (sin SQLite) |
+| `/pos/proveedores[/nuevo\|/:id/editar]` | `SupplierList`/`SupplierForm` | `permissionGuard('suppliers','write')` | módulo nuevo, online |
+| `/pos/facturas[/nuevo\|/:id]` | `InvoiceList`/`InvoiceForm`/`InvoiceDetail` | `permissionGuard('invoices','write')` | módulo nuevo, online, sube archivo vía `/uploads` |
+| `/pos/productos[/nuevo\|/:id/editar]` | `ProductList`/`ProductForm` | `permissionGuard('products','write')` | módulo nuevo (2026-09-03), **local-first** — ver §10 |
+| `/pos/gastos` | `ExpenseForm` | `permissionGuard('pos','write')` | mismo permiso que operar la caja — cualquier cajero con turno abierto, ver §5 |
+| `/pos/cortes` | `CashSessionAudit` | `permissionGuard('cashSessions','read')` | exclusiva de `admin`; auditoría de todas las cajas, ver §5 |
+| `/pos/gastos-auditoria` | `ExpensesAudit` | `permissionGuard('expenses','read')` | exclusiva de `admin`; auditoría de todos los gastos, ver §5 |
 
-El menú se filtra por permiso, no las rutas: `Shell.navItems` descarta los ítems cuyo
-`permission` no cumple el perfil (`src/app/core/layout/shell.ts:25-29`), y el único ítem
-con permiso declarado es el libro de control (`src/app/core/layout/nav.config.ts:16-23`).
-Atajos globales: F1 → venta, F3 → historial (`shell.ts:14-17,42-50`).
+El menú (`nav.config.ts`) también se filtra por permiso y ahora tiene dos grupos (rediseño de
+header, 2026-08-30): `primary` (default sin declarar `group`) va directo en la barra —
+Venta, Historial, Cobro directo, Entrada de stock—; `secondary` cuelga del menú "Más" del
+header — Reportes, Libro de control, Categorías, Proveedores, Facturas, Productos— para que la barra no
+crezca con cada módulo nuevo. Atajos globales: F1 → venta, F3 → historial.
 
 Diálogos (no son rutas, son componentes montados desde `sale.html`): checkout
 (`sale.html:377`), turno de caja, movimiento de caja, sustitutos y ventas rechazadas
@@ -45,10 +56,14 @@ guardar (`sale.ts:614-616` → `PromoService.apply`, `services/promo.service.ts:
 
 ### Búsqueda con debounce y escaneo `N*código`
 
-- Tecleo: `onSearchChange()` empuja al `Subject` `search$` (`sale.ts:262-270`), que
-  aplica `debounceTime(500) + distinctUntilChanged() + switchMap` contra
-  `ProductService.search` (`sale.ts:131-138`). Con el turno cerrado no se consulta nada
-  (`sale.ts:263-267`).
+- Tecleo: `onSearchChange()` empuja al `Subject` `search$`, que aplica
+  `debounceTime(500) + switchMap` contra `ProductService.search`. Con el turno cerrado no se
+  consulta nada. **Sin `distinctUntilChanged()` a propósito (corregido 2026-09-03)**: lo tenía
+  antes, pero borrar el término a menos del mínimo y volver a teclear el mismo de antes (ej.
+  "para" → "p" → "para") lo descartaba como duplicado y la búsqueda no volvía a dispararse —
+  bug real, encontrado en pruebas, mismo patrón en `stock-entry.ts` (ahí además dejaba el
+  spinner "Buscando…" colgado). El catálogo es local (SQLite vía IPC), repetir la consulta no
+  cuesta nada, así que se quitó el operador en vez de parchear el reseteo.
 - Enter (pistola de códigos): `onSearchKeydown()` no espera el debounce. Interpreta el
   prefijo de cantidad con `/^(\d+)\*(.+)$/`, acotado a 1..999 (`sale.ts:290-294`), busca
   de inmediato y resuelve la coincidencia por `sku` o `barcode` exacto, o por resultado
@@ -201,62 +216,153 @@ con una sola la venta quedaría cobrada a medias.
 
 ---
 
-## 4. Cola offline — `services/sale.service.ts`
+## 4. Local-first — `services/sale.service.ts` (breaking change, 2026-08-30/31)
 
-- **Encolado solo con status 0**: `create()` captura el error y encola únicamente si
-  `isOffline(error)`, es decir `HttpErrorResponse.status === 0` (`sale.service.ts:267-277`,
-  `329-331`). Cualquier otro error se propaga al checkout. `enqueueOffline()`
-  (`sale.service.ts:347-401`) guarda la venta en `localStorage`
-  (`pos.pending-sales`, `sale.service.ts:110`) con `queueId = idempotencyKey` y devuelve
-  una venta sintética con folio `PENDIENTE-<ts>`, desglose fiscal calculado en cliente y
-  el cambio resuelto con `resolveTender` sobre la parte en efectivo.
-- **Flush en serie**: `flushQueue()` (`sale.service.ts:293-327`) se protege con la
-  bandera `flushing`, toma la cola sin las bloqueadas y envía con `concatMap` —en serie—
-  para no perder el orden de folios ni abrir N peticiones al recuperar la red. Cada
-  venta viaja con su `idempotencyKey` original. Único disparador registrado: el evento
-  `window.online` (`sale.service.ts:176`).
-- **Bloqueo ante 4xx y sus excepciones**: `isPermanentFailure()` (`sale.service.ts:334-345`)
-  considera permanente todo 4xx **excepto** 401 (auth), 408 (timeout) y 429 (rate limit).
-  Un fallo permanente marca `blockedReason` en la cola (`blockInQueue`,
-  `sale.service.ts:408-414`) y deja de reintentarse; los 5xx y las excepciones caen en
-  `EMPTY` y quedan en cola para el siguiente flush.
-- **Reintento / descarte**: `retryBlockedSale()` limpia `blockedReason` y vuelve a hacer
-  flush con la misma llave (`sale.service.ts:426-433`); `discardBlockedSale()` la elimina
-  (`sale.service.ts:417-419`). La UI son el badge y el diálogo de la pantalla de venta
-  (`sale.html:39-51,402-415`) sobre `reviewBlockedSales/retryBlockedSale/discardBlockedSale`
-  (`sale.ts:512-535`), con confirmación explícita al descartar porque es una venta ya
-  cobrada.
-- Señales expuestas: `pendingCount` y `blockedSales`, recalculadas en cada `writeQueue`
-  (`sale.service.ts:169-173,455-459`).
+**El POS dejó de cobrar contra HTTP.** `SaleService.create()` ya no manda `POST /sales`: arma
+el objeto completo y lo escribe directo en el SQLite de Electron vía IPC
+(`window.electronAPI.sales.createLocal`, resuelto en el proceso principal por
+`electron/db/sales.js`). El cobro es una transacción local, sin red, punto. Igual de
+local es el alta de producto/stock (`entrada-stock`, ver `docs/arquitectura/shared-y-electron.md`
+§4 para la capa Electron/Prisma completa). La sincronización con el backend ocurre solo en
+tres momentos: al hacer login, a 3 horarios fijos del día (10:30 / 14:00 / 20:00, ver
+`SyncScheduler`), o al pulsar el botón manual de sync del header.
+
+- **Ids local vs. remoto**: cada `Product`/`Sale` tiene `id` (uuid local de SQLite) y
+  `remoteId` (id de Firestore, `null` hasta que sincroniza). `buildPayload()` construye el
+  `items[].productId` con `line.product.remoteId ?? line.product.id` a propósito —el backend
+  solo conoce el `remoteId`—, mientras que la escritura local (`createLocal`) usa el `id`
+  local en todo lo demás. **Este patrón ya causó 3 bugs reales** por confundir cuál id va a
+  cada lado (ventas, entrada de stock, `upsertMany`) y en la auditoría de 2026-09-03 apareció
+  un **cuarto caso, sin corregir**: `stock-entry.ts` reutiliza el mismo campo `payload.productId`
+  tanto para el push remoto como para la escritura local, y `recordStockEntry` en
+  `electron/db/products.js` lo usa tal cual como `where:{id: productId}` de Prisma — para
+  cualquier producto ya sincronizado (tiene `remoteId`), la entrada de stock revienta con
+  "Record to update not found". Ver §10, hallazgo #1.
+- **Cola de push, no de HTTP directo**: cada venta/entrada de stock queda marcada
+  `pendingPush: true` en SQLite con el payload completo serializado. `flushQueue()` en
+  `SaleService` (y su equivalente en `StockEntryService`) es lo único que de verdad habla con
+  el backend: manda **todo** el lote pendiente en una sola llamada (`POST /sales/bulk` /
+  `POST /stock-entries` por item) y marca cada fila como sincronizada o rechazada según la
+  respuesta.
+- **Bloqueo ante rechazo permanente**: un 4xx (salvo 401/408/429) marca `pushError` en la fila
+  y debería dejar de reintentarse hasta que el cajero lo revise (`retryBlockedSale()` limpia el
+  error explícitamente). **Hallazgo de la auditoría**: la consulta de "pendientes por subir"
+  (`getPendingPush`/`getPendingStockEntries`) no excluye las que ya tienen `pushError`, así que
+  en la práctica se reintentan solas en cada uno de los 3 horarios fijos, contradiciendo el
+  diseño — ver §11, hallazgo #3.
+- **Anular una venta local vs. una ya sincronizada**: `void(sale)` toma la rama local
+  (`sales.voidLocal` por IPC) si `sale.pendingPush || !sale.remoteId`; si ya sincronizó, anula
+  primero en el backend (`POST /sales/:id/void`) y refleja el resultado en local. **Hallazgo**:
+  hay una ventana de carrera entre "se está subiendo" y "se anula localmente" donde una venta
+  puede terminar marcada `voidedAt` en local pero activa (sin anular) en el servidor — ver §11,
+  hallazgo #2.
+- **Fuera de línea real**: al no depender de HTTP para cobrar, no hay "modo offline" que activar
+  ni banderas de conexión que vigilar en el flujo de venta — el POS funciona igual con o sin
+  internet; solo el `flushQueue()` de los 3 horarios (o el botón manual) requiere red, y si
+  falla, la cola simplemente espera al siguiente intento.
+- Señales expuestas: `pendingCount`, `pendingSales` y `blockedSales`, recalculadas en cada
+  `refreshPending()` tras cualquier escritura local.
 
 ---
 
-## 5. Turno de caja — `cash-session/`
+## 5. Turno de caja — `cash-session/` (reforma local-first, 2026-09-05)
 
-`CashSessionDialog` tiene **tres modos** derivados en `cash-session-dialog.ts:40-45`:
+**Rehecho de punta a punta**: abrir/cerrar turno y ver el efectivo esperado ya no pasan
+por HTTP en el instante de la acción — son 100% SQLite vía IPC, mismo patrón que venta y
+catálogo (§4). El push al backend (`POST /cash-sessions`, `POST /…/close`) ocurre solo en
+`CashSessionService.flushQueue()`, orquestado por `SyncScheduler`.
+
+`CashSessionDialog` sigue con **tres modos** (`cash-session-dialog.ts:49-54`), pero
+`open`/`close` ya no llaman HTTP directo: llaman `CashSessionService.openLocal()` /
+`liveSummary()` / `closeLocal()`, resueltos por IPC contra SQLite.
 
 | Modo | Condición | Qué hace |
 | --- | --- | --- |
-| `open` | no hay sesión | captura `openingAmount` y llama `POST /cash-sessions` (`cash-session-dialog.ts:82-94`) |
-| `close` | hay sesión abierta | precarga el resumen y pide el efectivo contado (`cash-session-dialog.ts:96-113,144-157`) |
-| `result` | ya se cerró en este diálogo | muestra el corte y permite imprimirlo (`cash-session-dialog.ts:115-134`) |
+| `open` | no hay sesión | captura `openingAmount` y escribe local vía `openLocal()` — sin red |
+| `close` | hay sesión abierta | `liveSummary()` trae el efectivo esperado **en vivo** (fondo + acumulado del turno) y precarga el campo contado con ese valor |
+| `result` | ya se cerró en este diálogo | muestra el corte y permite imprimirlo, con leyenda de ajuste pendiente si aplica |
 
-Cálculo del corte:
+### Cierre siempre procede — ajuste asíncrono
 
-- **Esperado** = `cut.expectedCashAmount ?? cut.summary.cashInDrawer`
-  (`cash-session-dialog.ts:53-59`).
-- **Contado** = `countedCashAmount`, precargado con el esperado al abrir el modo `close`
-  (`cash-session-dialog.ts:149`).
-- **Diferencia** = `contado − esperado` (`cash-session-dialog.ts:60`); al imprimir se usa
-  la diferencia que devolvió el backend, con el cálculo local como respaldo
-  (`cash-session-dialog.ts:127`).
+El cierre **nunca se bloquea** por una diferencia. `requestClose()` compara
+`countedCashAmount − expectedCash`:
 
-La sesión abierta al entrar a la venta se consulta en el constructor de `Sale`; si no hay
-turno, el diálogo se abre solo (`sale.ts:140-147`).
+- Diferencia < $0.01: cierra directo (`confirmClose()`).
+- Diferencia ≥ $0.01: muestra un paso de confirmación **in-dialog**
+  (`confirmingDifference`, ya no `window.confirm`) explicando que el turno cerrará igual y
+  quedará pendiente de revisión — el cajero solo confirma la intención, nunca corrige el
+  monto para "cuadrar".
 
-`CashMovementDialog` registra depósito / retiro / gasto: exige tipo, monto > 0 y motivo
-(`cash-movement-dialog.ts:34-38,51-56`) y llama
-`POST /cash-sessions/{id}/movements` (`services/cash-session.service.ts:154-161`).
+Al cerrar con diferencia, el turno queda `hasPendingAdjustment: true`,
+`adjustmentStatus: 'pending'` (calculado en el backend al procesar el push, nunca en el
+cliente). La aprobación/rechazo vive **solo en el backend**: el POS local nunca decide —
+`CashSessionService.pullAdjustmentStatus()` (llamada por `SyncScheduler`) solo hace pull
+del estado ya resuelto por un admin, para turnos locales que quedaron `pending`.
+
+### Auto-cierre a las 24:00 (`AuthService.endExpiredSession()`)
+
+Si el turno sigue abierto cuando expira la sesión (medianoche CDMX, §B4 de `GOALS.md`),
+`CashSessionService.autoCloseForExpiry(userId, userLabel)` cierra el turno **antes** de
+completar el logout: cuenta el efectivo esperado en vivo y cierra con
+`countedCashAmount = expectedCashAmount`, `autoClosedByExpiry: true` — nunca genera ajuste
+pendiente, porque no hay cajero presente para contar. Es best-effort total (try/catch
+completo): un fallo aquí nunca debe impedir el logout por expiración.
+`CashSessionService` **no inyecta `AuthService`** a propósito (evita el ciclo); quien
+llama pasa `userId`/`userLabel` explícitos, igual que `SaleService.buildPayload`.
+
+### Cierre al hacer logout (`Shell.logout()`)
+
+Si hay turno abierto, `Shell.logout()` pregunta (todavía `window.confirm`, mismo patrón
+que el resto del POS) si se quiere cerrar antes de salir. Si acepta, se muestra el mismo
+`CashSessionDialog` embebido en el shell (`logoutCashSessionDialogVisible`) — con su flujo
+de ajuste in-dialog ya resuelto — y el logout continúa al cerrarse el diálogo. Si
+rechaza, el turno queda abierto y el logout procede igual (antes nunca preguntaba nada).
+
+### Push: create + close (caso delicado)
+
+`CashSessionService.flushQueue()` sube en dos fases porque un turno puede necesitar ambas
+en el mismo ciclo (se abrió y cerró local antes del primer sync):
+
+1. **Create**: si `remoteId` es `null`, primero `GET /cash-sessions/current` (defensa
+   anti-duplicado — `POST /cash-sessions` no tiene llave de idempotencia propia, mismo
+   patrón que `findExistingBySku` en `product-catalog.service.ts`). Si ya hay un turno
+   abierto remoto de este cajero, adopta su id; si no, `POST /cash-sessions`. El
+   `remoteId` se persiste de inmediato (`markCreateSynced`), sin esperar al close.
+2. **Close**: solo si ya hay `remoteId` y el turno está `closedAtLocal`/`pendingClosePush`:
+   `POST /…/{remoteId}/close`. Un fallo aquí solo marca `closePushError` — el `remoteId`
+   ya quedó guardado del paso 1, así que el reintento nunca duplica el alta.
+
+### Módulo de gastos — `expenses/expense-form/`
+
+Los gastos **son la misma entidad** que depósito/retiro (`CashMovement`, `type:
+'expense'`) — no hay tabla/colección separada. Pantalla propia (`/pos/gastos`, cualquier
+cajero con `pos:write`): monto + categoría (`p-select`, 8 opciones fijas: Sueldo, Comida,
+Renta, Imprevistos, Luz, Insumos, Proveedor, Otros) + descripción, obligatoria solo si la
+categoría es Insumos/Proveedor/Otros (`CATEGORIES_REQUIRING_DESCRIPTION` en
+`expense-form.ts`, espejo de la validación del backend). Un gasto resta del efectivo
+esperado del turno igual que un retiro — no requiere cambios en el cálculo de
+`getLiveSummary`.
+
+`CashMovementDialog` sigue existiendo solo para depósito/retiro (el gasto se sacó a su
+propia pantalla por el flujo de categoría/descripción).
+
+### Auditoría admin — `cash-session/audit/`, `expenses/audit/`
+
+Dos pantallas exclusivas de `admin` (`cashSessions:read` / `expenses:read`), en el POS
+**y** espejadas en `farma-jyv-admin` (`/cortes-caja`, `/gastos`):
+
+- `CashSessionAudit` (`/pos/cortes`): lista **todas las cajas** vía
+  `CashSessionService.listAudit()` (backend, no SQLite local — a diferencia de
+  `listLocal()`, que solo ve el equipo actual), filtrable por `adjustmentStatus`. Botón
+  "Revisar" solo sobre turnos `pending`, llama
+  `CashSessionService.reviewAdjustment(remoteId, decision, note)`
+  (`POST /cash-sessions/:id/adjustment/review`).
+- `ExpensesAudit` (`/pos/gastos-auditoria`): lista todos los `CashMovement` con
+  `type='expense'` vía `CashMovementService.listMovementsAudit()`
+  (`GET /cash-sessions/movements`), filtrable por categoría.
+
+Ninguna de las dos pasa por SQLite: son 100% online, como el resto de los módulos
+administrativos (categorías, proveedores, facturas).
 
 ---
 
@@ -329,18 +435,23 @@ Las tres plantillas:
 
 | Servicio | Archivo | Endpoint(s) | Responsabilidad |
 | --- | --- | --- | --- |
-| `ProductService` | `services/product.service.ts:14-18` | `GET /products?search=` | Búsqueda de producto por texto, sku o código de barras |
-| `BatchService` | `services/batch.service.ts:22-35` | `GET /inventory/batches?productId=` | Lotes con fecha de caducidad, insumo de la selección FEFO |
-| `SaleService` | `services/sale.service.ts:221-283` | `GET /sales`, `GET /sales/{id}`, `POST /sales`, `POST /sales/{id}/void` | Construcción del payload, alta de venta, listado paginado (`listAll`), anulación y **cola offline** |
-| `CashSessionService` | `services/cash-session.service.ts:114-161` | `GET /cash-sessions/current`, `POST /cash-sessions`, `GET /…/{id}/summary`, `POST /…/{id}/close`, `GET/POST /…/{id}/movements` | Estado del turno (`current`, `isOpen`), apertura, corte y movimientos de caja |
-| `CustomerService` | `services/customer.service.ts:14-28` | `GET /customers`, `POST /customers` | Búsqueda y alta rápida de cliente desde el cobro |
-| `MercadoPagoService` | `services/mercado-pago.service.ts:43-86` | `GET/PATCH /payments/mercadopago/devices…`, `POST/GET/DELETE /payments/mercadopago/orders…` | Terminales Point, modo PDV, crear/consultar/cancelar order de cobro |
-| `ControlledLedgerService` | `services/controlled-ledger.service.ts:59-78` | `GET /inventory/controlled-ledger` | Libro de control COFEPRIS con filtros y cantidades con signo |
-| `PromoService` | `services/promo.service.ts:24-75` | — (reglas locales en `environment.promos`) | Promociones N×M y % por cantidad; recalcula `discountAmount` por línea |
-| `CartStorageService` | `services/cart-storage.service.ts:33-85` | — (`localStorage` `pos.current-cart.<uid>`) | Autoguardado y recuperación del ticket en curso |
-| `HeldSaleStorageService` | `services/held-sale-storage.service.ts:22-66` | — (`localStorage` `pos.held-sales.<uid>`) | Persistencia de ventas en pausa por cajero |
-| `CashDrawerService` | `services/cash-drawer.service.ts:17-23` | — (IPC `window.electronAPI.openCashDrawer`) | Abre el cajón tras cobros con efectivo; no-op fuera de Electron |
-| `TicketPrintService` | `ticket/ticket-print.service.ts:20-81` | — (DOM + `window.print`) | Renderiza e imprime ticket de venta, corte de caja y etiqueta |
+| `ProductService` | `services/product.service.ts` | IPC `catalog:search`/`catalog:getByBarcode` (local, SQLite) | Búsqueda de producto por texto, sku o código de barras — **ya no HTTP** |
+| `BatchService` | `services/batch.service.ts` | IPC `catalog:getBatchesByProduct` (local) | Lotes con fecha de caducidad, insumo de la selección FEFO — local |
+| `SaleService` | `services/sale.service.ts` | IPC `sales:createLocal`/`sales:list`/`sales:voidLocal`; `POST /sales/bulk` y `POST /sales/{id}/void` solo desde `flushQueue()`/`void()` de venta ya sincronizada | Construcción del payload, alta de venta **100% local**, listado, anulación y **push por lote** (ver §4) |
+| `StockEntryService` | `services/stock-entry.service.ts` | IPC `catalog:recordStockEntry` (local); `POST /stock-entries` solo desde `flushQueue()`; `GET /stock-entries/invoices` sigue en línea | Alta/reabasto de producto **100% local**; push por lote |
+| `CashSessionService` | `services/cash-session.service.ts` | IPC `cashSessions:createLocal`/`getOpenLocal`/`getLiveSummary`/`closeLocal` (local); `GET /cash-sessions/current`, `POST /cash-sessions`, `POST /…/{id}/close` solo desde `flushQueue()`; `GET /cash-sessions` y `POST /…/{id}/adjustment/review` para auditoría admin | Turno **100% local** (2026-09-05, ver §5): apertura, corte en vivo, cierre con ajuste asíncrono, auto-cierre a las 24h, auditoría admin — push por lote create+close |
+| `CashMovementService` | `services/cash-movement.service.ts` | IPC `cashMovements:add`/`listForSession` (local); `POST /…/{id}/movements` solo desde `flushQueue()`; `GET /cash-sessions/movements` para auditoría admin | Depósito/retiro/gasto **100% local** (misma entidad que gastos, ver §5), push serial (`concatMap`) — depende de que `CashSession` ya tenga `remoteId` |
+| `CustomerService` | `services/customer.service.ts` | `GET /customers`, `POST /customers` | Búsqueda y alta rápida de cliente desde el cobro — en línea |
+| `MercadoPagoService` | `services/mercado-pago.service.ts` | `GET/PATCH /payments/mercadopago/devices…`, `POST/GET/DELETE /payments/mercadopago/orders…` | Terminales Point, modo PDV, crear/consultar/cancelar order de cobro |
+| `ControlledLedgerService` | `services/controlled-ledger.service.ts` | `GET /inventory/controlled-ledger` | Libro de control COFEPRIS con filtros y cantidades con signo — en línea |
+| `CategoryAdminService` / `SupplierService` / `InvoiceService` / `UploadsService` | `services/{category-admin,supplier,invoice,uploads}.service.ts` | `GET/POST/PATCH /categories`, `/suppliers`, `/invoices`, `POST /uploads` | Módulos administrativos nuevos (2026-08-30) — **en línea, sin SQLite**, replican `farma-jyv-admin` |
+| `PromoService` | `services/promo.service.ts` | `electronAPI.promotions.listActive` (tabla `Promotion`, bajada por `GET /promotions/sync`) | Precio escalonado, N×M y % por cantidad con el motor `shared/utils/promotions.ts` (copia del backend); marca `line.promotion` y manda solo `promotionId`. El tope del 20 % aplica a la parte manual, sobre el precio ya con promo |
+| `CartStorageService` | `services/cart-storage.service.ts` | — (`localStorage` `pos.current-cart.<uid>`) | Autoguardado y recuperación del ticket en curso |
+| `HeldSaleStorageService` | `services/held-sale-storage.service.ts` | — (`localStorage` `pos.held-sales.<uid>`) | Persistencia de ventas en pausa por cajero |
+| `CashDrawerService` | `services/cash-drawer.service.ts` | — (IPC `window.electronAPI.openCashDrawer`) | Abre el cajón tras cobros con efectivo; no-op fuera de Electron |
+| `TicketPrintService` | `ticket/ticket-print.service.ts` | — (DOM + `window.print`) | Renderiza e imprime ticket de venta, corte de caja y etiqueta. **Impresión de ticket de venta oculta en UI desde 2026-08-30** (`environment.printTicketOnSale = false` en los 4 environments) — el código sigue intacto, solo la superficie está apagada |
+| `ProductCatalogService` | `services/product-catalog.service.ts` | IPC `catalog:createCatalogProduct`/`updateCatalogProduct`/`getProductById` (local); `POST /products` y `PATCH /products/{id}` solo desde `flushQueue()` | Alta/edición de catálogo **100% local** (2026-09-03), push por producto — ver §10 |
+| `SyncSchedulerService` | `src/app/core/sync/sync-scheduler.service.ts` | `GET /health`, `GET /products/sync`, `POST /sales/bulk`, `POST /stock-entries`, `POST /products`, `PATCH /products/{id}`, `POST /cash-sessions`, `POST /…/close`, `POST /…/movements` | Orquesta la sincronización: 3 horarios fijos (10:30/14:00/20:00), al login, o manual (botón del header). Orden de push: `CashSessionService` → `ProductCatalogService` → `StockEntryService` → `CashMovementService` (depende de 1) → `SaleService` (depende de 1 y 2); pull incluye `pullAdjustmentStatus()` |
 
 ---
 
@@ -366,65 +477,176 @@ flowchart TD
   O -- "processed" --> P
   O -- "failed / expired" --> N
   M -- cash --> P["canConfirm + blockers<br/>checkout.ts:294-332"]
-  P --> Q["POST /sales con idempotencyKey<br/>sale.service.ts:267"]
-  Q -- "201" --> R["Venta registrada → onSaleCompleted<br/>sale.ts:485-494"]
-  Q -- "status 0 (sin red)" --> T["enqueueOffline<br/>sale.service.ts:347"]
-  T --> U["Venta sintética PENDIENTE-*<br/>ticket se imprime igual"]
-  U --> V["evento window.online<br/>sale.service.ts:176"]
-  V --> W["flushQueue — concatMap en serie<br/>sale.service.ts:293"]
-  W -- "2xx" --> X["removeFromQueue"]
-  W -- "4xx permanente" --> Y["blockInQueue → diálogo de rechazadas<br/>sale.service.ts:408 / sale.ts:512"]
-  W -- "5xx / 401 / 408 / 429" --> Z["queda en cola, siguiente flush"]
-  Y --> AA["retry (misma llave) o descartar<br/>sale.service.ts:417-433"]
-  R --> AB["printSale si printTicketOnSale<br/>sale.ts:491-493"]
+  P --> Q["sales.createLocal (IPC)<br/>SQLite, sin red — sale.service.ts:302"]
+  Q --> R["Venta registrada → onSaleCompleted<br/>sale.ts:485-494"]
+  R --> AB2["printSale si printTicketOnSale<br/>(hoy false en los 4 environments)"]
+  Q -.-> T["pendingPush = true<br/>queda en SQLite"]
+  T -.-> V["SyncScheduler: login / 10:30-14:00-20:00 / botón manual"]
+  V --> W["flushQueue — POST /sales/bulk en un solo lote<br/>sale.service.ts:358"]
+  W -- "ok por item" --> X["markSynced: remoteId + folio real"]
+  W -- "4xx permanente por item" --> Y["markPushFailed → diálogo de rechazadas<br/>sale.ts:512"]
+  W -- "falla la llamada completa" --> Z["queda en cola, siguiente horario"]
+  Y --> AA["retry (clearPushError, misma llave) o descartar<br/>sale.service.ts:339-344"]
 ```
 
 ---
 
-## 10. Riesgos y deuda técnica
+## 10. Edición de catálogo — `products/` (2026-09-03)
 
-1. **`takeUntilDestroyed()` fuera de contexto de inyección** — `checkout.ts:602` se
-   ejecuta dentro de `pollOrder()`, llamado desde el `subscribe` de `createOrder`
-   (`checkout.ts:570-573`), es decir de forma asíncrona. Sin `DestroyRef` explícito, el
-   operador exige contexto de inyección; conviene inyectar un `DestroyRef` y pasarlo.
-   Mismo camino en `retryCardPayment()` (`checkout.ts:580-584`).
-2. **Rutas sin guard de permiso** — `pos.routes.ts` no declara ningún guard por ruta.
-   Historial y reportes son accesibles por URL para cualquier usuario autenticado; el
-   libro de control depende de una comprobación en el componente
-   (`controlled-ledger.ts:131-135`) y de que el enlace se oculte (`nav.config.ts:22`).
-3. **La cola offline solo se vacía con el evento `online`** — `sale.service.ts:176`. Si la
-   app arranca con ventas encoladas y la red ya está disponible (caso típico tras
-   reiniciar el equipo), nada dispara `flushQueue()` hasta la siguiente transición de
-   red. Falta un flush al iniciar y/o un reintento periódico.
-4. **Errores 5xx en el cobro no se encolan** — `create()` solo encola con `status === 0`
-   (`sale.service.ts:271`). Un 502/504 del gateway deja al cajero con el cobro hecho en
-   la terminal y sin venta ni cola; depende de que reintente manualmente (la llave sí es
-   estable, `checkout.ts:124`).
-5. **Polling de Point sin límite de tiempo** — `interval(2000)` (`checkout.ts:598`) sigue
-   indefinidamente mientras la order quede en un estado pendiente; no hay timeout ni
-   límite de intentos.
-6. **Tope de descuento solo en cliente** — `sale.ts:407` valida el 20 % en la UI; la
-   autorización real debe estar en el backend. Además el porcentaje se mide sobre
-   promo + manual, así que una promo agresiva puede bloquear un descuento manual mínimo.
-7. **Fallback de lotes silencioso** — si `listByProduct` falla, `commitAdd` corre con
-   `batches = null` (`sale.ts:354`) y se valida solo contra `product.stock`: se pierden
-   el FEFO y el aviso de caducidad sin que el cajero lo note.
-8. **Búsqueda del historial en cliente y sin debounce** — `onSearch()` recarga con
-   `listAll` en cada pulsación (`sale-history.ts:90-93`) y filtra localmente
-   (`sale-history.ts:71-80`), pese a que `ListSalesParams` ya soporta `search`
-   (`sale.service.ts:70`). Con volumen alto se traen todas las páginas por tecla.
-9. **Reportes agregan en cliente** — `listAll` pagina de 100 en 100
-   (`sale.service.ts:249-259`) y toda la aritmética corre en el navegador
-   (`reports.ts:96-196`). No escala a rangos amplios; conviene un endpoint de agregación.
-10. **Limpieza de impresión por temporizador** — `setTimeout(cleanup, 1500)`
-    (`ticket-print.service.ts:79`) destruye el componente aunque el diálogo nativo de
-    impresión siga abierto en navegadores donde `afterprint` no llega a tiempo.
-11. **`voidLastSale` sin verificación local** — `sale.ts:537-546` no comprueba `isAdmin()`
-    ni pide confirmación, a diferencia del historial (`sale-history.ts:105-108`); depende
-    del 403 del backend.
-12. **Estado de la cola solo en `localStorage`** — `pos.pending-sales`
-    (`sale.service.ts:110`) no está namespaceado por `uid`, a diferencia del carrito y de
-    las ventas en pausa; en un equipo compartido las ventas encoladas de un cajero se
-    mezclan con las del siguiente. Limpiar datos del navegador pierde ventas cobradas.
-13. **Fallback de `idempotencyKey` con `Math.random`** — `sale.service.ts:113-118`; menor,
-    pero es la única defensa contra duplicados en WebViews viejos de Electron.
+Alta y edición de producto **sin** lote/factura de por medio (a diferencia de "Entrada de
+stock", que solo edita el producto como parte de recibir mercancía). Mismo patrón local-first
+que venta y entrada de stock: escribe en SQLite vía IPC, sin red en el instante de la acción.
+
+- **Búsqueda 100% local**: `ProductList` reusa `ProductService.search()` (el mismo IPC
+  `catalog:search` que usa la venta) — no hay endpoint ni paginación de servidor, el catálogo
+  local ya cabe en una sola consulta instantánea.
+- **Dos flags de push separados a propósito**: `Product.pendingPush` sigue siendo exclusivo del
+  alta embebida en `POST /stock-entries` (producto + lote juntos); este módulo usa
+  `Product.pendingCatalogPush` / `catalogPushError`, para que ambas colas nunca compitan por el
+  mismo producto y no se duplique la creación remota.
+- **`ProductCatalogService.flushQueue()`** sube en serie (`concatMap`, uno a la vez — el
+  catálogo no tiene el volumen de las ventas para justificar un endpoint bulk propio):
+  - Alta nueva (`remoteId` null): antes de crear, hace `GET /products?search=<sku>` y compara
+    el SKU exacto — `POST /products` **no tiene llave de idempotencia propia** en el backend
+    (a diferencia de `/sales`), así que sin esta defensa un reintento tras una respuesta perdida
+    por red crearía un producto duplicado. Si encuentra coincidencia, adopta ese id como
+    `remoteId` sin crear de nuevo.
+  - Edición (`remoteId` presente): `PATCH /products/{remoteId}`, idempotente por sí solo, sin
+    defensa adicional.
+  - Reutiliza `POST /products` y `PATCH /products/:id`, que ya existían para el panel de
+    administración (`backend-farma-jyv/functions/src/modules/catalog/products.controller.ts`) —
+    no se agregó ningún endpoint nuevo al backend.
+- **Permiso**: `products:write`, concedido tanto a `admin` como a `cashier` (antes el cajero
+  solo tenía `products:read`, suficiente para vender pero no para editar/dar de alta). Requiere
+  correr `npm run migrate:roles` en el backend para que el rol `cashier` en Firestore refleje el
+  cambio — hasta entonces, el guard de la ruta seguirá negando el acceso al cajero aunque el
+  código ya lo declare.
+- **Unidad como texto libre**: el campo "Unidad" usa un `<input>` nativo + `<datalist>`, no
+  `p-select` en modo editable — ese control de PrimeNG reinicia el cursor del input en cada
+  tecla (reescribe el DOM en cada `writeValue`), y en la práctica solo dejaba seleccionar de la
+  lista, no escribir texto libre (bug real, encontrado y corregido el mismo día también en
+  `stock-entry.html`).
+
+---
+
+## 11. Riesgos y deuda técnica
+
+**Actualización 2026-09-03**: se re-auditó todo el flujo local-first tras el pivot a
+SQLite/Prisma. Se retiran de esta lista los puntos ya resueltos por el pivot o por cambios
+posteriores (guard de rutas, cola offline dependiente de `window.online`, errores 5xx sin
+encolar — todo eso desapareció al dejar de cobrar por HTTP) y se agregan los hallazgos reales
+de la auditoría, con severidad.
+
+**Actualización 2026-09-03 (misma fecha, más tarde)**: los 7 hallazgos de "Alta prioridad" y
+3 de "Media prioridad" (#8, #9, #10) de esta sección **ya están corregidos** — verificado con
+`tsc --noEmit` limpio, `ng build --configuration electron` limpio, 423/423 tests, y (para el
+P0) una prueba directa contra SQLite que reproduce el bug y confirma el fix. Se deja la
+descripción original de cada hallazgo (útil como caso de regresión) con una nota `[Corregido]`
+y el fix aplicado.
+
+### Alta prioridad
+
+1. **[Corregido] [P0] Alta de stock rota para cualquier producto ya sincronizado** —
+   `stock-entry.ts` arma `payload.productId = existing.remoteId ?? existing.id` y reutiliza
+   ese mismo `payload` tanto para el push remoto (necesita `remoteId`) como para la escritura
+   local vía IPC (`recordStockEntry`, necesita el `id` local de SQLite). En
+   `electron/db/products.js`, `recordStockEntry` usa ese `productId` tal cual en
+   `prisma.product.update({ where: { id: productId } })` — para un producto con `remoteId` (es
+   decir, cualquiera después de su primer sync), ese id no matchea ningún `Product.id` local:
+   la actualización de stock final (`totalStock: { increment }`, que corre siempre, con o sin
+   `productUpdate`) revienta con "Record to update not found". Es el mismo patrón id-local-vs-
+   remoto que ya causó 3 incidentes previos en `sale.service.ts`/`upsertMany`, reaparecido sin
+   blindar aquí. Fix: separar los dos ids como ya hace `SaleService.buildPayload` (id local
+   para la escritura IPC, `remoteId` solo dentro del payload que se reenvía al sincronizar), o
+   resolver remoto→local dentro de `electron/db/products.js` antes de escribir. **Fix
+   aplicado**: `recordStockEntry` resuelve el id local buscando por `id` **o** `remoteId` antes
+   de tocar la base.
+2. **[Corregido] Ventas anuladas durante un sync en curso pueden "sanar" como sincronizadas sin anularse
+   en el servidor** — `markSynced` (`electron/db/sales.js`) no comprueba `voidedAt` antes de
+   escribir `remoteId`/`pendingPush: false`. Si el cajero anula una venta local justo mientras
+   `flushQueue()` ya la había tomado y está esperando la respuesta de `POST /sales/bulk`, al
+   llegar la respuesta la venta queda "anulada" en local pero **activa sin anular en el
+   backend**, con potencial impacto contable/regulatorio (incluye ventas con sustancias
+   controladas). Fix: que `markSynced` no pise el estado si `voidedAt` ya está seteado, y que
+   dispare el void remoto automáticamente en el siguiente sync. **Fix aplicado**: nuevo campo
+   `Sale.needsRemoteVoid`; `markSynced` detecta la carrera y lo marca; `SaleService.
+   reconcileRemoteVoids()` dispara el `POST /sales/:id/void` remoto tras cada `flushQueue()`.
+3. **[Corregido] Las ventas/altas "bloqueadas" (rechazo 4xx permanente) se reintentan solas igual** —
+   `getPendingPush()`/`getPendingStockEntries()` no excluyen las filas con `pushError` ya
+   seteado, así que `flushQueue()` las vuelve a mandar en cada uno de los 3 horarios fijos,
+   contradiciendo el diseño (`retryBlockedSale()` existe justo para que el reintento sea una
+   decisión explícita del cajero). Fix aplicado: `pushError: null` filtrado en ambas consultas.
+4. **[Corregido] `getByBarcode` no filtra `isActive`** (`electron/db/products.js`) — a diferencia de
+   `search()`, que sí excluye productos inactivos, escanear el código de barras de un producto
+   dado de baja (p. ej. por retiro sanitario) lo sigue vendiendo. En farmacia esto es serio.
+   Fix aplicado: `getByBarcode` ahora filtra `isActive: true`.
+5. **[Corregido] `invoice-form.ts` — fecha por defecto en UTC en vez de local**: `new
+   Date().toISOString().slice(0,10)` da el día siguiente en México (UTC-6) entre ~18:00 y
+   23:59 hora local. El campo nace mal si el cajero no corrige el date-picker a mano. Fix
+   aplicado: `todayLocalDateString()` arma el string con los componentes locales de `Date`.
+6. **[Corregido] `invoice-form.ts` — `save()` sin `takeUntilDestroyed`**: si el cajero cancela o navega
+   fuera mientras el `POST /invoices` sigue en vuelo y abre una segunda factura, la respuesta
+   tardía de la primera puede expulsarlo de la segunda a medio llenar. Fix aplicado:
+   `takeUntilDestroyed(destroyRef)` en `invoice-form.ts`, `category-form.ts` y
+   `supplier-form.ts`.
+7. **`takeUntilDestroyed()` fuera de contexto de inyección** en `checkout.ts` (`pollOrder()`,
+   llamado async desde el `subscribe` de `createOrder`) y en `retryCardPayment()`: sin
+   `DestroyRef` explícito pasado al operador, esto puede lanzar en runtime (NG0203).
+
+### Media prioridad
+
+8. **[Corregido] `abrirCajon` bloquea el proceso principal completo** — `execFileSync`/`copyFileSync`
+   síncronos en el único hilo de Electron; una impresora/cajón que no responde congela toda la
+   ventana (y el IPC) durante el cobro. Fix aplicado: `execFile`/`fs.promises` async + timeout
+   de 5 s (`withTimeout`).
+9. **[Corregido] `SyncScheduler.pullProducts()` sin guardia de reentrancia** (a diferencia de
+   `flushQueue()`, que sí tiene `flushing`) — sync manual + horario fijo casi simultáneos
+   duplican el fetch de `/products/sync` y la escritura SQLite (no corrompe, por ser upsert,
+   pero desperdicia tráfico/tiempo). Fix aplicado: `pullInFlight` comparte una sola promesa
+   entre llamadores concurrentes.
+10. **[Corregido] `catalog:upsertMany` no es transaccional** — recorre productos uno por uno con varios
+    awaits cada uno; para catálogos grandes es lento (bloquea el "sync antes de vender" del
+    modal de login) y no atómico. Fix aplicado: cada producto+lotes corre en su propio
+    `prisma.$transaction`.
+11. **[Corregido] `shell.html` — el botón "Venta" queda resaltado como activo en toda la app** —
+    `routerLinkActiveOptions: { exact: false }` aplicado también al item con `path: '/pos'`
+    hace `startsWith` sobre toda la sección POS: en `/pos/historial` se ven "Venta" **e**
+    "Historial" resaltados a la vez. Fix aplicado: `[routerLinkActiveOptions]="{ exact: item.path === '/pos' }"`.
+12. **[Corregido] Formularios de Categorías/Proveedores/Facturas sin `maxLength` alineado al backend** —
+    `name`/`description`/`contactName`/`address`/`notes`/`invoiceNumber` no tenían validador de
+    longitud en el form pese a que el backend sí limita (120/300/500/60…); el error solo
+    aparecía al guardar, vía el mensaje de la API. Fix aplicado: `Validators.maxLength` +
+    atributo `maxlength` en los tres formularios.
+13. **Tope de descuento solo en cliente** — `sale.ts` valida el 20 % en la UI; la autorización
+    real debe estar en el backend. El porcentaje se mide sobre promo + manual.
+14. **Fallback de lotes silencioso** — si `listByProduct` falla, `commitAdd` corre con
+    `batches = null` y valida solo contra `product.stock`: se pierden FEFO y aviso de
+    caducidad sin que el cajero lo note.
+15. **Búsqueda del historial en cliente y sin debounce** — recarga con `listAll` en cada
+    pulsación y filtra localmente, pese a que `ListSalesParams` ya soporta `search`.
+16. **Reportes agregan en cliente** — toda la aritmética corre en el navegador; no escala a
+    rangos amplios.
+17. **Polling de Point sin límite de tiempo** — `interval(2000)` sigue indefinidamente
+    mientras la order quede pendiente; sin timeout ni límite de intentos.
+18. **[Corregido] `ApiHealthService.checkNow()` sin cancelar la petición anterior** (no usa `switchMap`):
+    dos llamadas casi simultáneas pueden resolver fuera de orden y dejar `apiOk` desactualizado
+    hasta el siguiente chequeo. Fix aplicado: `checkNow()` empuja a un `Subject` con `switchMap`
+    en vez de suscribirse directo.
+
+### Baja prioridad
+
+19. **Limpieza de impresión por temporizador** — `setTimeout(cleanup, 1500)` puede destruir el
+    componente aunque el diálogo nativo de impresión siga abierto en navegadores donde
+    `afterprint` no llega a tiempo.
+20. **`voidLastSale` sin verificación local** — no comprueba `isAdmin()` ni pide confirmación,
+    a diferencia del historial; depende del 403 del backend.
+21. **[Corregido] `sale-history.ts` — método `print()` sin ningún botón que lo invoque** en la plantilla
+    actual: código público inalcanzable desde la UI real. Fix aplicado: botón "Reimprimir"
+    conectado en el diálogo de detalle del historial.
+22. **[Corregido] `flushQueue()` sin `catchError` sobre el `from(getPendingPush())`** — un fallo del IPC en
+    sí (p. ej. SQLite bloqueada) no quedaba registrado. Fix aplicado: `catchError` que degrada a
+    "nada pendiente" en ese intento.
+23. **`splitStatements` del migration runner** (`electron/db/migrate.js`) parte SQL por regex;
+    frágil ante un futuro `;` dentro de un string/trigger — documentar la restricción.
+24. **Fallback de `idempotencyKey` con `Math.random`** — menor, única defensa contra
+    duplicados en WebViews viejos de Electron.

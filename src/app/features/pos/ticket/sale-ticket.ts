@@ -1,7 +1,7 @@
 import { CurrencyPipe, DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-import { CashSessionSummary, PaymentMethod, Sale } from '../../../shared/models';
+import { CashSessionSummary, PaymentMethod, Sale, SaleItem, isSaleProductItem } from '../../../shared/models';
 import { CONTROLLED_GROUP_RULES } from '../../../shared/utils/controlled';
 import { environment } from '../../../../environments/environment';
 
@@ -23,6 +23,28 @@ const METHOD_LABELS: Record<PaymentMethod, string> = {
   },
 })
 export class SaleTicket {
+  /**
+   * Identidad de la partida en el ticket impreso: una de servicio no tiene
+   * `productId`, así que se usa el id que corresponda a su tipo.
+   */
+  itemKey(item: SaleItem): string {
+    return (isSaleProductItem(item) ? item.productId : item.serviceId) + item.productName;
+  }
+
+  /** La promo se imprime con su nombre: el cliente debe ver por qué pagó menos. */
+  promoOf(item: SaleItem): { name: string; amount: number } | null {
+    if (!isSaleProductItem(item) || !item.promotionName || !item.promotionDiscount) {
+      return null;
+    }
+    return { name: item.promotionName, amount: item.promotionDiscount };
+  }
+
+  /** Lo que queda del descuento de la partida fuera de la promo. */
+  manualDiscountOf(item: SaleItem): number {
+    const promo = isSaleProductItem(item) ? (item.promotionDiscount ?? 0) : 0;
+    return Math.round((item.discountAmount - promo) * 100) / 100;
+  }
+
   readonly sale = input.required<Sale>();
   readonly cashierLabel = input('');
   readonly preview = input(false);

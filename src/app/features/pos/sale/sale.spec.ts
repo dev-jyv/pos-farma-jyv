@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { signal } from '@angular/core';
+import { signal, WritableSignal } from '@angular/core';
 import { provideTranslateService } from '@ngx-translate/core';
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
@@ -7,9 +7,17 @@ import { of, throwError } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ScanSoundService } from '../../../core/audio/scan-sound.service';
+import { ServiceCatalogService } from '../services/service-catalog.service';
 import { AuthService } from '../../../core/auth/auth.service';
+import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
-import { Product, ProductBatch, Sale as SaleModel } from '../../../shared/models';
+import {
+  PharmacyService,
+  Product,
+  ProductBatch,
+  Sale as SaleModel,
+  ServiceProvider,
+} from '../../../shared/models';
 import { BatchService } from '../services/batch.service';
 import { CartStorageService } from '../services/cart-storage.service';
 import { CashSessionService } from '../services/cash-session.service';
@@ -33,6 +41,20 @@ function product(overrides: Partial<Product> = {}): Product {
   } as Product;
 }
 
+function servicio(overrides: Partial<PharmacyService> = {}): PharmacyService {
+  return {
+    id: 'sv-1',
+    code: 'CONS-01',
+    name: 'Consulta general',
+    serviceType: 'consultation',
+    price: 200,
+    taxMode: 'exempt',
+    commissionRate: 40,
+    requiresPerformer: true,
+    ...overrides,
+  };
+}
+
 function batch(overrides: Partial<ProductBatch> = {}): ProductBatch {
   return {
     id: 'b1',
@@ -50,50 +72,86 @@ describe('Sale', () => {
   let component: Sale;
   let notifyError: ReturnType<typeof vi.fn>;
   let notifySuccess: ReturnType<typeof vi.fn>;
+  let notifyWarn: ReturnType<typeof vi.fn>;
   let batches: ProductBatch[];
   let isAdmin: ReturnType<typeof signal<boolean>>;
   let canSell: ReturnType<typeof signal<boolean>>;
   let isOpen: ReturnType<typeof signal<boolean>>;
+  let servicios: PharmacyService[];
+  let doctores: ServiceProvider[];
   let saleServiceMock: {
     pendingCount: ReturnType<typeof signal<number>>;
     pendingSales: ReturnType<typeof signal<unknown[]>>;
-    blockedSales: ReturnType<typeof signal<unknown[]>>;
     void: ReturnType<typeof vi.fn>;
     flushQueue: ReturnType<typeof vi.fn>;
-    retryBlockedSale: ReturnType<typeof vi.fn>;
     discardBlockedSale: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
     localStorage.clear();
     notifyError = vi.fn();
+    syncSchedulerMock = {
+      settleStaleShift: vi.fn(() => Promise.resolve(false)),
+      settlingStaleShift: signal(false),
+      pullPromotions: vi.fn(() => Promise.resolve(true)),
+    };
+    notifyWarn = vi.fn();
     notifySuccess = vi.fn();
     batches = [batch()];
+    servicios = [servicio()];
+    doctores = [{ id: 'dr-1', name: 'Dra. Ruiz' }];
     isAdmin = signal(false);
     canSell = signal(true);
     isOpen = signal(true);
     saleServiceMock = {
       pendingCount: signal(0),
       pendingSales: signal<unknown[]>([]),
-      blockedSales: signal<unknown[]>([]),
       void: vi.fn(() => of({ id: 'v1', folio: 'V-1' } as SaleModel)),
       flushQueue: vi.fn(),
-      retryBlockedSale: vi.fn(),
       discardBlockedSale: vi.fn(),
     };
 
+    await build();
+  });
+
+  /**
+   * Reconstruible: las pruebas de arranque (qué pasa al ENTRAR sin turno)
+   * necesitan fijar `isOpen`/`isAdmin` antes de que corra el constructor.
+   */
+  /**
+   * Liquidación del turno rezagado. Por defecto no hay ninguno, que es el caso
+   * normal; las pruebas del bloqueo la reemplazan antes de construir.
+   */
+  let syncSchedulerMock: {
+    settleStaleShift: ReturnType<typeof vi.fn>;
+    settlingStaleShift: WritableSignal<boolean>;
+    pullPromotions: ReturnType<typeof vi.fn>;
+  };
+
+  async function build(): Promise<void> {
+    TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
         provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         providePrimeNG({}),
         MessageService,
-        { provide: NotificationService, useValue: { error: notifyError, success: notifySuccess } },
+        {
+          provide: NotificationService,
+          useValue: { error: notifyError, success: notifySuccess, warn: notifyWarn },
+        },
         { provide: ProductService, useValue: { search: () => of([product()]), invalidate: vi.fn() } },
         { provide: BatchService, useValue: { listByProduct: () => of(batches) } },
         { provide: SaleService, useValue: saleServiceMock },
+        { provide: SyncScheduler, useValue: syncSchedulerMock },
         {
           provide: CashSessionService,
-          useValue: { isOpen, current: signal(null), fetchCurrent: () => of(null) },
+          // `cashOnHand` lo consume el diálogo de apertura que monta esta pantalla.
+          useValue: {
+            isOpen,
+            current: signal(null),
+            refreshCurrent: () => of(null),
+            cashOnHand: () => of(0),
+          },
         },
         {
           provide: AuthService,
@@ -101,6 +159,21 @@ describe('Sale', () => {
         },
         { provide: TicketPrintService, useValue: { printSale: vi.fn(), printProductLabel: vi.fn() } },
         { provide: ScanSoundService, useValue: { ok: vi.fn(), warn: vi.fn(), error: vi.fn() } },
+        {
+          provide: ServiceCatalogService,
+          useValue: {
+            services: signal(servicios),
+            providers: signal(doctores),
+            loading: signal(false),
+            hasServices: signal(servicios.length > 0),
+            refresh: () => of(servicios),
+            search: (term: string) =>
+              servicios.filter((s) => s.name.toLowerCase().includes(term.toLowerCase())),
+            findByCode: (code: string) =>
+              servicios.find((s) => s.code.toLowerCase() === code.trim().toLowerCase()) ?? null,
+            providerById: (id: string) => doctores.find((d) => d.id === id) ?? null,
+          },
+        },
         PromoService,
         CartStorageService,
         HeldSaleStorageService,
@@ -110,6 +183,128 @@ describe('Sale', () => {
     fixture = TestBed.createComponent(Sale);
     component = fixture.componentInstance;
     await fixture.whenStable();
+  }
+
+  /**
+   * Al cajero se le pide el turno de entrada porque sin él no puede vender.
+   * El admin entra a consultar, mover efectivo o dar entrada de stock, y para
+   * él ese diálogo —que no se puede cerrar— era una puerta tapiada.
+   */
+  /**
+   * Turno que quedó abierto de un día anterior. Sustituye al auto-cierre de
+   * medianoche: ahora se liquida al entrar —movimientos y ventas primero, el
+   * cierre al final— con la pantalla bloqueada, y solo cuando termina se ofrece
+   * abrir el turno nuevo.
+   */
+  describe('liquidación del turno rezagado antes de abrir', () => {
+    /** Liquidación que no termina hasta que la prueba lo decide. */
+    function conLiquidacionEnVuelo() {
+      let terminar!: () => void;
+      const enVuelo = new Promise<boolean>((resolve) => {
+        terminar = () => resolve(true);
+      });
+      const bloqueo = signal(false);
+      syncSchedulerMock = {
+        pullPromotions: vi.fn(() => Promise.resolve(true)),
+        // Enciende el bloqueo solo cuando de verdad hay turno rezagado, igual
+        // que el sincronizador real: si se encendiera antes, el modal
+        // parpadearía en cada entrada a Ventas.
+        settleStaleShift: vi.fn(() => {
+          bloqueo.set(true);
+          return enVuelo.then((valor) => {
+            bloqueo.set(false);
+            return valor;
+          });
+        }),
+        settlingStaleShift: bloqueo,
+      };
+      return () => terminar();
+    }
+
+    it('no ofrece abrir turno mientras se liquida el anterior', async () => {
+      isOpen.set(false);
+      const terminar = conLiquidacionEnVuelo();
+      await build();
+
+      // Abrir un turno nuevo encima del de ayer es justo lo que no debe pasar.
+      expect(component.settlingStaleShift()).toBe(true);
+      expect(component.cashSessionDialogVisible()).toBe(false);
+
+      terminar();
+      // La cadena `finalize` + `switchMap` encadena varios turnos de microtareas.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(component.settlingStaleShift()).toBe(false);
+      expect(component.cashSessionDialogVisible()).toBe(true);
+    });
+
+    /**
+     * El caso normal —no hay turno rezagado— es el 99 % de las entradas a
+     * Ventas. El bloqueo se encendía al **empezar** a averiguarlo, así que el
+     * modal parpadeaba en cada entrada: un pantallazo sin motivo.
+     */
+    it('sin turno rezagado no parpadea el bloqueo al entrar', async () => {
+      isOpen.set(false);
+      await build();
+
+      expect(component.settlingStaleShift()).toBe(false);
+      expect(fixture.nativeElement.querySelector('[data-testid="settling-stale-shift"]')).toBeNull();
+    });
+
+    it('el bloqueo se ve en pantalla y no se puede descartar', async () => {
+      isOpen.set(false);
+      conLiquidacionEnVuelo();
+      await build();
+
+      const bloqueo = fixture.nativeElement.querySelector('[data-testid="settling-stale-shift"]');
+      expect(bloqueo).not.toBeNull();
+    });
+
+    it('si la liquidación falla, la caja no se queda bloqueada', async () => {
+      // Lo que no subió queda en cola o en bloqueados, visible en la barra.
+      isOpen.set(false);
+      syncSchedulerMock = {
+        settleStaleShift: vi.fn(() => Promise.reject(new Error('sin red'))),
+        settlingStaleShift: signal(false),
+        pullPromotions: vi.fn(() => Promise.resolve(true)),
+      };
+      await build();
+
+      expect(component.settlingStaleShift()).toBe(false);
+      expect(component.cashSessionDialogVisible()).toBe(true);
+    });
+  });
+
+  describe('entrar sin turno abierto', () => {
+    it('al cajero se le abre el diálogo de apertura', async () => {
+      isOpen.set(false);
+      await build();
+
+      expect(component.cashSessionDialogVisible()).toBe(true);
+    });
+
+    it('al admin no: entra directo', async () => {
+      isOpen.set(false);
+      isAdmin.set(true);
+      await build();
+
+      expect(component.cashSessionDialogVisible()).toBe(false);
+    });
+
+    it('el admin sigue sin poder vender hasta abrir turno', async () => {
+      isOpen.set(false);
+      isAdmin.set(true);
+      await build();
+
+      component.addToCart(product());
+
+      expect(component.cart()).toHaveLength(0);
+      expect(component.cashSessionDialogVisible()).toBe(true);
+    });
   });
 
   describe('totales', () => {
@@ -126,7 +321,7 @@ describe('Sale', () => {
       // Un descuento total lo autoriza un administrador (arriba del 20%).
       isAdmin.set(true);
       component.addToCart(product(), 1);
-      component.updateLineDiscount('p1', 999);
+      component.updateLineDiscount('product:p1', 999);
 
       expect(component.cart()[0].discountAmount).toBe(50);
       expect(component.total()).toBe(0);
@@ -200,25 +395,25 @@ describe('Sale', () => {
     beforeEach(() => component.addToCart(product(), 2));
 
     it('bajar de 1 quita la partida', () => {
-      component.updateQuantity('p1', 0);
+      component.updateQuantity('product:p1', 0);
       expect(component.cart()).toHaveLength(0);
     });
 
     it('un campo vacío no se interpreta como cero', () => {
-      component.updateQuantity('p1', null);
+      component.updateQuantity('product:p1', null);
       expect(component.cart()[0].quantity).toBe(2);
     });
 
     it('no deja capturar más del stock', () => {
-      component.updateQuantity('p1', 99);
+      component.updateQuantity('product:p1', 99);
       expect(component.cart()[0].quantity).toBe(2);
       expect(notifyError).toHaveBeenCalledWith('Cantidad supera el stock disponible.');
     });
 
     it('bumpQuantity suma y resta sobre la partida', () => {
-      component.bumpQuantity('p1', 1);
+      component.bumpQuantity('product:p1', 1);
       expect(component.cart()[0].quantity).toBe(3);
-      component.bumpQuantity('p1', -1);
+      component.bumpQuantity('product:p1', -1);
       expect(component.cart()[0].quantity).toBe(2);
     });
   });
@@ -227,7 +422,7 @@ describe('Sale', () => {
     beforeEach(() => component.addToCart(product(), 2));
 
     it('un descuento arriba del 20% exige administrador', () => {
-      component.updateLineDiscount('p1', 30);
+      component.updateLineDiscount('product:p1', 30);
 
       expect(component.cart()[0].discountAmount).toBe(0);
       expect(notifyError).toHaveBeenCalledWith(
@@ -235,15 +430,78 @@ describe('Sale', () => {
       );
     });
 
+    /**
+     * Regresión: el descuento se guarda como importe absoluto y se reaplica en
+     * cada cambio del carrito. 5 piezas de $50 con $50 de descuento son el 20%
+     * exacto; al dejarlo en 2 piezas pasaba al 50% sin que nada lo revisara. La
+     * venta se cobraba y el backend la rechazaba con 403 al sincronizar: dinero
+     * cobrado que no quedaba registrado.
+     */
+    it('bajar la cantidad recorta el descuento al 20% de la línea', () => {
+      component.updateQuantity('product:p1', 5);
+      component.updateLineDiscount('product:p1', 50); // 20% de 5 × $50
+      expect(component.cart()[0].discountAmount).toBe(50);
+
+      component.updateQuantity('product:p1', 2);
+
+      // 20% de 2 × $50 = $20.
+      expect(component.cart()[0].discountAmount).toBe(20);
+      expect(component.total()).toBe(80);
+      expect(notifyError).toHaveBeenCalledWith(expect.stringContaining('20% de la línea'));
+    });
+
+    it('el administrador conserva su descuento al cambiar la cantidad', () => {
+      isAdmin.set(true);
+      component.updateQuantity('product:p1', 5);
+      component.updateLineDiscount('product:p1', 200);
+
+      component.updateQuantity('product:p1', 2);
+
+      // Su tope es la línea completa, no el 20%.
+      expect(component.cart()[0].discountAmount).toBe(100);
+    });
+
+    it('subir la cantidad no toca el descuento: el porcentaje baja', () => {
+      component.updateLineDiscount('product:p1', 20); // 20% de 2 × $50
+      component.updateQuantity('product:p1', 4);
+
+      expect(component.cart()[0].discountAmount).toBe(20);
+    });
+
+    /**
+     * Una línea en promoción no admite descuento manual: el precio lo fijó la
+     * gerencia. Un 2x1 (50 %) tampoco pide administrador por el tope del 20 %.
+     */
+    it('con un 2x1 el descuento queda bloqueado en el de la promo', () => {
+      TestBed.inject(PromoService).setPromotions([
+        {
+          id: 'promo-1',
+          name: '2x1',
+          rule: { type: 'nxm', buy: 2, pay: 1 },
+          productIds: ['p1'],
+          startsAt: new Date(Date.now() - 60_000).toISOString(),
+          endsAt: null,
+          isActive: true,
+        },
+      ]);
+      component.updateQuantity('product:p1', 2);
+      expect(component.cart()[0].discountAmount).toBe(50);
+
+      // El 2x1 (50 %) no pide administrador, y el manual no se le suma.
+      component.updateLineDiscount('product:p1', 60);
+      expect(component.cart()[0].discountAmount).toBe(50);
+      expect(component.total()).toBe(50);
+    });
+
     it('el administrador sí puede forzarlo', () => {
       isAdmin.set(true);
-      component.updateLineDiscount('p1', 30);
+      component.updateLineDiscount('product:p1', 30);
       expect(component.cart()[0].discountAmount).toBe(30);
     });
 
     it('quitar la partida también borra su descuento manual', () => {
-      component.updateLineDiscount('p1', 10);
-      component.removeFromCart('p1');
+      component.updateLineDiscount('product:p1', 10);
+      component.removeFromCart('product:p1');
       component.addToCart(product(), 1);
 
       expect(component.cart()[0].discountAmount).toBe(0);
@@ -278,6 +536,55 @@ describe('Sale', () => {
 
       expect(component.cart()).toHaveLength(1);
       expect(component.heldSales()).toHaveLength(0);
+    });
+
+    /**
+     * Regresión F5: el manual se deducía al retomar como `discountAmount − promo
+     * de ahora`. Si el sync retiraba la promo con la venta en pausa, los $50 del
+     * 2x1 volvían como descuento manual del 50 % y el backend rechazaba la venta.
+     */
+    it('retomar tras retirarse la promo no convierte su descuento en manual', () => {
+      const promos = TestBed.inject(PromoService);
+      promos.setPromotions([
+        {
+          id: 'promo-1',
+          name: '2x1',
+          rule: { type: 'nxm', buy: 2, pay: 1 },
+          productIds: ['p1'],
+          startsAt: new Date(Date.now() - 60_000).toISOString(),
+          endsAt: null,
+          isActive: true,
+        },
+      ]);
+      component.addToCart(product(), 2);
+      expect(component.cart()[0].discountAmount).toBe(50);
+      component.holdSale();
+
+      promos.setPromotions([]);
+      component.resumeHeldSale(component.heldSales()[0].id);
+
+      expect(component.cart()[0].discountAmount).toBe(0);
+      expect(component.total()).toBe(100);
+    });
+
+    it('una venta pausada vieja (sin manual guardado) se recorta al tope al retomar', () => {
+      component.addToCart(product(), 2);
+      component.updateLineDiscount('product:p1', 20);
+      component.holdSale();
+      const [held] = component.heldSales();
+      // Forma de una venta pausada antes de guardar el manual aparte, con un
+      // descuento que ya no cabe en el tope.
+      component.heldSales.set([
+        {
+          ...held,
+          manualDiscounts: undefined,
+          lines: held.lines.map((line) => ({ ...line, discountAmount: 50 })),
+        },
+      ]);
+
+      component.resumeHeldSale(held.id);
+
+      expect(component.cart()[0].discountAmount).toBe(20);
     });
   });
 
@@ -330,9 +637,9 @@ describe('Sale', () => {
     });
 
     it('una venta aún en cola no se puede anular', () => {
-      component.onSaleCompleted({ ...sale, id: 'offline-key-1' } as SaleModel);
+      component.onSaleCompleted({ ...sale, id: 'local-1', pendingPush: true } as SaleModel);
 
-      expect(component.lastSaleQueueId()).toBe('key-1');
+      expect(component.lastSaleQueueId()).toBe('local-1');
       component.voidLastSale();
       expect(saleServiceMock.void).not.toHaveBeenCalled();
     });
@@ -348,15 +655,22 @@ describe('Sale', () => {
   });
 
   describe('cola offline', () => {
-    it('sin ventas bloqueadas no abre el diálogo de revisión', () => {
-      component.reviewBlockedSales();
-      expect(component.blockedDialogVisible()).toBe(false);
+    /**
+     * Las rechazadas viven en el shell (una sola insignia para ventas, gastos y
+     * catálogo). Esta pantalla solo abre las que siguen en cola, y hasta ahora
+     * ese diálogo no tenía quién lo abriera: el método existía sin botón.
+     */
+    it('sin ventas en cola no abre el diálogo de pendientes', () => {
+      component.reviewPendingSales();
+      expect(component.pendingDialogVisible()).toBe(false);
     });
 
-    it('con ventas bloqueadas abre el diálogo', () => {
-      saleServiceMock.blockedSales.set([{ queueId: 'k1', folioHint: '1 art.', reason: 'Turno cerrado' }]);
-      component.reviewBlockedSales();
-      expect(component.blockedDialogVisible()).toBe(true);
+    it('con ventas en cola abre el diálogo', () => {
+      saleServiceMock.pendingSales.set([
+        { queueId: 'k1', folioHint: '1 art. · $25.00', total: 25, waitingFor: null },
+      ]);
+      component.reviewPendingSales();
+      expect(component.pendingDialogVisible()).toBe(true);
     });
 
     it('forzar el envío delega en el servicio', () => {
@@ -399,6 +713,732 @@ describe('Sale', () => {
       // Tras escanear, el término tecleado ya no le sirve a nadie.
       expect(search).toHaveBeenCalledTimes(1);
       expect(search.mock.calls[0][0]).toBe('');
+    });
+  });
+
+  /**
+   * Servicios: consultas y procedimientos que se cobran en el mismo ticket que
+   * los medicamentos pero no son mercancía.
+   */
+  describe('servicios en el ticket', () => {
+    it('un servicio que exige doctor no entra al ticket hasta elegirlo', () => {
+      component.addServiceToCart(servicio());
+
+      expect(component.performerDialogVisible()).toBe(true);
+      expect(component.cart()).toHaveLength(0);
+    });
+
+    it('al elegir el doctor, la partida entra con su comisión', () => {
+      component.addServiceToCart(servicio());
+      component.onPerformerChosen({ id: 'dr-1', name: 'Dra. Ruiz' });
+
+      const [linea] = component.cart();
+      expect(linea.kind).toBe('service');
+      expect(linea.kind === 'service' && linea.provider?.id).toBe('dr-1');
+      expect(component.performerDialogVisible()).toBe(false);
+    });
+
+    it('cancelar el diálogo no agrega nada', () => {
+      component.addServiceToCart(servicio());
+      component.onPerformerDismissed();
+
+      expect(component.cart()).toHaveLength(0);
+      expect(component.performerDialogVisible()).toBe(false);
+    });
+
+    it('un servicio que no exige doctor entra directo', () => {
+      component.addServiceToCart(servicio({ requiresPerformer: false }));
+
+      expect(component.performerDialogVisible()).toBe(false);
+      expect(component.cart()).toHaveLength(1);
+    });
+
+    it('recuerda el último doctor del turno para no preguntar dos veces igual', () => {
+      component.addServiceToCart(servicio());
+      component.onPerformerChosen({ id: 'dr-1', name: 'Dra. Ruiz' });
+
+      expect(component.lastProviderId()).toBe('dr-1');
+    });
+
+    it('el mismo servicio con el mismo doctor acumula cantidad', () => {
+      component.addServiceToCart(servicio({ requiresPerformer: false }));
+      component.addServiceToCart(servicio({ requiresPerformer: false }));
+
+      expect(component.cart()).toHaveLength(1);
+      expect(component.cart()[0].quantity).toBe(2);
+    });
+
+    /** El doctor es parte de la identidad: dos doctores, dos comisiones. */
+    it('el mismo servicio con dos doctores son dos partidas', () => {
+      component.addServiceToCart(servicio());
+      component.onPerformerChosen({ id: 'dr-1', name: 'Dra. Ruiz' });
+      component.addServiceToCart(servicio());
+      component.onPerformerChosen({ id: 'dr-2', name: 'Dr. Zavala' });
+
+      expect(component.cart()).toHaveLength(2);
+    });
+
+    it('cambiar el doctor de una partida la reemplaza, no la duplica', () => {
+      component.addServiceToCart(servicio());
+      component.onPerformerChosen({ id: 'dr-1', name: 'Dra. Ruiz' });
+
+      const linea = component.cart()[0];
+      if (linea.kind !== 'service') throw new Error('se esperaba una partida de servicio');
+      component.changeLineProvider(linea);
+      component.onPerformerChosen({ id: 'dr-2', name: 'Dr. Zavala' });
+
+      expect(component.cart()).toHaveLength(1);
+      const actualizada = component.cart()[0];
+      expect(actualizada.kind === 'service' && actualizada.provider?.id).toBe('dr-2');
+    });
+
+    it('un servicio no se puede agregar sin turno abierto', async () => {
+      isOpen.set(false);
+      isAdmin.set(true);
+      await build();
+
+      component.addServiceToCart(servicio({ requiresPerformer: false }));
+
+      expect(component.cart()).toHaveLength(0);
+    });
+
+    it('el "+" de un servicio no está limitado por stock', () => {
+      component.addServiceToCart(servicio({ requiresPerformer: false }));
+      const clave = component.keyOf(component.cart()[0]);
+
+      component.updateQuantity(clave, 999);
+
+      expect(component.cart()[0].quantity).toBe(999);
+      expect(notifyError).not.toHaveBeenCalled();
+    });
+
+    it('el ticket suma medicamentos y servicios juntos', () => {
+      component.addToCart(product());
+      component.addServiceToCart(servicio({ requiresPerformer: false }));
+
+      // 50 del medicamento + 200 del servicio.
+      expect(component.total()).toBe(250);
+      expect(component.cart()).toHaveLength(2);
+    });
+
+    describe('pestaña de servicios', () => {
+      it('arranca en medicamentos', () => {
+        expect(component.catalogTab()).toBe('products');
+      });
+
+      it('Alt+S la abre solo si hay servicios en el catálogo', () => {
+        component.onServicesTabHotkey(new KeyboardEvent('keydown'));
+        expect(component.catalogTab()).toBe('services');
+      });
+
+      it('sin servicios en el catálogo, Alt+S no hace nada', async () => {
+        servicios = [];
+        await build();
+
+        component.onServicesTabHotkey(new KeyboardEvent('keydown'));
+        expect(component.catalogTab()).toBe('products');
+      });
+
+      /**
+       * Candado del orden de despliegue: contra un backend viejo el pull de
+       * servicios falla y el catálogo local queda vacío. Con el catálogo vacío
+       * no hay forma de meter un servicio al ticket —ni por pestaña ni por
+       * escáner—, así que un ticket mixto no puede llegar a un backend que no
+       * lo entienda y terminar en `unreconciledSales`.
+       */
+      it('con el catálogo vacío, teclear un código de servicio no agrega nada', async () => {
+        servicios = [];
+        await build();
+
+        component.onSearchChange('CONS-01');
+        component.onSearchKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+
+        expect(component.cart().some((line) => line.kind === 'service')).toBe(false);
+      });
+
+      /**
+       * Regresión crítica: un cajero que dejó la pestaña en Servicios tiene que
+       * poder seguir escaneando cajas de medicamento sin darse cuenta.
+       */
+      it('escanear con la pestaña de servicios activa agrega el MEDICAMENTO', () => {
+        component.catalogTab.set('services');
+        component.onSearchChange('PARA-500');
+        component.onSearchKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+
+        expect(component.cart()).toHaveLength(1);
+        expect(component.cart()[0].kind).toBe('product');
+      });
+
+      it('si no hay medicamento con ese código, cae al código de servicio', () => {
+        servicios = [servicio({ requiresPerformer: false, code: 'CONS-01' })];
+        component.onSearchChange('CONS-01');
+        component.onSearchKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+
+        expect(component.cart()).toHaveLength(1);
+        expect(component.cart()[0].kind).toBe('service');
+      });
+    });
+
+    /**
+     * La pestaña de servicios, en el DOM: tarjetas que se tocan con el dedo en
+     * la tableta del mostrador. Que la tarjeta exista no basta — tiene que
+     * quedar deshabilitada sin turno y meter la partida al pulsarla.
+     */
+    describe('pestaña de servicios — DOM', () => {
+      function host(): HTMLElement {
+        return fixture.nativeElement as HTMLElement;
+      }
+
+      function tarjetas(): HTMLButtonElement[] {
+        return [...host().querySelectorAll<HTMLButtonElement>('[data-testid="service-card"]')];
+      }
+
+      async function abrirPestaña(): Promise<void> {
+        host().querySelector<HTMLButtonElement>('[data-testid="tab-services"]')!.click();
+        fixture.detectChanges();
+        await fixture.whenStable();
+      }
+
+      beforeEach(() => fixture.detectChanges());
+
+      it('las pestañas solo existen si la farmacia tiene servicios', async () => {
+        expect(host().querySelector('[data-testid="tab-services"]')).not.toBeNull();
+
+        servicios = [];
+        await build();
+        fixture.detectChanges();
+
+        expect(host().querySelector('[data-testid="tab-services"]')).toBeNull();
+      });
+
+      it('el clic en la pestaña cambia la lista a servicios', async () => {
+        await abrirPestaña();
+
+        expect(component.catalogTab()).toBe('services');
+        expect(tarjetas()).toHaveLength(1);
+      });
+
+      it('la tarjeta muestra nombre, precio, código y la comisión', async () => {
+        await abrirPestaña();
+
+        const tarjeta = tarjetas()[0];
+        expect(tarjeta.textContent).toContain('Consulta general');
+        expect(tarjeta.textContent).toContain('200.00');
+        expect(tarjeta.textContent).toContain('CONS-01');
+        // El loader de i18n de pruebas es vacío, así que el rótulo llega como
+        // llave; lo que se comprueba es que la tarjeta declare comisión y que
+        // exija doctor, no la traducción.
+        expect(tarjeta.textContent).toContain('sale.services.commission');
+        expect(tarjeta.textContent).toContain('sale.services.performer');
+        expect(tarjeta.getAttribute('aria-label')).toBe('Consulta general');
+      });
+
+      it('un servicio sin comisión no la anuncia', async () => {
+        servicios = [servicio({ commissionRate: 0 })];
+        await build();
+        fixture.detectChanges();
+        await abrirPestaña();
+
+        expect(tarjetas()[0].textContent).not.toContain('sale.services.commission');
+      });
+
+      it('la tarjeta tiene su propio buscador, con etiqueta accesible', async () => {
+        await abrirPestaña();
+
+        expect(host().querySelector('label[for="service-search"]')).not.toBeNull();
+        expect(host().querySelector('#service-search')).not.toBeNull();
+      });
+
+      it('el buscador filtra las tarjetas', async () => {
+        servicios = [servicio(), servicio({ id: 'sv-2', code: 'CUR-01', name: 'Curación' })];
+        await build();
+        fixture.detectChanges();
+        await abrirPestaña();
+        expect(tarjetas()).toHaveLength(2);
+
+        component.serviceSearchTerm.set('cura');
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(tarjetas()).toHaveLength(1);
+        expect(tarjetas()[0].textContent).toContain('Curación');
+      });
+
+      /**
+       * Dos vacíos distintos: "el catálogo está vacío" manda a pedir alta de
+       * servicios; "tu búsqueda no encontró nada" manda a borrar el texto.
+       * Decir lo primero cuando pasó lo segundo hacía perder el viaje.
+       */
+      it('sin coincidencias avisa de la búsqueda, no de que el catálogo esté vacío', async () => {
+        await abrirPestaña();
+        component.serviceSearchTerm.set('resonancia magnética');
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        const vacio = host().querySelector('[data-testid="services-empty"]');
+        expect(tarjetas()).toHaveLength(0);
+        expect(vacio!.textContent).toContain('sale.services.noResults');
+        expect(vacio!.textContent).not.toContain('sale.services.empty');
+      });
+
+      it('sin turno abierto la tarjeta está deshabilitada y no agrega nada', async () => {
+        isOpen.set(false);
+        isAdmin.set(true);
+        await build();
+        fixture.detectChanges();
+        await abrirPestaña();
+
+        expect(tarjetas()[0].disabled).toBe(true);
+        tarjetas()[0].click();
+        expect(component.cart()).toHaveLength(0);
+      });
+
+      it('con turno, el clic en un servicio que exige doctor abre el selector sin meter la partida', async () => {
+        await abrirPestaña();
+
+        tarjetas()[0].click();
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(component.performerDialogVisible()).toBe(true);
+        expect(component.cart()).toHaveLength(0);
+        expect(host().querySelector('[data-testid="performer-option"]')).not.toBeNull();
+      });
+
+      it('elegir al doctor en el selector real mete la partida atribuida', async () => {
+        await abrirPestaña();
+        tarjetas()[0].click();
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        host().querySelector<HTMLButtonElement>('[data-testid="performer-option"]')!.click();
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(component.cart()).toHaveLength(1);
+        const [linea] = component.cart();
+        expect(linea.kind === 'service' && linea.provider?.id).toBe('dr-1');
+      });
+
+      it('un servicio que no exige doctor entra al ticket con un solo clic', async () => {
+        servicios = [servicio({ requiresPerformer: false })];
+        await build();
+        fixture.detectChanges();
+        await abrirPestaña();
+
+        tarjetas()[0].click();
+
+        expect(component.performerDialogVisible()).toBe(false);
+        expect(component.cart()).toHaveLength(1);
+      });
+
+      /**
+       * Un ticket recuperado de `localStorage` (o en pausa) puede traer la
+       * partida sin doctor: el cobro lo bloquea, y sin este botón el cajero no
+       * tenía forma de asignarlo — solo quitar la partida y recapturarla.
+       */
+      describe('partida de servicio sin doctor', () => {
+        beforeEach(async () => {
+          localStorage.setItem(
+            'pos.current-cart.u1',
+            JSON.stringify({
+              lines: [
+                { kind: 'service', service: servicio(), provider: null, quantity: 1, discountAmount: 0 },
+              ],
+              manualDiscounts: {},
+              savedAt: new Date().toISOString(),
+            }),
+          );
+          await build();
+          fixture.detectChanges();
+        });
+
+        it('se recupera con el aviso de que falta quién lo realizó', () => {
+          expect(component.cart()).toHaveLength(1);
+          expect(host().querySelector('[data-testid="assign-performer"]')).not.toBeNull();
+        });
+
+        it('el aviso es pulsable y abre el selector de doctor', async () => {
+          host().querySelector<HTMLButtonElement>('[data-testid="assign-performer"]')!.click();
+          fixture.detectChanges();
+          await fixture.whenStable();
+
+          expect(component.performerDialogVisible()).toBe(true);
+        });
+
+        it('al elegir doctor, la partida queda atribuida y sin duplicarse', async () => {
+          host().querySelector<HTMLButtonElement>('[data-testid="assign-performer"]')!.click();
+          fixture.detectChanges();
+          await fixture.whenStable();
+
+          host().querySelector<HTMLButtonElement>('[data-testid="performer-option"]')!.click();
+          fixture.detectChanges();
+          await fixture.whenStable();
+
+          expect(component.cart()).toHaveLength(1);
+          const [linea] = component.cart();
+          expect(linea.kind === 'service' && linea.provider?.id).toBe('dr-1');
+          expect(host().querySelector('[data-testid="assign-performer"]')).toBeNull();
+          expect(host().querySelector('[data-testid="change-performer"]')).not.toBeNull();
+        });
+      });
+
+      it('una partida con doctor ofrece cambiarlo', async () => {
+        await abrirPestaña();
+        tarjetas()[0].click();
+        fixture.detectChanges();
+        await fixture.whenStable();
+        host().querySelector<HTMLButtonElement>('[data-testid="performer-option"]')!.click();
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        const cambiar = host().querySelector<HTMLButtonElement>('[data-testid="change-performer"]');
+        expect(cambiar).not.toBeNull();
+        expect(cambiar!.getAttribute('aria-label')).toBeTruthy();
+
+        cambiar!.click();
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(component.performerDialogVisible()).toBe(true);
+      });
+    });
+
+    /**
+     * Con el selector de doctor encima, los atajos de la venta no son de esta
+     * pantalla: `Esc` cancela la elección, y si además llegara al atajo global
+     * vaciaría el ticket que se estaba cobrando.
+     */
+    describe('atajos con el selector de doctor abierto', () => {
+      beforeEach(() => {
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        component.addToCart(product());
+        component.addServiceToCart(servicio());
+        expect(component.performerDialogVisible()).toBe(true);
+      });
+
+      it('Esc no vacía el ticket', () => {
+        component.onEscape(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+        expect(component.cart()).toHaveLength(1);
+      });
+
+      it('Esc tampoco limpia la búsqueda a media elección', () => {
+        component.onSearchChange('para');
+
+        component.onEscape(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+        expect(component.searchTerm()).toBe('para');
+      });
+
+      it('Del no quita la última partida', () => {
+        component.onDeleteLine(new KeyboardEvent('keydown', { key: 'Delete' }));
+
+        expect(component.cart()).toHaveLength(1);
+      });
+
+      it('+ y − no cambian la cantidad', () => {
+        component.onSignedQtyKey(new KeyboardEvent('keydown', { key: '+' }));
+
+        expect(component.cart()[0].quantity).toBe(1);
+      });
+
+      it('F9 no abre el cobro encima del selector', () => {
+        component.openCheckout(new KeyboardEvent('keydown', { key: 'F9' }));
+
+        expect(component.checkoutVisible()).toBe(false);
+      });
+
+      it('F6 no pausa la venta', () => {
+        component.holdSaleFromHotkey(new KeyboardEvent('keydown', { key: 'F6' }));
+
+        expect(component.heldSales()).toHaveLength(0);
+        expect(component.cart()).toHaveLength(1);
+      });
+
+      it('Alt+S y Alt+M no cambian de pestaña detrás del modal', () => {
+        component.onServicesTabHotkey(new KeyboardEvent('keydown'));
+        expect(component.catalogTab()).toBe('products');
+
+        component.catalogTab.set('services');
+        component.onProductsTabHotkey(new KeyboardEvent('keydown'));
+        expect(component.catalogTab()).toBe('services');
+      });
+    });
+
+    describe('atajos de pestaña sin diálogos', () => {
+      it('Alt+M vuelve a medicamentos', () => {
+        component.catalogTab.set('services');
+
+        component.onProductsTabHotkey(new KeyboardEvent('keydown'));
+
+        expect(component.catalogTab()).toBe('products');
+      });
+
+      it('Alt+M/Alt+S tampoco se disparan con el diálogo de turno abierto', async () => {
+        isOpen.set(false);
+        await build();
+        expect(component.cashSessionDialogVisible()).toBe(true);
+
+        component.onServicesTabHotkey(new KeyboardEvent('keydown'));
+
+        expect(component.catalogTab()).toBe('products');
+      });
+    });
+  });
+  describe('descartar una venta pendiente', () => {
+    it('solo lo hace un administrador', () => {
+      isAdmin.set(false);
+
+      component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
+
+      expect(saleServiceMock.discardBlockedSale).not.toHaveBeenCalled();
+    });
+
+    it('pide confirmación antes de borrar: puede ser una venta ya cobrada', () => {
+      isAdmin.set(true);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+      component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
+
+      expect(confirm).toHaveBeenCalled();
+      expect(saleServiceMock.discardBlockedSale).not.toHaveBeenCalled();
+      confirm.mockRestore();
+    });
+
+    it('confirmada, la descarta por el id local', () => {
+      isAdmin.set(true);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
+
+      expect(saleServiceMock.discardBlockedSale).toHaveBeenCalledWith('v1');
+      confirm.mockRestore();
+    });
+  });
+
+
+  /**
+   * El ticket abierto sigue a las promociones: antes solo se recalculaba al
+   * tocarlo, así que una promo que llegaba con el ticket armado no aplicaba y
+   * una retirada o vencida seguía descontando.
+   */
+  describe('ticket abierto y cambios de promociones', () => {
+    const promo2x1 = {
+      id: 'promo-1',
+      name: '2x1',
+      rule: { type: 'nxm' as const, buy: 2, pay: 1 },
+      productIds: ['p1'],
+      startsAt: new Date(Date.now() - 60_000).toISOString(),
+      endsAt: null,
+      isActive: true,
+    };
+
+    it('una promo que llega con el ticket armado se aplica', () => {
+      component.addToCart(product(), 2);
+      TestBed.inject(PromoService).setPromotions([promo2x1]);
+      TestBed.tick();
+      expect(component.cart()[0].discountAmount).toBe(50);
+    });
+
+    it('una promo retirada por el sync deja de descontar', () => {
+      TestBed.inject(PromoService).setPromotions([promo2x1]);
+      TestBed.tick();
+      component.addToCart(product(), 2);
+      TestBed.inject(PromoService).setPromotions([]);
+      TestBed.tick();
+      const [line] = component.cart() as Array<{ discountAmount: number; promotion?: unknown }>;
+      expect(line.discountAmount).toBe(0);
+      expect(line.promotion ?? null).toBeNull();
+    });
+
+    it('al abrir el cobro se descarta una promo que venció con el ticket abierto', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-09-25T10:00:00Z'));
+        TestBed.inject(PromoService).setPromotions([
+          { ...promo2x1, startsAt: '2026-09-01T00:00:00Z', endsAt: '2026-09-25T10:05:00Z' },
+        ]);
+        TestBed.tick();
+        component.addToCart(product(), 2);
+        expect(component.cart()[0].discountAmount).toBe(50);
+
+        vi.setSystemTime(new Date('2026-09-25T10:10:00Z'));
+        component.openCheckout();
+        expect(component.cart()[0].discountAmount).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('con el cobro abierto un sync no cambia el total; al cancelar sí se aplica', () => {
+      component.addToCart(product(), 2);
+      component.openCheckout();
+      expect(component.checkoutVisible()).toBe(true);
+
+      TestBed.inject(PromoService).setPromotions([promo2x1]);
+      TestBed.tick();
+      // El diálogo muestra `total()` en vivo: cambiarlo a media venta deja mal
+      // el cambio calculado o la order de la terminal creada por otro monto.
+      expect(component.total()).toBe(100);
+
+      component.checkoutVisible.set(false);
+      TestBed.tick();
+      expect(component.total()).toBe(50);
+    });
+
+    it('si entra una promo, el manual se deja de aplicar y vuelve si la promo sale', () => {
+      component.addToCart(product(), 2);
+      component.updateLineDiscount('product:p1', 20); // 20 % de $100, sin promo
+      TestBed.inject(PromoService).setPromotions([promo2x1]);
+      TestBed.tick();
+      expect(component.cart()[0].discountAmount).toBe(50);
+
+      TestBed.inject(PromoService).setPromotions([]);
+      TestBed.tick();
+      expect(component.cart()[0].discountAmount).toBe(20);
+    });
+  });
+  /**
+   * Autorrecuperación ante una promo que cerró al cobrar: el cobro no registró
+   * nada, así que la pantalla baja promociones, espera a que `PromoService` las
+   * relea, recalcula y pide volver a cobrar con el total nuevo.
+   */
+  describe('promoción cerrada al cobrar', () => {
+    const promo2x1 = {
+      id: 'promo-1',
+      name: '2x1',
+      rule: { type: 'nxm' as const, buy: 2, pay: 1 },
+      productIds: ['p1'],
+      startsAt: new Date(Date.now() - 60_000).toISOString(),
+      endsAt: null,
+      isActive: true,
+    };
+
+    it('baja promociones, espera la relectura, recalcula y avisa el total nuevo', async () => {
+      const promos = TestBed.inject(PromoService);
+      promos.setPromotions([promo2x1]);
+      TestBed.tick();
+      component.addToCart(product(), 2);
+      expect(component.total()).toBe(50);
+      component.openCheckout();
+
+      // El pull trae la baja; `reload` la lee del SQLite (aquí, el mock).
+      const orden: string[] = [];
+      syncSchedulerMock.pullPromotions.mockImplementation(async () => {
+        orden.push('pull');
+        return true;
+      });
+      const reload = vi.spyOn(promos, 'reload').mockImplementation(async () => {
+        orden.push('reload');
+        promos.setPromotions([]);
+      });
+
+      await component.onPromotionClosed('2x1');
+
+      expect(orden).toEqual(['pull', 'reload']);
+      expect(reload).toHaveBeenCalled();
+      expect(component.checkoutVisible()).toBe(false);
+      expect(component.total()).toBe(100);
+      expect(notifyWarn).toHaveBeenCalledWith(
+        'La promoción 2x1 ya terminó. Nuevo total $100.00. Vuelve a cobrar.',
+        'Promoción terminada',
+      );
+      // Nada se registró ni se encoló: el ticket sigue ahí para volver a cobrar.
+      expect(component.cart()).toHaveLength(1);
+      expect(component.lastSale()).toBeNull();
+      expect(notifySuccess).not.toHaveBeenCalled();
+    });
+
+    it('sin red no se queda colgada: recalcula con lo que ya tiene', async () => {
+      vi.useFakeTimers();
+      try {
+        const promos = TestBed.inject(PromoService);
+        promos.setPromotions([promo2x1]);
+        component.addToCart(product(), 2);
+        syncSchedulerMock.pullPromotions.mockReturnValue(new Promise(() => undefined));
+        vi.spyOn(promos, 'reload').mockImplementation(async () => promos.setPromotions([]));
+
+        const recuperacion = component.onPromotionClosed('2x1');
+        expect(component.recoveringPromotion()).toBe(true);
+        // Mientras refresca no se puede reabrir el cobro con el precio viejo.
+        component.openCheckout();
+        expect(component.checkoutVisible()).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(8_000);
+        await recuperacion;
+
+        expect(component.recoveringPromotion()).toBe(false);
+        expect(component.total()).toBe(100);
+        expect(notifyWarn).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe('indicadores de promociones en pantalla', () => {
+    const tiered = {
+      id: 'promo-1',
+      name: '2 por $90',
+      rule: { type: 'tiered' as const, tiers: [{ quantity: 2, price: 90 }] },
+      productIds: ['p1'],
+      startsAt: new Date(Date.now() - 60_000).toISOString(),
+      endsAt: null,
+      isActive: true,
+    };
+
+    it('marca "Promo" en los resultados de búsqueda del producto con promo vigente', () => {
+      TestBed.inject(PromoService).setPromotions([tiered]);
+      component.results.set([product(), product({ id: 'p2', name: 'Ibuprofeno' })]);
+      fixture.detectChanges();
+
+      const badges = fixture.nativeElement.querySelectorAll('[data-testid="search-promo-badge"]');
+      expect(badges).toHaveLength(1);
+      expect(component.hasPromotion(product())).toBe(true);
+      expect(component.hasPromotion(product({ id: 'p2' }))).toBe(false);
+    });
+
+    it('sugiere llevar una más bajo la partida, y deja de hacerlo al completar el paquete', () => {
+      TestBed.inject(PromoService).setPromotions([tiered]);
+      TestBed.tick();
+      component.addToCart(product(), 1);
+      fixture.detectChanges();
+
+      const hint = fixture.nativeElement.querySelector('[data-testid="promo-step-hint"]');
+      expect(hint?.textContent.replace(/\s+/g, ' ').trim()).toBe(
+        'Lleva 1 más: 2 por $90 (ahorras $10.00)',
+      );
+
+      component.bumpQuantity('product:p1', 1);
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('[data-testid="promo-step-hint"]')).toBeNull();
+    });
+
+    it('no sugiere piezas que no hay en existencia', () => {
+      TestBed.inject(PromoService).setPromotions([tiered]);
+      batches = [batch({ quantity: 1 })];
+      component.addToCart(product({ stock: 1 }), 1);
+      expect(component.stepHintOf(component.cart()[0])).toBeNull();
+    });
+
+    it('avisa cuando la partida es de un producto sin sincronizar', () => {
+      const w = window as unknown as { electronAPI?: unknown };
+      const previo = w.electronAPI;
+      w.electronAPI = {};
+      try {
+        component.addToCart(product({ remoteId: null }), 1);
+        component.addToCart(product({ id: 'p2', remoteId: 'r-p2', name: 'Ibuprofeno' }), 1);
+        fixture.detectChanges();
+
+        const badges = fixture.nativeElement.querySelectorAll('[data-testid="unsynced-badge"]');
+        expect(badges).toHaveLength(1);
+        expect(badges[0].getAttribute('aria-label')).toBe(
+          'Sin sincronizar: no entra a promociones hasta el próximo sync',
+        );
+      } finally {
+        w.electronAPI = previo;
+      }
     });
   });
 });

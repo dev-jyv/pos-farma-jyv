@@ -1,17 +1,20 @@
-import { provideHttpClient } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideTranslateService } from '@ngx-translate/core';
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
 import { of, throwError } from 'rxjs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { environment } from '../../../../environments/environment';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { CartLine, Product } from '../../../shared/models';
 import { CashDrawerService } from '../services/cash-drawer.service';
 import { CustomerService } from '../services/customer.service';
 import { MercadoPagoService, PointOrder } from '../services/mercado-pago.service';
+import { PromoService } from '../services/promo.service';
+import { SaleService } from '../services/sale.service';
 import { Checkout } from './checkout';
 
 function product(overrides: Partial<Product> = {}): Product {
@@ -27,7 +30,7 @@ function product(overrides: Partial<Product> = {}): Product {
 }
 
 function cart(overrides: Partial<Product> = {}): CartLine[] {
-  return [{ product: product(overrides), quantity: 2, discountAmount: 0 }];
+  return [{ kind: 'product', product: product(overrides), quantity: 2, discountAmount: 0 }];
 }
 
 function order(status: PointOrder['status'], amount = '100.00'): PointOrder {
@@ -59,6 +62,15 @@ describe('Checkout', () => {
         MessageService,
         { provide: NotificationService, useValue: { error: notifyError, success: vi.fn() } },
         { provide: CashDrawerService, useValue: { open: vi.fn() } },
+        {
+          // Ninguna de estas pruebas ejercita `confirm()`; se sustituye para no
+          // arrastrar la cadena `SaleService -> AuthService -> FIREBASE_AUTH`.
+          provide: SaleService,
+          useValue: {
+            buildPayload: vi.fn(),
+            create: () => of({}),
+          },
+        },
         { provide: CustomerService, useValue: { search: () => of([]), create: () => of({}) } },
         {
           provide: MercadoPagoService,
@@ -83,6 +95,26 @@ describe('Checkout', () => {
     fixture.componentRef.setInput('visible', true);
     await fixture.whenStable();
   });
+
+  afterEach(() => {
+    environment.mercadoPago.terminalEnabled = false;
+  });
+
+  /**
+   * `Checkout.terminalEnabled` se lee una sola vez al construir (campo, no señal),
+   * así que probar el camino "con TPV emparejada" exige recrear el componente
+   * con el flag ya en `true` — tocar `environment` después no lo movería.
+   */
+  function enableTerminal(): void {
+    environment.mercadoPago.terminalEnabled = true;
+    fixture = TestBed.createComponent(Checkout);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('cart', cart());
+    fixture.componentRef.setInput('subtotal', 100);
+    fixture.componentRef.setInput('total', 100);
+    fixture.componentRef.setInput('cashSessionId', 's1');
+    fixture.componentRef.setInput('visible', true);
+  }
 
   describe('efectivo', () => {
     it('al abrir arranca en efectivo con el total ya capturado', () => {
@@ -119,6 +151,7 @@ describe('Checkout', () => {
 
   describe('tarjeta', () => {
     it('sin aprobación de la terminal no se puede cobrar', () => {
+      enableTerminal();
       component.selectPaymentMethod('card');
       expect(component.canConfirm()).toBe(false);
       expect(component.blockers().some((blocker) => blocker.id === 'card')).toBe(true);
@@ -142,6 +175,7 @@ describe('Checkout', () => {
     });
 
     it('no auto-confirma si aún falta la aprobación o hay bloqueo', () => {
+      enableTerminal();
       const confirmSpy = vi.spyOn(component, 'confirm').mockImplementation(() => undefined);
       component.selectPaymentMethod('card');
       // Sin order procesada: canConfirm es false.
@@ -156,6 +190,7 @@ describe('Checkout', () => {
     });
 
     it('muestra la cuenta atrás de la orden mientras la terminal no cobra', () => {
+      enableTerminal();
       component.selectPaymentMethod('card');
       component.startCardPayment();
 
@@ -182,6 +217,7 @@ describe('Checkout', () => {
     });
 
     it('exige tarjeta aprobada **y** efectivo suficiente', () => {
+      enableTerminal();
       component.selectPaymentMethod('mixed');
       expect(component.canConfirm()).toBe(false);
 
@@ -306,5 +342,107 @@ describe('Checkout', () => {
     expect(component.isBlocked('cash')).toBe(true);
     expect(component.blockerDescribedBy('cash')).toBe('checkout-blocker-cash');
     expect(component.blockerDescribedBy('billing')).toBeNull();
+  });
+  /**
+   * Una promo del ticket cerró antes de registrar la venta: la detecta el propio
+   * cobro (venció o el pull de cada hora trajo su baja) o la rechaza el backend
+   * en línea. En ambos casos la venta **no** se registra y se avisa a la
+   * pantalla de venta para que recalcule.
+   */
+  describe('promoción cerrada al cobrar', () => {
+    const conPromo = (): CartLine[] => [
+      {
+        kind: 'product',
+        product: product(),
+        quantity: 2,
+        discountAmount: 50,
+        promotion: { id: 'promo-1', name: '2x1', discountAmount: 50 },
+      },
+    ];
+    const promo2x1 = {
+      id: 'promo-1',
+      name: '2x1',
+      rule: { type: 'nxm' as const, buy: 2, pay: 1 },
+      productIds: ['p1'],
+      startsAt: new Date(Date.now() - 60_000).toISOString(),
+      endsAt: null,
+      isActive: true,
+    };
+
+    function montar(lines: CartLine[]): void {
+      fixture.componentRef.setInput('cart', lines);
+      fixture.componentRef.setInput('total', 50);
+      component.amountReceived.set(50);
+    }
+
+    it('si la promo aplicada ya cerró, no registra la venta y avisa', () => {
+      TestBed.inject(PromoService).setPromotions([]);
+      const create = vi.spyOn(TestBed.inject(SaleService), 'create');
+      const avisos: string[] = [];
+      component.promotionClosed.subscribe((name) => avisos.push(name));
+      montar(conPromo());
+
+      component.confirm();
+
+      expect(avisos).toEqual(['2x1']);
+      expect(create).not.toHaveBeenCalled();
+      expect(component.submitting()).toBe(false);
+    });
+
+    it('con la promo vigente cobra normal', () => {
+      TestBed.inject(PromoService).setPromotions([promo2x1]);
+      const create = vi.spyOn(TestBed.inject(SaleService), 'create');
+      const avisos: string[] = [];
+      component.promotionClosed.subscribe((name) => avisos.push(name));
+      montar(conPromo());
+
+      component.confirm();
+
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(avisos).toEqual([]);
+    });
+
+    it('el rechazo en línea del backend se convierte en aviso, no en error suelto', () => {
+      TestBed.inject(PromoService).setPromotions([promo2x1]);
+      vi.spyOn(TestBed.inject(SaleService), 'create').mockReturnValue(
+        throwError(
+          () =>
+            new HttpErrorResponse({
+              status: 400,
+              error: { error: { message: 'La promoción "2x1" no está vigente' } },
+            }),
+        ),
+      );
+      const avisos: string[] = [];
+      component.promotionClosed.subscribe((name) => avisos.push(name));
+      const completadas = vi.fn();
+      component.completed.subscribe(completadas);
+      montar(conPromo());
+
+      component.confirm();
+
+      expect(avisos).toEqual(['2x1']);
+      expect(notifyError).not.toHaveBeenCalled();
+      expect(completadas).not.toHaveBeenCalled();
+      expect(component.submitting()).toBe(false);
+    });
+
+    it('con la tarjeta ya cobrada en la terminal registra la venta aunque la promo cerrara', () => {
+      enableTerminal();
+      TestBed.inject(PromoService).setPromotions([]);
+      const create = vi.spyOn(TestBed.inject(SaleService), 'create');
+      const avisos: string[] = [];
+      component.promotionClosed.subscribe((name) => avisos.push(name));
+      fixture.componentRef.setInput('cart', conPromo());
+      fixture.componentRef.setInput('total', 50);
+      component.paymentMethod.set('card');
+      component.cardOrder.set(order('processed', '50.00'));
+
+      component.confirm();
+
+      // El cliente ya pagó ese monto: no registrar la venta dejaría el cargo huérfano.
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(avisos).toEqual([]);
+    });
   });
 });

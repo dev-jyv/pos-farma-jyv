@@ -5,6 +5,7 @@ import { Router } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../../environments/environment';
+import { CashSessionService } from '../../features/pos/services/cash-session.service';
 import { FIREBASE_AUTH } from '../firebase/firebase.providers';
 import { NotificationService } from '../notifications/notification.service';
 import { AuthService } from './auth.service';
@@ -20,9 +21,13 @@ describe('AuthService', () => {
   let service: AuthService;
   let http: HttpTestingController;
   let navigate: ReturnType<typeof vi.fn>;
+  let autoCloseForExpiry: ReturnType<typeof vi.fn>;
+  let sessionExpired: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     navigate = vi.fn(() => Promise.resolve(true));
+    autoCloseForExpiry = vi.fn(() => Promise.resolve());
+    sessionExpired = vi.fn();
 
     TestBed.configureTestingModule({
       providers: [
@@ -32,7 +37,8 @@ describe('AuthService', () => {
         // servicio nunca la usa más allá de suscribirse.
         { provide: FIREBASE_AUTH, useValue: { currentUser: null, onAuthStateChanged: () => () => undefined } },
         { provide: Router, useValue: { navigate } },
-        { provide: NotificationService, useValue: { sessionExpired: vi.fn(), error: vi.fn(), success: vi.fn() } },
+        { provide: NotificationService, useValue: { sessionExpired: sessionExpired, error: vi.fn(), success: vi.fn() } },
+        { provide: CashSessionService, useValue: { autoCloseForExpiry } },
       ],
     });
 
@@ -155,6 +161,59 @@ describe('AuthService', () => {
       service.fetchProfile().subscribe();
 
       http.expectOne(`${environment.apiUrl}/auth/me`).flush({ data: null });
+    });
+  });
+
+  /**
+   * A las 24:00 (hora CDMX) el backend deja de aceptar el token, y la sesión se
+   * cierra. **El turno de caja NO.**
+   *
+   * Antes se cerraba solo aquí, y era el peor momento posible: quedaba cerrado
+   * en local con sus gastos y ventas todavía en cola, el cierre viajaba en el
+   * mismo ciclo, y cualquier rezagado llegaba al servidor contra un turno ya
+   * cerrado y moría en 400 — sin nadie delante que viera el error.
+   *
+   * Ahora el turno sobrevive a la medianoche y lo liquida
+   * `SyncScheduler.settleStaleShift()` al entrar la siguiente sesión: primero
+   * los movimientos y las ventas, después el cierre, y solo entonces se ofrece
+   * abrir el turno nuevo.
+   */
+  describe('expiración de sesión a medianoche', () => {
+    it('avisa y sale', async () => {
+      vi.spyOn(service, 'logout').mockResolvedValue(undefined);
+
+      await service.endExpiredSession();
+
+      expect(sessionExpired).toHaveBeenCalled();
+      expect(navigate).toHaveBeenCalledWith(['/login']);
+    });
+
+    it('NO cierra el turno de caja, ni con sesión activa', async () => {
+      vi.spyOn(service, 'user').mockReturnValue({ uid: 'u1' } as never);
+      vi.spyOn(service, 'profile').mockReturnValue({ email: 'caja@farmajyv.mx' } as never);
+      vi.spyOn(service, 'logout').mockResolvedValue(undefined);
+
+      await service.endExpiredSession();
+
+      // El turno queda abierto a propósito: se liquida al entrar la próxima vez.
+      expect(autoCloseForExpiry).not.toHaveBeenCalled();
+    });
+
+    it('el aviso sale antes de navegar al login', async () => {
+      const orden: string[] = [];
+      sessionExpired.mockImplementation(() => {
+        orden.push('avisa');
+      });
+      navigate.mockImplementation(() => {
+        orden.push('navega-login');
+        return Promise.resolve(true);
+      });
+      vi.spyOn(service, 'user').mockReturnValue({ uid: 'u1' } as never);
+      vi.spyOn(service, 'logout').mockResolvedValue(undefined);
+
+      await service.endExpiredSession();
+
+      expect(orden).toEqual(['avisa', 'navega-login']);
     });
   });
 });

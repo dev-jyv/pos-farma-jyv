@@ -1,0 +1,158 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 items-center gap-3 border-b border-[var(--pos-border)] px-4 py-3">
+    <p-button icon="pi pi-arrow-left" [text]="true" (onClick)="cancel()" [ariaLabel]="'invoices.cancel' | translate" />
+    <h1 class="text-lg font-bold text-slate-900">{{ 'invoices.newTitle' | translate }}</h1>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-5">
+    <form [formGroup]="form" (ngSubmit)="save()" class="mx-auto flex max-w-3xl flex-col gap-6">
+      <!-- Tipo de comprobante: lo primero que decide el cajero, botones grandes en vez de un select chico. -->
+      <div class="flex flex-col gap-2">
+        <span class="text-sm font-semibold text-slate-700">{{ 'invoices.type' | translate }}</span>
+        <div class="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            (click)="selectType(true)"
+            class="flex flex-col items-center gap-2 rounded-xl border-2 px-4 py-4 transition"
+            [class]="
+              form.controls.hasInvoice.value
+                ? 'border-[var(--pos-primary)] bg-[var(--pos-primary-soft)] text-[var(--pos-primary-ink)]'
+                : 'border-slate-200 text-slate-500 hover:border-slate-300'
+            "
+          >
+            <i class="pi pi-file text-2xl"></i>
+            <span class="text-sm font-bold">{{ 'invoices.withInvoice' | translate }}</span>
+          </button>
+          <button
+            type="button"
+            (click)="selectType(false)"
+            class="flex flex-col items-center gap-2 rounded-xl border-2 px-4 py-4 transition"
+            [class]="
+              !form.controls.hasInvoice.value
+                ? 'border-[var(--pos-primary)] bg-[var(--pos-primary-soft)] text-[var(--pos-primary-ink)]'
+                : 'border-slate-200 text-slate-500 hover:border-slate-300'
+            "
+          >
+            <i class="pi pi-receipt text-2xl"></i>
+            <span class="text-sm font-bold">{{ 'invoices.withoutInvoice' | translate }}</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="grid gap-6 md:grid-cols-2">
+        <!-- Datos: columna izquierda. -->
+        <div class="flex flex-col gap-4">
+          <div class="flex flex-col gap-1">
+            <label for="invoice-supplier" class="text-sm font-medium text-slate-700">{{ 'invoices.supplier' | translate }}</label>
+            <p-select
+              inputId="invoice-supplier"
+              formControlName="supplierId"
+              [options]="suppliers()"
+              optionLabel="name"
+              optionValue="id"
+              [filter]="true"
+              filterBy="name"
+              [placeholder]="'invoices.supplierPlaceholder' | translate"
+              styleClass="w-full"
+            />
+            @if (form.controls.supplierId.invalid && form.controls.supplierId.touched) {
+              <span class="text-xs text-red-600">{{ 'invoices.supplierRequired' | translate }}</span>
+            }
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <label for="invoice-number" class="text-sm font-medium text-slate-700">{{ 'invoices.number' | translate }}</label>
+            <input pInputText id="invoice-number" formControlName="invoiceNumber" autocomplete="off" maxlength="60" class="w-full" />
+            @if (form.controls.invoiceNumber.invalid && form.controls.invoiceNumber.touched) {
+              <span class="text-xs text-red-600">{{ 'invoices.numberRequired' | translate }}</span>
+            }
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div class="flex flex-col gap-1">
+              <label for="invoice-date" class="text-sm font-medium text-slate-700">{{ 'invoices.date' | translate }}</label>
+              <input
+                id="invoice-date"
+                type="date"
+                formControlName="invoiceDate"
+                class="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <label for="invoice-total" class="text-sm font-medium text-slate-700">{{ 'invoices.total' | translate }}</label>
+              <p-inputnumber
+                inputId="invoice-total"
+                formControlName="totalAmount"
+                mode="currency"
+                currency="MXN"
+                locale="es-MX"
+                styleClass="w-full"
+              />
+            </div>
+          </div>
+          @if (form.controls.totalAmount.invalid && form.controls.totalAmount.touched) {
+            <span class="-mt-2 text-xs text-red-600">{{ 'invoices.totalRequired' | translate }}</span>
+          }
+        </div>
+
+        <!-- Comprobante: columna derecha, zona de arrastrar y soltar con preview. -->
+        <div class="flex flex-col gap-1">
+          <span class="text-sm font-medium text-slate-700">{{ 'invoices.file' | translate }}</span>
+
+          @if (!selectedFile()) {
+            <label
+              for="invoice-file"
+              (drop)="onDrop($event)"
+              (dragover)="onDragOver($event)"
+              (dragleave)="onDragLeave()"
+              class="flex flex-1 min-h-40 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 text-center transition"
+              [class]="dragging() ? 'border-[var(--pos-primary)] bg-[var(--pos-primary-soft)]' : 'border-slate-300 hover:border-slate-400'"
+            >
+              <i class="pi pi-cloud-upload text-3xl text-slate-400"></i>
+              <span class="text-sm font-semibold text-slate-700">{{ 'invoices.dropHere' | translate }}</span>
+              <span class="text-xs text-slate-400">{{ 'invoices.fileHint' | translate }}</span>
+            </label>
+            <input
+              id="invoice-file"
+              type="file"
+              accept="application/pdf,image/jpeg,image/png,image/webp"
+              (change)="onFileSelected($event)"
+              class="sr-only"
+            />
+          } @else {
+            <div class="flex flex-1 min-h-40 flex-col items-center justify-center gap-2 rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-6 text-center">
+              @if (filePreviewUrl()) {
+                <img [src]="filePreviewUrl()" alt="" class="max-h-28 rounded-lg object-contain shadow-sm" />
+              } @else {
+                <i class="pi pi-file-pdf text-4xl text-emerald-700"></i>
+              }
+              <span class="max-w-full truncate text-sm font-semibold text-emerald-800">{{ selectedFile()!.name }}</span>
+              <button
+                type="button"
+                (click)="clearFile()"
+                class="text-xs font-medium text-red-600 hover:underline"
+              >
+                {{ 'invoices.removeFile' | translate }}
+              </button>
+            </div>
+          }
+          @if (fileError()) {
+            <span class="text-xs text-red-600">{{ fileError() }}</span>
+          }
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2 border-t border-[var(--pos-border)] pt-4">
+        <p-button
+          type="button"
+          [label]="'invoices.cancel' | translate"
+          severity="secondary"
+          [outlined]="true"
+          (onClick)="cancel()"
+        />
+        <p-button type="submit" [label]="'invoices.save' | translate" icon="pi pi-check" [loading]="saving()" />
+      </div>
+    </form>
+  </div>
+</div>

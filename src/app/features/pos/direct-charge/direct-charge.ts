@@ -19,7 +19,6 @@ import { SelectModule } from 'primeng/select';
 import { TableModule } from 'primeng/table';
 import { TabsModule } from 'primeng/tabs';
 import { TagModule } from 'primeng/tag';
-import { toDataURL as qrToDataUrl } from 'qrcode';
 import { EMPTY, Observable, catchError, finalize, interval, switchMap, takeWhile } from 'rxjs';
 
 import { getApiErrorMessage } from '../../../core/api/api.utils';
@@ -152,7 +151,11 @@ export class DirectChargeScreen {
         this.qrDataUrl.set(null);
         return;
       }
-      qrToDataUrl(link, { width: 220, margin: 1 })
+      // Carga diferida: `qrcode` es CommonJS y arrastra ~90 kB con bailout de
+      // optimización. Importarlo aquí lo saca del arranque de la pantalla —solo
+      // pesa cuando de verdad hay un link de pago que dibujar.
+      void import('qrcode')
+        .then(({ toDataURL }) => toDataURL(link, { width: 220, margin: 1 }))
         .then((dataUrl) => this.qrDataUrl.set(dataUrl))
         .catch(() => this.qrDataUrl.set(null));
     });

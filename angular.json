@@ -26,6 +26,10 @@
             ],
             "styles": [
               "src/styles.css"
+            ],
+            "allowedCommonJsDependencies": [
+              "qrcode",
+              "dijkstrajs"
             ]
           },
           "configurations": {
@@ -39,8 +43,8 @@
               "budgets": [
                 {
                   "type": "initial",
-                  "maximumWarning": "700kB",
-                  "maximumError": "1.5MB"
+                  "maximumWarning": "1.2MB",
+                  "maximumError": "1.6MB"
                 },
                 {
                   "type": "anyComponentStyle",
@@ -48,7 +52,15 @@
                   "maximumError": "8kB"
                 }
               ],
-              "outputHashing": "all"
+              "outputHashing": "all",
+              "optimization": {
+                "scripts": true,
+                "styles": {
+                  "minify": true,
+                  "inlineCritical": false
+                },
+                "fonts": true
+              }
             },
             "development": {
               "optimization": false,
@@ -61,6 +73,35 @@
                 }
               ]
             },
+            "dev-cloud": {
+              "optimization": false,
+              "extractLicenses": false,
+              "sourceMap": true,
+              "fileReplacements": [
+                {
+                  "replace": "src/environments/environment.ts",
+                  "with": "src/environments/environment.dev-cloud.ts"
+                }
+              ]
+            },
+            "electron-dev-cloud": {
+              "baseHref": "./",
+              "outputHashing": "all",
+              "fileReplacements": [
+                {
+                  "replace": "src/environments/environment.ts",
+                  "with": "src/environments/environment.electron-dev-cloud.ts"
+                }
+              ],
+              "optimization": {
+                "scripts": true,
+                "styles": {
+                  "minify": true,
+                  "inlineCritical": false
+                },
+                "fonts": true
+              }
+            },
             "electron": {
               "baseHref": "./",
               "outputHashing": "all",
@@ -69,19 +110,33 @@
                   "replace": "src/environments/environment.ts",
                   "with": "src/environments/environment.electron.ts"
                 }
-              ]
+              ],
+              "optimization": {
+                "scripts": true,
+                "styles": {
+                  "minify": true,
+                  "inlineCritical": false
+                },
+                "fonts": true
+              }
             }
           },
           "defaultConfiguration": "production"
         },
         "serve": {
           "builder": "@angular/build:dev-server",
+          "options": {
+            "port": 4400
+          },
           "configurations": {
             "production": {
               "buildTarget": "farma-jyv-pos:build:production"
             },
             "development": {
               "buildTarget": "farma-jyv-pos:build:development"
+            },
+            "dev-cloud": {
+              "buildTarget": "farma-jyv-pos:build:dev-cloud"
             }
           },
           "defaultConfiguration": "development"

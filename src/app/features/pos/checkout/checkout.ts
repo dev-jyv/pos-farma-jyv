@@ -42,9 +42,20 @@ import {
   CONTROLLED_GROUP_RULES,
   ControlledGroupRule,
   getControlledRule,
+  isValidDoctorLicense,
   resolveControlledRequirements,
   validatePrescription,
 } from '../../../shared/utils/controlled';
+import {
+  commissionTotalOf,
+  isProductLine,
+  isServiceLine,
+  lineGross,
+  lineName,
+  lineNeedsProvider,
+  lineTaxable,
+  servicesTotalOf,
+} from '../../../shared/utils/cart-line';
 import { previewTaxSummary } from '../../../shared/utils/taxes';
 import { formatCountdown, pointOrderSecondsLeft } from '../../../shared/utils/point-order';
 import { CashDrawerService } from '../services/cash-drawer.service';
@@ -56,8 +67,13 @@ import {
   PointOrder,
 } from '../services/mercado-pago.service';
 import { SaleService, newIdempotencyKey } from '../services/sale.service';
+import { PromoService, closedPromotionFromError } from '../services/promo.service';
 import { roundMoney } from '../../../shared/utils/money';
 import { resolveTender } from '../../../shared/utils/tender';
+
+/** Mismas reglas que el backend (`schemas/common.ts`): un RFC que pasa aquí y no allá deja la venta cobrada y rechazada. */
+const RFC_PATTERN = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/i;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const CASH_QUICK_AMOUNTS = [0, 10, 20, 50, 100, 200];
 
@@ -114,6 +130,7 @@ export class Checkout {
   private readonly mercadoPago = inject(MercadoPagoService);
   private readonly notifications = inject(NotificationService);
   private readonly cashDrawer = inject(CashDrawerService);
+  private readonly promoService = inject(PromoService);
   /**
    * `takeUntilDestroyed()` sin argumento exige contexto de inyección, y el sondeo
    * de la terminal arranca dentro de un `subscribe` (ya fuera de él): sin este
@@ -138,6 +155,12 @@ export class Checkout {
 
   readonly closed = output<void>();
   readonly completed = output<Sale>();
+  /**
+   * Una promo del ticket cerró antes de registrar la venta (nombre de la promo).
+   * La venta **no** se registró: la pantalla de venta refresca las promociones,
+   * recalcula el ticket y pide volver a cobrar.
+   */
+  readonly promotionClosed = output<string>();
 
   readonly paymentMethods: { labelKey: string; value: PaymentMethod; icon: string }[] = [
     { labelKey: 'payment.cash', value: 'cash', icon: 'pi pi-wallet' },
@@ -225,7 +248,9 @@ export class Checkout {
    * resueltos con las mismas reglas que aplica el backend antes de registrar la venta.
    */
   readonly controlled = computed(() =>
-    resolveControlledRequirements(this.cart().map((line) => line.product)),
+    // Solo la rama de producto: un servicio nunca es sustancia controlada, así
+    // que una consulta no puede exigir receta ni folio.
+    resolveControlledRequirements(this.cart().filter(isProductLine).map((line) => line.product)),
   );
   readonly needsPrescription = computed(() => this.controlled().requiresPrescription);
   readonly needsFolio = computed(() => this.controlled().requiresFolio);
@@ -236,6 +261,7 @@ export class Checkout {
   /** Partidas controladas, para que el cajero sepa cuál medicamento exige la receta. */
   readonly controlledLines = computed(() =>
     this.cart()
+      .filter(isProductLine)
       .map((line) => ({
         name: line.product.name,
         rule: getControlledRule(line.product.controlledGroup),
@@ -257,12 +283,25 @@ export class Checkout {
    * backend; la venta guardada llevará el desglose que él calcule.
    */
   readonly taxSummary = computed(() =>
+    // `lineTaxable` traduce el `taxMode` del servicio a las banderas fiscales
+    // que `taxes.ts` ya entiende: un ticket mixto desglosa impuestos sin tocar
+    // esa utilidad.
     previewTaxSummary(
-      this.cart().map((line) => ({
-        product: line.product,
-        grossAmount: line.product.salePrice * line.quantity - line.discountAmount,
-      })),
+      this.cart().map((line) => ({ product: lineTaxable(line), grossAmount: lineGross(line) })),
     ),
+  );
+
+  /* ── Servicios del ticket ─────────────────────────────────────────────── */
+
+  readonly serviceLines = computed(() => this.cart().filter(isServiceLine));
+  readonly servicesTotal = computed(() => servicesTotalOf(this.cart()));
+  readonly commissionTotal = computed(() => commissionTotalOf(this.cart()));
+  /**
+   * Servicios que exigen doctor y todavía no lo tienen. Bloquea el cobro: la
+   * comisión no se puede acreditar a nadie después, y el corte la necesita.
+   */
+  readonly servicesMissingProvider = computed(() =>
+    this.cart().filter(lineNeedsProvider).map((line) => lineName(line)),
   );
   readonly deviceOptions = computed(() =>
     this.devices().map((device) => ({
@@ -342,13 +381,18 @@ export class Checkout {
    * (grupos V/VI) si el cajero la capturó: es trazabilidad que ya escribió a mano.
    */
   readonly hasPrescriptionData = computed(
-    () => this.doctorName().trim().length > 0 && this.doctorLicense().trim().length > 0,
+    () => this.doctorName().trim().length > 0 && isValidDoctorLicense(this.doctorLicense()),
   );
   readonly billingOk = computed(() => {
     if (!this.requiresInvoice()) {
       return true;
     }
-    return this.billingRfc().trim().length >= 12 && this.billingName().trim().length > 0;
+    const email = this.billingEmail().trim();
+    return (
+      RFC_PATTERN.test(this.billingRfc().trim()) &&
+      this.billingName().trim().length > 0 &&
+      (!email || EMAIL_PATTERN.test(email))
+    );
   });
   readonly itemCount = computed(() =>
     this.cart().reduce((sum, line) => sum + line.quantity, 0),
@@ -381,7 +425,7 @@ export class Checkout {
     if (this.requiresInvoice() && !this.billingOk()) {
       reasons.push({
         id: 'billing',
-        texto: 'Para facturar se requiere RFC (12–13 caracteres) y razón social.',
+        texto: 'Para facturar se requiere un RFC válido, razón social y, si se captura, un correo válido.',
       });
     }
     return reasons;
@@ -755,6 +799,20 @@ export class Checkout {
     if (!this.canConfirm()) {
       return;
     }
+    // El cobro pudo quedarse abierto mientras la promo vencía o el pull de cada
+    // hora traía su baja: registrarla así sube una venta marcada para revisión
+    // con un precio que ya no existe. Se corta aquí, con el cliente enfrente.
+    //
+    // **Salvo que la terminal ya cobró**: con la tarjeta aprobada el cliente pagó
+    // ese monto, y no registrar la venta dejaría el cargo sin venta. El backend
+    // acepta la venta y la marca para revisión, que es lo correcto en ese caso.
+    if (!this.cardOrderApproved()) {
+      const closed = this.promoService.findClosedPromotion(this.cart());
+      if (closed) {
+        this.promotionClosed.emit(closed);
+        return;
+      }
+    }
     this.submitting.set(true);
     const customer = this.selectedCustomer();
     const payload = this.saleService.buildPayload(
@@ -812,6 +870,13 @@ export class Checkout {
         },
         error: (error: unknown) => {
           this.submitting.set(false);
+          // Rechazo en línea por promo cerrada: la venta no existe en ningún lado
+          // (ni en la cola), así que la pantalla puede recalcular y volver a cobrar.
+          const closed = closedPromotionFromError(error);
+          if (closed) {
+            this.promotionClosed.emit(closed);
+            return;
+          }
           this.notifications.error(getApiErrorMessage(error));
         },
       });

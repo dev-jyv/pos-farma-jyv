@@ -1,0 +1,1 @@
+ALTER TABLE "Sale" ADD COLUMN "needsRemoteVoid" BOOLEAN NOT NULL DEFAULT false;

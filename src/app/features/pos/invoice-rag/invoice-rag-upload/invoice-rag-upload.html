@@ -1,0 +1,85 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <p-button icon="pi pi-arrow-left" [text]="true" (onClick)="cancel()" [ariaLabel]="'invoiceRag.back' | translate" />
+    <div>
+      <h1 class="text-lg font-bold text-slate-900">{{ 'invoiceRag.newTitle' | translate }}</h1>
+      <p class="text-xs text-slate-500">{{ 'invoiceRag.newHint' | translate }}</p>
+    </div>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-5">
+    @if (!available) {
+      <p class="mx-auto max-w-3xl rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        {{ 'invoiceRag.desktopOnly' | translate }}
+      </p>
+    } @else {
+      <div class="mx-auto flex h-full max-w-4xl flex-col gap-4">
+        @if (!selectedFile()) {
+          <label
+            for="invoice-rag-file"
+            (drop)="onDrop($event)"
+            (dragover)="onDragOver($event)"
+            (dragleave)="onDragLeave()"
+            class="flex min-h-64 flex-1 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 text-center transition"
+            [class]="dragging() ? 'border-(--pos-primary) bg-(--pos-primary-soft)' : 'border-slate-300 hover:border-slate-400'"
+          >
+            <i class="pi pi-cloud-upload text-4xl text-slate-400"></i>
+            <span class="text-sm font-semibold text-slate-700">{{ 'invoiceRag.dropHere' | translate }}</span>
+            <span class="text-xs text-slate-400">{{ 'invoiceRag.fileHint' | translate }}</span>
+          </label>
+          <input
+            id="invoice-rag-file"
+            type="file"
+            accept="application/pdf,image/jpeg,image/png,image/webp"
+            (change)="onFileSelected($event)"
+            class="sr-only"
+          />
+        } @else {
+          <div class="flex items-center gap-3">
+            <i class="pi text-xl text-slate-500" [class]="selectedFile()!.type === 'application/pdf' ? 'pi-file-pdf' : 'pi-image'"></i>
+            <span class="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800">{{ selectedFile()!.name }}</span>
+            <p-button
+              [label]="'invoiceRag.removeFile' | translate"
+              severity="danger"
+              [text]="true"
+              size="small"
+              [disabled]="step() !== 'idle'"
+              (onClick)="clearFile()"
+            />
+          </div>
+          @if (previewUrl(); as url) {
+            <app-invoice-rag-preview [url]="url" [mimeType]="selectedFile()!.type" [fileName]="selectedFile()!.name" />
+          }
+        }
+
+        @if (fileError()) {
+          <span class="text-xs text-red-600">{{ fileError() }}</span>
+        }
+
+        <div class="flex items-center justify-end gap-2 border-t border-(--pos-border) pt-4">
+          @if (step() !== 'idle') {
+            <span class="mr-auto text-sm text-slate-500">
+              <i class="pi pi-spin pi-spinner mr-1"></i>
+              {{ (step() === 'saving' ? 'invoiceRag.stepSaving' : 'invoiceRag.stepExtracting') | translate }}
+            </span>
+          }
+          <p-button
+            type="button"
+            [label]="'invoiceRag.cancel' | translate"
+            severity="secondary"
+            [outlined]="true"
+            (onClick)="cancel()"
+          />
+          <p-button
+            type="button"
+            icon="pi pi-sparkles"
+            [label]="'invoiceRag.analyze' | translate"
+            [disabled]="!selectedFile()"
+            [loading]="step() !== 'idle'"
+            (onClick)="analyze()"
+          />
+        </div>
+      </div>
+    }
+  </div>
+</div>

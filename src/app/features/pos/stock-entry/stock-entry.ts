@@ -15,13 +15,14 @@ import { CheckboxModule } from 'primeng/checkbox';
 import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
 import { SelectModule } from 'primeng/select';
-import { Subject, debounceTime, distinctUntilChanged, finalize, switchMap } from 'rxjs';
+import { Subject, debounceTime, finalize, switchMap } from 'rxjs';
 
 import { getApiErrorMessage } from '../../../core/api/api.utils';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { Category, ControlledGroup, Product, PurchaseInvoice } from '../../../shared/models';
 import { CONTROLLED_GROUPS, CONTROLLED_GROUP_RULES } from '../../../shared/utils/controlled';
 import { roundMoney } from '../../../shared/utils/money';
+import { DEFAULT_UNIT, buildUnitOptions } from '../../../shared/utils/units';
 import { CategoryService } from '../services/category.service';
 import { ProductService } from '../services/product.service';
 import {
@@ -100,7 +101,7 @@ export class StockEntryScreen {
   readonly activeIngredient = signal('');
   readonly concentration = signal('');
   readonly categoryId = signal<string | null>(null);
-  readonly unit = signal('pieza');
+  readonly unit = signal<string>(DEFAULT_UNIT);
   readonly salePrice = signal<number | null>(null);
   readonly minStock = signal<number | null>(0);
   readonly controlledGroup = signal<ControlledGroup | null>(null);
@@ -120,7 +121,8 @@ export class StockEntryScreen {
   /** Resultado del último guardado, para confirmar en pantalla lo que quedó. */
   readonly lastResult = signal<{ name: string; added: number; stock: number } | null>(null);
 
-  readonly unitOptions = ['pieza', 'caja', 'frasco', 'ampolleta', 'sobre', 'tubo', 'kit'];
+  /** Lista cerrada; conserva la unidad ya guardada si viniera de fuera del catálogo. */
+  readonly unitOptions = computed(() => buildUnitOptions(this.unit()));
   readonly controlledOptions = [
     { label: 'Sin grupo (venta libre)', value: null },
     ...CONTROLLED_GROUPS.map((group) => ({
@@ -187,7 +189,12 @@ export class StockEntryScreen {
     this.search$
       .pipe(
         debounceTime(400),
-        distinctUntilChanged(),
+        // Sin `distinctUntilChanged()` a propósito — mismo bug real que en
+        // `sale.ts`: borrar a menos del mínimo y volver a teclear el MISMO
+        // término de antes lo descartaba como duplicado, y aquí además dejaba
+        // `searching` colgado en `true` para siempre (el `subscribe` nunca
+        // volvía a correr). El catálogo es local (SQLite vía IPC): repetir la
+        // consulta no cuesta nada.
         switchMap((term) => this.products.search(term)),
         takeUntilDestroyed(this.destroyRef),
       )
@@ -220,7 +227,7 @@ export class StockEntryScreen {
 
   loadCategories(): void {
     this.categoriesError.set(null);
-    this.categories.list().subscribe({
+    this.categories.options().subscribe({
       next: (categories) => this.categoryOptions.set(categories),
       error: (error: unknown) => this.categoriesError.set(getApiErrorMessage(error)),
     });
@@ -251,7 +258,7 @@ export class StockEntryScreen {
     this.activeIngredient.set(product.activeIngredient ?? '');
     this.concentration.set(product.concentration ?? '');
     this.categoryId.set(product.categoryId ?? null);
-    this.unit.set(product.unit ?? 'pieza');
+    this.unit.set(product.unit ?? DEFAULT_UNIT);
     this.salePrice.set(product.salePrice);
     this.minStock.set(product.minStock ?? 0);
     this.controlledGroup.set(product.controlledGroup ?? null);
@@ -313,7 +320,9 @@ export class StockEntryScreen {
 
     const existing = this.selectedProduct();
     if (existing) {
-      payload.productId = existing.id;
+      // El backend conoce el producto por su id de Firestore (`remoteId`), no
+      // por el id local de SQLite — mismo caso que `SaleService.buildPayload`.
+      payload.productId = existing.remoteId ?? existing.id;
       const changes = this.productChanges(existing);
       if (Object.keys(changes).length > 0) {
         payload.productUpdate = changes;
@@ -330,8 +339,6 @@ export class StockEntryScreen {
       .subscribe({
         next: (result) => {
           this.lastResult.set({ name: result.product.name, added, stock: result.stock });
-          // El stock que acaba de entrar debe verse en la próxima venta.
-          this.products.invalidate();
           this.notifications.success(
             `${result.product.name}: +${added} piezas. Stock: ${result.stock}.`,
           );
@@ -379,7 +386,7 @@ export class StockEntryScreen {
     if (fields.sku !== existing.sku) changes.sku = fields.sku;
     if (fields.salePrice !== existing.salePrice) changes.salePrice = fields.salePrice;
     if (fields.categoryId !== (existing.categoryId ?? null)) changes.categoryId = fields.categoryId;
-    if (fields.unit !== (existing.unit ?? 'pieza')) changes.unit = fields.unit;
+    if (fields.unit !== (existing.unit ?? DEFAULT_UNIT)) changes.unit = fields.unit;
     if (fields.minStock !== (existing.minStock ?? 0)) changes.minStock = fields.minStock;
     if (fields.barcode !== existing.barcode && (fields.barcode || existing.barcode)) {
       changes.barcode = fields.barcode ?? '';
@@ -464,7 +471,7 @@ export class StockEntryScreen {
     this.activeIngredient.set('');
     this.concentration.set('');
     this.categoryId.set(null);
-    this.unit.set('pieza');
+    this.unit.set(DEFAULT_UNIT);
     this.salePrice.set(null);
     this.minStock.set(0);
     this.controlledGroup.set(null);

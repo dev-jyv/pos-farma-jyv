@@ -108,15 +108,33 @@ Para migrar cuando haya soporte: sustituir `provideFirebase()` por `provideFireb
 
 `Shell` (`src/app/core/layout/shell.ts:19`) es el componente protegido por `authGuard` (`app.routes.ts:13-14`) y contiene el outlet de las features.
 
-- **Nav filtrada por permiso** (`shell.ts:25-29`): `navItems` es un `computed` que filtra `NAV_ITEMS` dejando los ítems sin `permission` o cuyo `can(area, level)` sea verdadero. Hoy solo "Libro de control" declara permiso (`nav.config.ts:16-23`, `inventory/read`, mismo que exige `GET /inventory/controlled-ledger`). El comentario del código lo justifica: un enlace que devuelve 403 no es navegación.
-- **Etiqueta de rol** (`shell.ts:37`): usa `roleName()` del backend porque los slugs ya no son un enum cerrado y traducir por clave dejaría textos como `shell.role.manager` a la vista. Se pinta con color distinto si `isAdmin()` (`shell.html:31-38`).
-- **Hotkeys globales** (`shell.ts:14-17`) vía objeto `host`: F1 → `/pos`, F3 → `/pos/historial`.
-- **Banner de degradación** (`shell.html:56-66`): visible cuando `degraded()`. `ApiHealthService` (`api-health.service.ts:10-35`) mantiene `browserOnline` (eventos `online`/`offline`, `:18-22`) y `apiOk` (GET `/health` al arranque y cada 30 s, `:7`, `:24`, `:27-35`); `degraded = !browserOnline || !apiOk` (`:15`). El banner es rojo sin red y ámbar si la red está pero el API no responde, con textos `shell.banner.offline` / `shell.banner.apiDown`.
-- **Logout** (`shell.ts:52-55`): `AuthService.logout()` + navegación a `/login`.
+- **Nav filtrada por permiso, con dos grupos** (rediseño de header, 2026-08-30):
+  `navItems` sigue siendo un `computed` que filtra `NAV_ITEMS` por `can(area, level)`, pero
+  ahora cada `NavItem` declara `group?: 'primary' | 'secondary'`. `primary` (default) va
+  directo en la barra — Venta, Historial, Cobro directo, Entrada de stock—; `secondary`
+  cuelga de un `p-menu` "Más" en el header — Reportes, Libro de control, y los tres módulos
+  administrativos nuevos: Categorías, Proveedores, Facturas—. El menú de usuario/rol también
+  se consolidó en un único `p-menu` (antes eran controles sueltos). El comentario del código
+  lo sigue justificando igual: un enlace que devuelve 403 no es navegación.
+- **Rutas ya con guard propio**: a diferencia de una versión anterior de este documento,
+  `POS_ROUTES` (`pos.routes.ts`) hoy declara `canActivate: [permissionGuard(area, level)]` en
+  cada ruta salvo `/pos` — el filtrado ya no es solo cosmético en el nav, también cierra la
+  puerta por URL directa. Ver `docs/arquitectura/pos.md` §1 para la tabla completa.
+- **Etiqueta de rol**: usa `roleName()` del backend porque los slugs ya no son un enum cerrado y traducir por clave dejaría textos como `shell.role.manager` a la vista. Se pinta con color distinto si `isAdmin()`.
+- **Hotkeys globales** vía objeto `host`: F1 → `/pos`, F3 → `/pos/historial`.
+- **Banner de degradación**: visible cuando `degraded()`. `ApiHealthService` mantiene
+  `browserOnline` (eventos `online`/`offline`) y `apiOk`; `degraded = !browserOnline || !apiOk`.
+  **Cambio 2026-08-30**: se quitó el polling periódico de `setInterval` — `apiOk` ya solo se
+  refresca con `checkNow()` al abrir la app o durante una acción de sync (login, horario fijo,
+  botón manual), no cada 30 s. El banner sigue siendo rojo sin red y ámbar si la red está pero
+  el API no responde.
+- **Botón de sync manual**: en el header, con punto indicador cuando hay ventas/altas
+  pendientes de subir; pide confirmación (`window.confirm`) antes de disparar `SyncScheduler.syncNow()`.
+- **Logout**: `AuthService.logout()` + navegación a `/login`.
 
 ## 7. Entornos
 
-Los cuatro archivos son **idénticos salvo dos flags**; el resto (apiUrl, licencia PrimeNG, configuración de farmacia, Mercado Pago, credenciales Firebase, `printTicketOnSale`, `expiryWarningDays: 30`, `soundsEnabled`, `promos: []`, `cashDrawer.printerName: ''`, `version: 'v1.0.0'`) coincide byte a byte.
+Los cuatro archivos son **idénticos salvo dos flags**; el resto (apiUrl, licencia PrimeNG, configuración de farmacia, Mercado Pago, credenciales Firebase, `printTicketOnSale`, `expiryWarningDays: 30`, `soundsEnabled`, `cashDrawer.printerName: ''`, `version: 'v1.0.0'`) coincide byte a byte.
 
 | Archivo | `production` | `isElectron` | Se activa en |
 |---|---|---|---|
@@ -170,10 +188,10 @@ sequenceDiagram
 
 1. **Credenciales y licencia versionadas.** `apiKey` de Firebase y la licencia de PrimeNG están hardcodeadas en los cuatro entornos (`src/environments/environment.ts:6-7`, `:26`). La `apiKey` de Firebase Web no es secreta, pero la licencia sí es un token con `exp` (1817081917 ≈ 2027) y está en el repo.
 2. **Los cuatro entornos son el mismo entorno.** `apiUrl` apunta al mismo proyecto de producción en dev, prod y Electron (`environment.development.ts:5`). No hay separación staging/producción: una sesión de desarrollo escribe ventas reales.
-3. **`authGuard` no verifica rol ni permisos** (`auth.guard.ts:9-16`). Un usuario de Firebase sin staff asociado entra al `Shell`; solo se corrige cuando el API responde 401/403 o al pasar por `guestGuard`. La autorización de pantallas descansa en el filtrado cosmético de `NAV_ITEMS` (`shell.ts:25-29`), sin `canActivate` por permiso en `POS_ROUTES`.
+3. **`authGuard` no verifica rol ni permisos** (`auth.guard.ts:9-16`). Un usuario de Firebase sin staff asociado entra al `Shell`; solo se corrige cuando el API responde 401/403 o al pasar por `guestGuard`. **Actualización 2026-09-03**: la autorización de pantallas ya no descansa solo en el filtrado cosmético de `NAV_ITEMS` — `POS_ROUTES` ahora sí declara `canActivate: [permissionGuard(...)]` por ruta (ver `pos.routes.ts`); el punto sigue abierto únicamente a nivel de `authGuard` (entra al `Shell` sin rol) y de la nav en sí, no de las rutas hijas.
 4. **`isLoggingOut` es estado global de módulo** (`auth.interceptor.ts:18`). Sobrevive entre tests y entre instancias de la app; si `signOut` o `router.navigate` fallan de forma que ninguno de los dos `catch` corra, queda en `true` y suprime todos los 401 siguientes.
 5. **`fetchProfile` traga el error** (`auth.service.ts:136`): cualquier fallo (red caída, 500) se vuelve `null`, indistinguible de "usuario sin rol". `guestGuard` reacciona haciendo `signOut` (`auth.guard.ts:31,35`), es decir un API caído puede desloguear a un cajero con sesión válida.
-6. **`ApiHealthService` usa `setInterval` sin cancelación** (`api-health.service.ts:24`) y registra listeners de `window` que nunca se remueven (`:18-22`). Es `providedIn: 'root'`, así que en la app no fuga, pero sí en tests. Además toca `navigator`/`window` en el constructor (`:13`), lo que lo hace incompatible con SSR/prerender.
+6. **`ApiHealthService` — resuelto el polling, sigue el resto.** El `setInterval` de 30 s se quitó (2026-08-30): ahora solo checa al abrir la app o durante una acción de sync. Pendiente real: `checkNow()` no cancela una llamada anterior en vuelo (sin `switchMap`), así que dos invocaciones casi simultáneas (evento `online` + sync) pueden resolver fuera de orden y dejar `apiOk` desactualizado hasta el siguiente chequeo. Los listeners de `window` (`online`/`offline`) tampoco se remueven, y el constructor sigue tocando `navigator`/`window` directo (incompatible con SSR/prerender, sin impacto real porque este POS no usa SSR).
 7. **`getLoginErrorMessage` es un `switch` inerte** (`auth.service.ts:159-171`): los tres casos y el `default` devuelven `'auth.login.error'`. El cajero no distingue credenciales inválidas de bloqueo por `auth/too-many-requests`.
 8. **`toDate` nunca falla, silenciosamente** (`api.utils.ts:43`): ante un valor irreconocible devuelve la fecha actual. En reportes o en el libro de control esto puede producir registros fechados "hoy" sin ninguna señal de error.
 9. **Temporizador de expiración atado al `authTime` del token** (`auth.service.ts:97-113`): si la máquina se suspende, `setTimeout` no dispara puntualmente y el cierre ordenado se retrasa hasta que despierta; el respaldo real sigue siendo el 401 del interceptor.

@@ -1,0 +1,107 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <div>
+      <h1 class="text-lg font-bold text-slate-900">{{ 'invoices.title' | translate }}</h1>
+      <!-- Sin esto, no encontrar una factura de hace medio año se lee como que
+           el listado está roto, no como que la caja ve una ventana. -->
+      <p class="text-xs text-slate-500">{{ 'invoices.windowHint' | translate }}</p>
+    </div>
+
+    <div class="relative min-w-48 flex-1 max-w-xs">
+      <label for="invoice-search" class="sr-only">{{ 'invoices.searchLabel' | translate }}</label>
+      <i class="pi pi-search pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-slate-400"></i>
+      <input
+        pInputText
+        id="invoice-search"
+        name="invoiceSearch"
+        type="search"
+        autocomplete="off"
+        class="w-full pl-9!"
+        [ngModel]="search()"
+        (ngModelChange)="onSearch($event)"
+        [placeholder]="'invoices.search' | translate"
+      />
+    </div>
+
+    <p-select
+      [options]="suppliers()"
+      optionLabel="name"
+      optionValue="id"
+      [showClear]="true"
+      [ngModel]="supplierId()"
+      (ngModelChange)="onSupplierChange($event)"
+      [placeholder]="'invoices.supplierFilter' | translate"
+      styleClass="min-w-[12rem]"
+    />
+
+    <p-button
+      icon="pi pi-refresh"
+      [text]="true"
+      (onClick)="reload()"
+      [loading]="loading()"
+      [ariaLabel]="'invoices.refresh' | translate"
+      [pTooltip]="'invoices.refresh' | translate"
+    />
+    <p-button icon="pi pi-plus" [label]="'invoices.new' | translate" styleClass="ml-auto" (onClick)="create()" />
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+    <p-table
+      [value]="invoices()"
+      dataKey="id"
+      styleClass="pos-product-table"
+      [loading]="loading()"
+      [scrollable]="true"
+      scrollHeight="flex"
+      [lazy]="true"
+      (onLazyLoad)="onLazyLoad($event)"
+      [paginator]="true"
+      [rows]="rows"
+      [rowsPerPageOptions]="rowsPerPageOptions"
+      [totalRecords]="totalRecords()"
+      [showCurrentPageReport]="true"
+      currentPageReportTemplate="{first}–{last} de {totalRecords}"
+    >
+      <ng-template #header>
+        <tr>
+          <th>{{ 'invoices.number' | translate }}</th>
+          <th>{{ 'invoices.supplier' | translate }}</th>
+          <th>{{ 'invoices.date' | translate }}</th>
+          <th class="text-right">{{ 'invoices.total' | translate }}</th>
+          <th>{{ 'invoices.type' | translate }}</th>
+          <th class="w-16"></th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-invoice>
+        <tr class="cursor-pointer transition hover:bg-slate-50" (click)="viewDetail(invoice)">
+          <td class="font-mono text-sm font-semibold">{{ invoice.invoiceNumber }}</td>
+          <td class="text-sm text-slate-600">{{ invoice.supplierName || '—' }}</td>
+          <td class="tabular-nums text-sm text-slate-600">{{ invoice.invoiceDate | date: 'dd/MM/yyyy' : 'UTC' }}</td>
+          <td class="text-right text-sm font-bold tabular-nums">${{ invoice.totalAmount | number: '1.2-2' }}</td>
+          <td>
+            @if (invoice.hasInvoice) {
+              <p-tag severity="success" [value]="'invoices.withInvoice' | translate" />
+            } @else {
+              <p-tag severity="warn" [value]="'invoices.withoutInvoice' | translate" />
+            }
+          </td>
+          <td class="text-right text-slate-300">
+            <i class="pi pi-angle-right"></i>
+          </td>
+        </tr>
+      </ng-template>
+      <ng-template #emptymessage>
+        <tr>
+          <td colspan="6" class="py-16! text-center">
+            <div class="flex flex-col items-center gap-3">
+              <i class="pi pi-file text-4xl text-slate-300"></i>
+              <p class="text-sm text-slate-500">{{ 'invoices.empty' | translate }}</p>
+              <p class="text-xs text-slate-400">{{ 'invoices.windowHint' | translate }}</p>
+              <p-button icon="pi pi-plus" [label]="'invoices.new' | translate" [outlined]="true" (onClick)="create()" />
+            </div>
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+  </div>
+</div>

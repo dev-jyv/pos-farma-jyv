@@ -1,0 +1,193 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <p-button icon="pi pi-arrow-left" [text]="true" (onClick)="cancel()" [ariaLabel]="'expenses.cancel' | translate" />
+    <h1 class="text-lg font-bold text-slate-900">{{ 'expenses.newTitle' | translate }}</h1>
+  </div>
+
+  <div class="grid min-h-0 flex-1 gap-6 overflow-auto px-4 py-4 lg:grid-cols-2">
+    <form (ngSubmit)="save()" class="flex max-w-md flex-col gap-4">
+      @if (editing(); as corrigiendo) {
+        <div
+          data-testid="editing-banner"
+          class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          role="status"
+        >
+          {{ 'expenses.editingBanner' | translate: { time: (corrigiendo.createdAt | date: 'HH:mm') } }}
+        </div>
+      }
+      <div class="flex flex-col gap-1">
+        <label for="expense-amount" class="text-sm font-medium text-slate-700">
+          {{ 'expenses.amount' | translate }}
+        </label>
+        <p-inputnumber
+          inputId="expense-amount"
+          name="expenseAmount"
+          mode="currency"
+          currency="MXN"
+          locale="es-MX"
+          [min]="0"
+          [ngModel]="amount()"
+          (ngModelChange)="amount.set($event)"
+          styleClass="w-full"
+          inputStyleClass="w-full text-right"
+        />
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <span id="expense-category-label" class="text-sm font-medium text-slate-700">
+          {{ 'expenses.category' | translate }}
+        </span>
+        <p-select
+          ariaLabelledBy="expense-category-label"
+          name="expenseCategory"
+          [options]="categoryOptions()"
+          optionLabel="label"
+          optionValue="value"
+          [ngModel]="category()"
+          (ngModelChange)="category.set($event)"
+          [placeholder]="'expenses.categoryPlaceholder' | translate"
+          styleClass="w-full"
+        />
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <label for="expense-reason" class="text-sm font-medium text-slate-700">
+          {{ 'expenses.reason' | translate }}
+        </label>
+        <input
+          pInputText
+          id="expense-reason"
+          name="expenseReason"
+          class="w-full"
+          maxlength="200"
+          [ngModel]="reason()"
+          (ngModelChange)="reason.set($event ?? '')"
+          [placeholder]="'expenses.reasonPlaceholder' | translate"
+        />
+      </div>
+
+      @if (requiresDescription()) {
+        <div class="flex flex-col gap-1">
+          <label for="expense-description" class="text-sm font-medium text-slate-700">
+            {{ 'expenses.description' | translate }}
+          </label>
+          <input
+            pInputText
+            id="expense-description"
+            name="expenseDescription"
+            class="w-full"
+            maxlength="300"
+            [ngModel]="description()"
+            (ngModelChange)="description.set($event ?? '')"
+            [placeholder]="'expenses.descriptionPlaceholder' | translate"
+          />
+        </div>
+      }
+
+      @if (blockers().length > 0) {
+        <!-- `blockers()` trae llaves de i18n; se traducen aquí para que el aviso
+             siga el idioma de la app y no el del código. -->
+        <ul
+          data-testid="expense-blockers"
+          class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          role="alert"
+        >
+          @for (reason of blockers(); track reason) {
+            <li>{{ reason | translate }}</li>
+          }
+        </ul>
+      }
+
+      <div class="mt-2 flex gap-2">
+        <p-button
+          type="button"
+          data-testid="expense-cancel"
+          [label]="(editing() ? 'expenses.cancelEdit' : 'expenses.cancel') | translate"
+          severity="secondary"
+          [outlined]="true"
+          styleClass="flex-1"
+          (onClick)="editing() ? cancelEdit() : cancel()"
+        />
+        <p-button
+          type="submit"
+          data-testid="expense-save"
+          [label]="(editing() ? 'expenses.saveEdit' : 'expenses.save') | translate"
+          styleClass="flex-1"
+          [loading]="saving()"
+          [disabled]="!canSubmit()"
+        />
+      </div>
+    </form>
+
+    <!-- Lo ya registrado en el turno: es la comprobación de lo que va a descontar
+         el corte, y evita capturar dos veces el mismo gasto. -->
+    <section class="flex min-w-0 flex-col gap-3">
+      <div class="flex items-baseline justify-between gap-3">
+        <h2 class="text-sm font-semibold text-slate-800">
+          {{ 'expenses.sessionTitle' | translate }}
+        </h2>
+        @if (sessionExpenses().length > 0) {
+          <span class="text-sm text-slate-600">
+            {{ 'expenses.sessionTotal' | translate }}:
+            <strong class="tabular-nums text-slate-900">
+              ${{ expensesTotal() | number: '1.2-2' }}
+            </strong>
+          </span>
+        }
+      </div>
+
+      @if (expensesLoading()) {
+        <p class="text-sm text-slate-500" role="status">{{ 'common.loading' | translate }}</p>
+      } @else if (!cashSessionOpen()) {
+        <p class="rounded-lg bg-slate-50 px-3 py-4 text-sm text-slate-500">
+          {{ 'expenses.sessionClosed' | translate }}
+        </p>
+      } @else if (sessionExpenses().length === 0) {
+        <p class="rounded-lg bg-slate-50 px-3 py-4 text-sm text-slate-500">
+          {{ 'expenses.sessionEmpty' | translate }}
+        </p>
+      } @else {
+        <ul class="divide-y divide-slate-100 rounded-lg border border-(--pos-border)">
+          @for (expense of sessionExpenses(); track expense.id) {
+            <li class="flex items-start justify-between gap-3 px-3 py-2">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium text-slate-800">
+                  @if (categoryKey(expense.category); as key) {
+                    {{ key | translate }}
+                  } @else {
+                    {{ expense.category }}
+                  }
+                </p>
+                <p class="truncate text-xs text-slate-500">
+                  {{ expense.createdAt | date: 'HH:mm' }}
+                  @if (expense.description) {
+                    · {{ expense.description }}
+                  } @else if (expense.reason) {
+                    · {{ expense.reason }}
+                  }
+                </p>
+              </div>
+              <div class="flex shrink-0 items-center gap-2">
+                <span class="text-sm font-semibold tabular-nums text-slate-900">
+                  ${{ expense.amount | number: '1.2-2' }}
+                </span>
+                <p-button
+                  icon="pi pi-pencil"
+                  data-testid="expense-edit"
+                  [text]="true"
+                  size="small"
+                  [ariaLabel]="
+                    'expenses.editAria' | translate: { amount: (expense.amount | number: '1.2-2') }
+                  "
+                  [pTooltip]="'expenses.edit' | translate"
+                  [disabled]="saving()"
+                  (onClick)="edit(expense)"
+                />
+              </div>
+            </li>
+          }
+        </ul>
+      }
+    </section>
+  </div>
+</div>

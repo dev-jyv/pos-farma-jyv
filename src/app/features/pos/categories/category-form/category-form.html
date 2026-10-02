@@ -1,0 +1,59 @@
+<div class="flex h-full min-h-0 flex-col bg-white">
+  <div class="flex shrink-0 items-center gap-3 border-b border-(--pos-border) px-4 py-3">
+    <p-button icon="pi pi-arrow-left" [text]="true" (onClick)="cancel()" [ariaLabel]="'categories.cancel' | translate" />
+    <h1 class="text-lg font-bold text-slate-900">
+      {{ (editingId() ? 'categories.editTitle' : 'categories.newTitle') | translate }}
+    </h1>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-auto px-4 py-4">
+    @if (loading()) {
+      <div class="flex justify-center py-10">
+        <p-progress-spinner styleClass="!h-8 !w-8" strokeWidth="6" />
+      </div>
+    } @else {
+      <form [formGroup]="form" (ngSubmit)="save()" class="flex max-w-md flex-col gap-4">
+        <div class="flex flex-col gap-1">
+          <label for="category-name" class="text-sm font-medium text-slate-700">
+            {{ 'categories.name' | translate }}
+          </label>
+          <input pInputText id="category-name" formControlName="name" autocomplete="off" maxlength="120" />
+          @if (form.controls.name.invalid && form.controls.name.touched) {
+            <span class="text-xs text-red-600">{{ 'categories.nameRequired' | translate }}</span>
+          }
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label for="category-description" class="text-sm font-medium text-slate-700">
+            {{ 'categories.description' | translate }}
+          </label>
+          <input pInputText id="category-description" formControlName="description" autocomplete="off" maxlength="300" />
+        </div>
+
+        @if (editingId()) {
+          <div class="flex items-center gap-2">
+            <p-checkbox formControlName="isActive" [binary]="true" inputId="category-active" />
+            <label for="category-active" class="text-sm text-slate-700">{{ 'categories.active' | translate }}</label>
+          </div>
+        }
+
+        <div class="mt-2 flex gap-2">
+          <p-button
+            type="button"
+            [label]="'categories.cancel' | translate"
+            severity="secondary"
+            [outlined]="true"
+            styleClass="flex-1"
+            (onClick)="cancel()"
+          />
+          <p-button
+            type="submit"
+            [label]="'categories.save' | translate"
+            styleClass="flex-1"
+            [loading]="saving()"
+          />
+        </div>
+      </form>
+    }
+  </div>
+</div>

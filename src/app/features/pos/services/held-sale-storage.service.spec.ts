@@ -13,6 +13,7 @@ function heldSale(): HeldSale {
     heldAt: new Date('2026-08-08T15:00:00.000Z'),
     lines: [
       {
+        kind: 'product' as const,
         product: { id: 'p1', sku: 'SKU1', name: 'Producto', salePrice: 50, stock: 3 } as Product,
         quantity: 1,
         discountAmount: 0,
@@ -36,7 +37,9 @@ describe('HeldSaleStorageService', () => {
     expect(restored.id).toBe('h1');
     expect(restored.label).toBe('Cliente de la 3');
     expect(restored.heldAt.toISOString()).toBe('2026-08-08T15:00:00.000Z');
-    expect(restored.lines[0].product.id).toBe('p1');
+    const linea = restored.lines[0];
+    expect(linea.kind).toBe('product');
+    expect(linea.kind === 'product' && linea.product.id).toBe('p1');
   });
 
   it('sin guardado devuelve lista vacía', () => {

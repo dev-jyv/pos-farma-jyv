@@ -2,26 +2,60 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { provideTranslateService } from '@ngx-translate/core';
+import { EMPTY } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CashSession } from '../../shared/models';
+import { CashMovementService } from '../../features/pos/services/cash-movement.service';
+import { CashSessionService } from '../../features/pos/services/cash-session.service';
+import { SaleService } from '../../features/pos/services/sale.service';
 import { ApiHealthService } from '../health/api-health.service';
 import { AuthService } from '../auth/auth.service';
+import { NotificationService } from '../notifications/notification.service';
+import { BlockedSyncService } from '../sync/blocked-sync.service';
+import { SyncScheduler } from '../sync/sync-scheduler.service';
+import { SyncHelpService } from '../sync/sync-help.service';
 import { NAV_ITEMS } from './nav.config';
 import { Shell } from './shell';
+
+/** El camino de salida encadena varias promesas (contar cola → vaciar → contar). */
+async function drenarMicrotareas(): Promise<void> {
+  for (let i = 0; i < 12; i += 1) {
+    await Promise.resolve();
+  }
+}
 
 describe('Shell', () => {
   let fixture: ComponentFixture<Shell>;
   let component: Shell;
   let navigate: ReturnType<typeof vi.fn>;
+  /** `window.confirm` no existe en jsdom con comportamiento útil: se controla aquí. */
+  let confirmSpy: ReturnType<typeof vi.fn>;
   let logout: ReturnType<typeof vi.fn>;
   let can: (area: string, level?: string) => boolean;
+  let turnoAbierto: CashSession | null;
+  /** Movimientos en cola al intentar salir; 0 = todo sincronizado. */
+  let pendientesAlSalir: number;
+  let flushPendingNow: ReturnType<typeof vi.fn>;
+  let syncNow: ReturnType<typeof vi.fn>;
+  let electronApp: {
+    onCloseRequested: ReturnType<typeof vi.fn>;
+    closePending: ReturnType<typeof vi.fn>;
+    confirmClose: ReturnType<typeof vi.fn>;
+    cancelClose: ReturnType<typeof vi.fn>;
+  };
+  /** Handler que el shell registró para la X de la ventana. */
+  let cerrarSolicitado: (() => void) | null;
 
   async function build(): Promise<void> {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
         provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
-        { provide: Router, useValue: { navigate, createUrlTree: () => ({}), serializeUrl: () => '', events: { subscribe: () => ({ unsubscribe: () => {} }) } } },
+        {
+          provide: Router,
+          useValue: { navigate, createUrlTree: () => ({}), serializeUrl: () => '', events: EMPTY, url: '/pos' },
+        },
         {
           provide: AuthService,
           useValue: {
@@ -37,6 +71,40 @@ describe('Shell', () => {
           provide: ApiHealthService,
           useValue: { browserOnline: signal(true), degraded: signal(false) },
         },
+        {
+          // Evita construir la cadena real SyncScheduler -> SaleService -> HttpClient:
+          // estas pruebas no ejercitan el sync, solo el resto del shell.
+          provide: SyncScheduler,
+          useValue: {
+            syncing: signal(false),
+            syncNow,
+            canSyncManually: () => true,
+            manualSyncAvailableAt: () => null,
+            syncManually: vi.fn().mockResolvedValue({ ok: true, pulled: 0 }),
+            countPending: () => Promise.resolve(pendientesAlSalir),
+            flushPendingNow,
+          },
+        },
+        { provide: NotificationService, useValue: { success: vi.fn(), error: vi.fn() } },
+        {
+          provide: CashSessionService,
+          useValue: { current: () => turnoAbierto, isOpen: () => turnoAbierto !== null },
+        },
+        { provide: SaleService, useValue: { pendingCount: signal(0) } },
+        { provide: CashMovementService, useValue: { pendingCount: signal(0) } },
+        { provide: SyncHelpService, useValue: { ask: vi.fn() } },
+        {
+          provide: BlockedSyncService,
+          useValue: {
+            count: signal(0),
+            records: signal([]),
+            refresh: vi.fn().mockResolvedValue(undefined),
+            retry: vi.fn(),
+            discard: vi.fn(),
+            canFix: () => false,
+            canDiscard: () => false,
+          },
+        },
       ],
     });
 
@@ -45,14 +113,43 @@ describe('Shell', () => {
   }
 
   beforeEach(async () => {
+    // Doble de la ventana de Electron: `onCloseRequested` guarda el handler para
+    // poder disparar la X desde la prueba.
+    cerrarSolicitado = null;
+    electronApp = {
+      onCloseRequested: vi.fn((handler: () => void) => {
+        cerrarSolicitado = handler;
+        return () => undefined;
+      }),
+      closePending: vi.fn().mockResolvedValue(undefined),
+      confirmClose: vi.fn().mockResolvedValue(undefined),
+      cancelClose: vi.fn().mockResolvedValue(undefined),
+    };
+    (window as unknown as { electronAPI?: unknown }).electronAPI = { app: electronApp };
     navigate = vi.fn(() => Promise.resolve(true));
     logout = vi.fn(() => Promise.resolve());
     can = () => true;
+    turnoAbierto = null;
+    pendientesAlSalir = 0;
+    flushPendingNow = vi.fn().mockResolvedValue(undefined);
+    syncNow = vi.fn().mockResolvedValue({ ok: true, pulled: 0 });
+    confirmSpy = vi.fn().mockReturnValue(true);
+    window.confirm = confirmSpy as unknown as typeof window.confirm;
     await build();
   });
 
   it('con todos los permisos muestra el menú completo', () => {
-    expect(component.navItems()).toHaveLength(NAV_ITEMS.length);
+    // Las entradas apagadas por bandera (`enabled: false`) no cuentan: son
+    // pantallas terminadas que todavía no se ofrecen al mostrador.
+    const ofrecibles = NAV_ITEMS.filter((item) => item.enabled !== false);
+    expect(component.navItems()).toHaveLength(ofrecibles.length);
+  });
+
+  it('una entrada apagada por bandera no aparece aunque el rol tenga el permiso', () => {
+    const apagadas = NAV_ITEMS.filter((item) => item.enabled === false);
+    for (const item of apagadas) {
+      expect(component.navItems().some((visible) => visible.path === item.path)).toBe(false);
+    }
   });
 
   it('oculta los enlaces cuyo permiso no tiene el rol: un enlace que da 403 no es navegación', async () => {
@@ -80,5 +177,346 @@ describe('Shell', () => {
 
     expect(logout).toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith(['/login']);
+  });
+
+  /**
+   * Cerrar la ventana con la X no puede llevarse por delante un turno a medias:
+   * se pregunta primero. Y no cierra la sesión de Firebase — cerrar la app no es
+   * cambiar de cajero.
+   */
+  describe('cerrar la ventana de la app', () => {
+    it('sin turno ni pendientes cierra directo', async () => {
+      cerrarSolicitado?.();
+      // El cierre consulta la cola antes de confirmar: es asíncrono.
+      await drenarMicrotareas();
+
+      expect(electronApp.confirmClose).toHaveBeenCalled();
+      expect(logout).not.toHaveBeenCalled();
+    });
+
+    it('con turno abierto pregunta en vez de cerrar', async () => {
+      turnoAbierto = { id: 's1' } as CashSession;
+      await build();
+
+      cerrarSolicitado?.();
+
+      expect(component.logoutPromptVisible()).toBe(true);
+      expect(electronApp.confirmClose).not.toHaveBeenCalled();
+      // Avisa al proceso principal que hay alguien decidiendo: contar el efectivo
+      // tarda más que cualquier timeout de emergencia.
+      expect(electronApp.closePending).toHaveBeenCalled();
+    });
+
+    it('"salir sin cerrar turno" cierra la app pero conserva la sesión', async () => {
+      turnoAbierto = { id: 's1' } as CashSession;
+      await build();
+      cerrarSolicitado?.();
+
+      await component.logoutLeavingShiftOpen();
+
+      expect(electronApp.confirmClose).toHaveBeenCalled();
+      expect(logout).not.toHaveBeenCalled();
+      expect(navigate).not.toHaveBeenCalledWith(['/login']);
+    });
+
+    it('cancelar deja la app abierta', async () => {
+      turnoAbierto = { id: 's1' } as CashSession;
+      await build();
+      cerrarSolicitado?.();
+
+      component.dismissLogoutPrompt();
+
+      expect(electronApp.cancelClose).toHaveBeenCalled();
+      expect(electronApp.confirmClose).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Desistir del corte también cancela la salida: si no, el intento quedaba vivo
+     * y la app se cerraba sola al vencer el plazo del proceso principal.
+     */
+    it('cerrar el modal del corte sin cortar cancela la salida', async () => {
+      turnoAbierto = { id: 's1' } as CashSession;
+      await build();
+      cerrarSolicitado?.();
+      await component.closeShiftBeforeLogout();
+
+      component.dismissLogoutCashSession();
+
+      expect(electronApp.cancelClose).toHaveBeenCalled();
+      expect(electronApp.confirmClose).not.toHaveBeenCalled();
+    });
+
+    it('cerrar sesión desde el menú sí termina la sesión', async () => {
+      await component.logout();
+
+      expect(logout).toHaveBeenCalled();
+      expect(electronApp.confirmClose).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Salir con el turno abierto ofrece tres caminos, no un sí/no: quedarse,
+   * salir dejando el turno abierto, o cortar caja antes de salir.
+   */
+  describe('salir con turno abierto', () => {
+    beforeEach(async () => {
+      turnoAbierto = { id: 's1' } as CashSession;
+      await build();
+    });
+
+    it('no cierra sesión de inmediato: abre las opciones', async () => {
+      await component.logout();
+
+      expect(component.logoutPromptVisible()).toBe(true);
+      expect(logout).not.toHaveBeenCalled();
+      expect(navigate).not.toHaveBeenCalledWith(['/login']);
+    });
+
+    it('cancelar deja todo como estaba: ni logout ni corte', () => {
+      void component.logout();
+
+      component.dismissLogoutPrompt();
+
+      expect(component.logoutPromptVisible()).toBe(false);
+      expect(component.logoutCashSessionDialogVisible()).toBe(false);
+      expect(logout).not.toHaveBeenCalled();
+    });
+
+    it('salir sin cerrar turno hace logout y no abre el corte', async () => {
+      void component.logout();
+
+      await component.logoutLeavingShiftOpen();
+
+      expect(component.logoutCashSessionDialogVisible()).toBe(false);
+      expect(logout).toHaveBeenCalled();
+      expect(navigate).toHaveBeenCalledWith(['/login']);
+    });
+
+    it('cerrar turno sincroniza como el botón Sincronizar y abre el corte', async () => {
+      void component.logout();
+
+      await component.closeShiftBeforeLogout();
+
+      expect(syncNow).toHaveBeenCalled();
+      expect(component.logoutPromptVisible()).toBe(false);
+      expect(component.logoutCashSessionDialogVisible()).toBe(true);
+      expect(logout).not.toHaveBeenCalled();
+    });
+
+    it('si queda pendiente al cerrar turno, avisa y aun así abre el corte', async () => {
+      pendientesAlSalir = 2;
+      const notifications = TestBed.inject(NotificationService);
+      void component.logout();
+
+      await component.closeShiftBeforeLogout();
+
+      expect(syncNow).toHaveBeenCalled();
+      expect(notifications.error).toHaveBeenCalledWith(
+        expect.stringContaining('Hay red, pero el servidor no los confirmó'),
+      );
+      expect(component.logoutCashSessionDialogVisible()).toBe(true);
+      expect(logout).not.toHaveBeenCalled();
+    });
+
+    it('cuando el corte se confirma, sale', async () => {
+      void component.logout();
+      await component.closeShiftBeforeLogout();
+
+      turnoAbierto = null;
+      component.onLogoutShiftClosed();
+      // La salida consulta la cola y trata de vaciarla antes de cerrar sesión:
+      // son varios saltos de microtarea, no dos.
+      await drenarMicrotareas();
+
+      expect(logout).toHaveBeenCalled();
+      expect(navigate).toHaveBeenCalledWith(['/login']);
+    });
+
+    it('si el cajero cancela el corte, se queda en la caja con su turno', async () => {
+      void component.logout();
+      await component.closeShiftBeforeLogout();
+
+      // El turno sigue abierto: el corte se canceló.
+      component.dismissLogoutCashSession();
+      await Promise.resolve();
+
+      expect(component.logoutCashSessionDialogVisible()).toBe(false);
+      expect(logout).not.toHaveBeenCalled();
+    });
+
+    it('cancelar no cierra sesión ni aunque el turno ya no esté abierto', async () => {
+      void component.logout();
+      await component.closeShiftBeforeLogout();
+
+      // El turno pudo cerrarse por otra vía (auto-cierre por cambio de día).
+      // Cancelar sigue siendo solo "cerrar el modal".
+      turnoAbierto = null;
+      component.dismissLogoutCashSession();
+      await Promise.resolve();
+
+      expect(component.logoutCashSessionDialogVisible()).toBe(false);
+      expect(logout).not.toHaveBeenCalled();
+      expect(navigate).not.toHaveBeenCalledWith(['/login']);
+    });
+
+    it('el corte recibe el turno abierto del cajero', () => {
+      expect(component.openCashSession()).toEqual({ id: 's1' });
+    });
+  });
+
+  it('sin turno abierto no pregunta nada: sale directo', async () => {
+    await component.logout();
+
+    expect(component.logoutPromptVisible()).toBe(false);
+    expect(logout).toHaveBeenCalled();
+  });
+
+  /**
+   * Antes, salir no miraba las colas: lo que quedara sin subir se iba con el
+   * equipo y el siguiente cajero heredaba ventas, cortes y gastos ajenos. Y el
+   * único conteo que existía (al cerrar la ventana) miraba solo las ventas.
+   */
+  describe('pendientes al salir', () => {
+    it('con todo sincronizado sale sin preguntar ni sincronizar', async () => {
+      const flush = vi.fn().mockResolvedValue(undefined);
+      TestBed.inject(SyncScheduler).flushPendingNow = flush;
+
+      await component.logout();
+
+      expect(flush).not.toHaveBeenCalled();
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(logout).toHaveBeenCalled();
+    });
+
+    it('intenta subir lo pendiente antes de salir', async () => {
+      pendientesAlSalir = 3;
+      const flush = vi.fn().mockImplementation(() => {
+        pendientesAlSalir = 0;
+        return Promise.resolve();
+      });
+      TestBed.inject(SyncScheduler).flushPendingNow = flush;
+
+      await component.logout();
+
+      expect(flush).toHaveBeenCalled();
+      // Se subió todo: no hay por qué molestar al cajero con una pregunta.
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(logout).toHaveBeenCalled();
+    });
+
+    it('si algo no se pudo subir, pregunta antes de cerrar sesión', async () => {
+      pendientesAlSalir = 2;
+      confirmSpy.mockReturnValue(true);
+
+      await component.logout();
+
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(String(confirmSpy.mock.calls[0][0])).toContain('2');
+      expect(logout).toHaveBeenCalled();
+    });
+
+    it('si el cajero se arrepiente, la sesión sigue abierta', async () => {
+      pendientesAlSalir = 2;
+      confirmSpy.mockReturnValue(false);
+
+      await component.logout();
+
+      expect(logout).not.toHaveBeenCalled();
+      expect(navigate).not.toHaveBeenCalledWith(['/login']);
+    });
+
+    /** El aviso de "subiendo" no puede quedarse pegado si el envío revienta. */
+    it('un fallo al subir no deja el aviso encendido ni encierra al cajero', async () => {
+      pendientesAlSalir = 1;
+      TestBed.inject(SyncScheduler).flushPendingNow = vi
+        .fn()
+        .mockRejectedValue(new Error('sin red'));
+      confirmSpy.mockReturnValue(true);
+
+      await component.logout();
+
+      expect(component.flushingBeforeExit()).toBe(false);
+      expect(logout).toHaveBeenCalled();
+    });
+  });
+  describe('reintentar un rechazado', () => {
+    const registro = {
+      kind: 'sale' as const,
+      id: 'v-1',
+      label: 'PENDIENTE-1',
+      detail: '$292.00',
+      occurredAt: new Date(),
+      reason: 'x',
+      diagnosis: { code: 'turno-sin-subir' as const },
+    };
+
+    /**
+     * Regresión: "Reintentar" solo limpiaba el `pushError` y el registro
+     * esperaba al próximo horario fijo; parecía que el botón no hacía nada.
+     */
+    it('destraba y empuja en el acto, en el orden completo del sincronizador', async () => {
+      const blocked = TestBed.inject(BlockedSyncService);
+      const orden: string[] = [];
+      blocked.retry = vi.fn().mockImplementation(async () => void orden.push('retry'));
+      flushPendingNow.mockImplementation(async () => void orden.push('push'));
+
+      await component.retryBlocked(registro);
+
+      expect(orden).toEqual(['retry', 'push']);
+      expect(blocked.refresh).toHaveBeenCalled();
+      expect(component.retryingBlockedId()).toBeNull();
+    });
+
+    it('un fallo del envío no deja el botón cargando', async () => {
+      flushPendingNow.mockRejectedValue(new Error('sin red'));
+
+      await component.retryBlocked(registro);
+
+      expect(component.retryingBlockedId()).toBeNull();
+    });
+  });
+  describe('ayuda con IA', () => {
+    const desconocido = {
+      kind: 'sale' as const,
+      id: 'v-9',
+      label: 'PENDIENTE-9',
+      detail: '$10.00',
+      occurredAt: new Date(),
+      reason: 'Internal error 0x55',
+      diagnosis: { code: 'desconocido' as const },
+    };
+
+    it('solo se ofrece para causas que las reglas no reconocen', () => {
+      expect(component.canAskAi(desconocido)).toBe(true);
+      expect(component.canAskAi({ ...desconocido, diagnosis: { code: 'turno-sin-subir' } })).toBe(false);
+    });
+
+    it('sin red no se ofrece', () => {
+      (TestBed.inject(ApiHealthService).degraded as ReturnType<typeof signal<boolean>>).set(true);
+
+      expect(component.canAskAi(desconocido)).toBe(false);
+    });
+
+    it('guarda la sugerencia por registro', async () => {
+      const reply = { explicacion: 'Avisa.', pasos: ['avisar-admin' as const], avisarAdmin: true };
+      (TestBed.inject(SyncHelpService).ask as ReturnType<typeof vi.fn>).mockResolvedValue(reply);
+
+      await component.askAi(desconocido);
+
+      expect(component.aiHelpFor(desconocido)).toEqual({ loading: false, reply });
+    });
+
+    it('un fallo deja el mensaje y apaga la carga', async () => {
+      (TestBed.inject(SyncHelpService).ask as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('Sin conexión: la ayuda con IA necesita internet.'),
+      );
+
+      await component.askAi(desconocido);
+
+      expect(component.aiHelpFor(desconocido)).toEqual({
+        loading: false,
+        error: 'Sin conexión: la ayuda con IA necesita internet.',
+      });
+    });
   });
 });

@@ -51,13 +51,16 @@
       </tr>
     </thead>
     <tbody>
-      @for (item of sale().items; track item.productId + item.productName) {
+      @for (item of sale().items; track itemKey(item)) {
         <tr>
           <td>{{ item.quantity }}</td>
           <td>
             {{ item.productName }}
-            @if (item.discountAmount > 0) {
-              <span class="disc">Desc. {{ item.discountAmount | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+            @if (promoOf(item); as promo) {
+              <span class="disc">Promo {{ promo.name }} -{{ promo.amount | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+            }
+            @if (manualDiscountOf(item) > 0) {
+              <span class="disc">Desc. {{ manualDiscountOf(item) | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
             }
           </td>
           <td class="num">{{ item.subtotal - item.discountAmount | currency: 'MXN':'symbol-narrow':'1.2-2' }}</td>

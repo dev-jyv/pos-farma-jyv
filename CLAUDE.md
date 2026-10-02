@@ -8,13 +8,17 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 
 ## Comandos
 
-- `npm start` / `ng serve` — servidor dev en `localhost:4200`
+- `npm start` / `ng serve` — servidor dev en `localhost:4400` contra los **emuladores** (`development`); `npm run start:dev-cloud` contra `farma-jyv-dev`
 - `npm run build` — build de producción (`dist/farma-jyv-pos/browser`)
 - `npm run electron:build` — build con configuración `electron` (`fileReplacements` a `environment.electron.ts`, `baseHref: './'`)
-- `npm run electron:dev` — lanza Electron contra el dev server (`ELECTRON_DEV_SERVER_URL`, default `http://localhost:4200`)
+- `npm run electron:dev` / `electron:dev:cloud` — lanza Electron contra el dev server (`ELECTRON_DEV_SERVER_URL`, default `http://localhost:4400`) con `FARMAJYV_ENV=emulator` / `dev`; requieren `npm start` / `npm run start:dev-cloud` en paralelo
+- `npm run release:mac|win` (feed de producción, `--project prod`) / `release:dev:mac|win` (build `electron-dev-cloud`, feed `farma-jyv-dev-updates`, `--project dev`) — ver `docs/SETUP.md` § Entornos
 - `npm run electron:start` — build + Electron contra el bundle compilado
 - `npm run electron:dist[:mac|:win]` — empaqueta con electron-builder (salida en `/release`)
-- `npm test` / `ng test` — Vitest
+- `npm test` / `ng test` — Vitest sobre `src/` (Angular)
+- `npm run test:electron` — Vitest sobre `electron/test/**` (proceso principal: `electron/db/*.js` contra un Prisma falso en memoria; el builder de Angular no mira esa carpeta)
+- `npm run test:all` — ambas suites
+- `npm run check:promo-engine` — compara el sha256 de `src/app/shared/utils/promotions-engine.cases.json` (casos dorados del motor de promociones) con las copias de `../backend-farma-jyv` y `../farma-jyv-admin`; un repo hermano ausente se avisa y no falla. El JSON no se edita en un solo repo: si cambia el motor, se regenera en los tres.
 
 ## Arquitectura
 
@@ -38,15 +42,28 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 - `core/api/auth.interceptor.ts` adjunta el ID token de Firebase a requests hacia `environment.apiUrl` y fuerza logout ante 401.
 - `core/api/api.utils.ts` centraliza `unwrapEntity`/`unwrapList` (formas de respuesta inconsistentes del backend) y `toDate` (Firestore `Timestamp` / epoch / string → `Date`). Reusar en vez de parsear respuestas por feature.
 
+### Sync y promociones
+
+- `core/sync/sync-scheduler.service.ts`: sync completo en horario fijo (10:30/14:00/20:00) más el manual limitado del cajero. Aparte, `pullPromotions()` corre **cada hora** solo el pull incremental de promociones (mismo cursor), emite `PROMOTIONS_SYNCED_EVENT`, no corre sin sesión/`electronAPI`, no se encima con otro igual ni con un sync completo y no cuenta para el límite manual.
+- Si al cobrar una promo del ticket ya cerró (la detecta el checkout, o el backend responde 400 `La promoción "X" no está vigente`), la venta no se registra: `Sale.onPromotionClosed` baja promociones, recalcula y pide volver a cobrar. Excepción: con la tarjeta ya aprobada en la terminal sí se registra.
+- Una venta cuyo turno o producto aún no tiene `remoteId` solo gasta `payloadResolveAttempts` si esa dependencia está **atorada** (rechazada o fuera de su cola); si va en camino, espera sin contar (`dependenciaEnCamino` en `electron/db/sales.js`).
+- Panel "Rechazados al sincronizar" (`shell`): cada registro trae `diagnosis.code` (`electron/db/blocked-diagnosis.js`, sin red) y su texto/acción sale de `core/sync/sync-diagnosis.ts`. "Reintentar" corre `SyncScheduler.flushPendingNow()` (orden completo, sin gastar el cupo manual). Solo para `desconocido` y con red se ofrece la IA: `SyncHelpService` → `POST /assistant/sync-help` del backend (resumen sin cliente ni partidas; nunca propone descartar).
+- `electron/db/promotions.js#purgeStale` borra al arrancar (best-effort, tras migraciones) las promos dadas de baja o terminadas hace más de 30 días.
+
 ### Entornos
 
-- `environment.ts` / `.development.ts` / `.prod.ts` / `.electron.ts` — mismo proyecto Firebase y `apiUrl` que `farma-jyv-admin`. `.electron.ts` añade `isElectron: true` y se activa solo en la configuración `electron` de `angular.json` (`baseHref: './'`, necesario porque Electron carga `index.html` con `file://`).
+- `environment.ts` / `.prod.ts` / `.electron.ts` — producción (`farma-jyv`). `.electron.ts` añade `isElectron: true` y se activa solo en la configuración `electron` de `angular.json` (`baseHref: './'`, necesario porque Electron carga `index.html` con `file://`).
+- `.development.ts` — **emuladores** (`demo-farmajyv`, `useEmulators: true` → `connectAuthEmulator`). `.dev-cloud.ts` / `.electron-dev-cloud.ts` — nube de pruebas `farma-jyv-dev`. Fuera de producción Mercado Pago va con `terminalEnabled: false` e ids vacíos.
+- `electron/app-environment.js` separa `userData` (base SQLite, `invoice-rag/`) por entorno: fuera de `prod` usa `FarmaJyV Venta (<env>)`. Se resuelve en `main.js` antes de cargar `db/client.js`; no mover ese bloque.
 
 ### Electron
 
 - `electron/main.js` — ventana única (`BrowserWindow`), carga dev server o `dist/farma-jyv-pos/browser/index.html` según `NODE_ENV`/`--dev`. IPC mínimo: `get-app-version`, `get-device-info` (MAC/hostname para identificar el equipo de venta).
 - `electron/preload.js` — expone `window.electronAPI` vía `contextBridge` (`contextIsolation: true`, sin `nodeIntegration`).
 - Empaquetado con `electron-builder`, configuración en la clave `build` de `package.json`.
+- **El cliente de Prisma se declara como `node_modules/.prisma`, sin glob.** Los patrones de `files`/`asarUnpack` no entran en carpetas ocultas, así que `node_modules/.prisma/**/*` no incluye nada y el paquete sale sin el cliente generado: la app abre el login y muere con `MODULE_NOT_FOUND` al primer acceso a la base — un fallo que ninguna prueba ve, porque solo existe en el `.app` empaquetado.
+- Antes de publicar un release, verificar el paquete real (no `electron:start`, que corre contra `node_modules`):
+  `ELECTRON_RUN_AS_NODE=1 "<app>/Contents/MacOS/<bin>" -e "new (require('<app>/Contents/Resources/app.asar/node_modules/@prisma/client').PrismaClient)({datasourceUrl:'file:/tmp/t.sqlite'}).\$queryRawUnsafe('select 1').then(()=>console.log('OK')).catch(e=>console.log('FALLA',e.message))"`
 
 ## Convenciones Angular
 

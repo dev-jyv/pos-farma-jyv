@@ -8,6 +8,7 @@ const KEY = `pos.current-cart.${UID}`;
 
 function line(): CartLine {
   return {
+    kind: 'product' as const,
     product: { id: 'p1', sku: 'SKU1', name: 'Producto', salePrice: 100, stock: 5 } as Product,
     quantity: 2,
     discountAmount: 10,
@@ -66,5 +67,36 @@ describe('CartStorageService', () => {
     service.save(UID, [line()], {});
     service.clear(UID);
     expect(service.load(UID)).toBeNull();
+  });
+
+  /**
+   * `save` corre en un `effect()` en cada cambio del carrito: con la cuota llena
+   * o el almacenamiento bloqueado, escanear un producto tumbaba la pantalla de
+   * venta. El autoguardado es una red de seguridad, no parte del cobro.
+   */
+  describe('almacenamiento no disponible', () => {
+    it('guardar no revienta si el navegador rechaza la escritura', () => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = () => {
+        throw new DOMException('QuotaExceededError');
+      };
+      try {
+        expect(() => service.save(UID, [line()], {})).not.toThrow();
+      } finally {
+        Storage.prototype.setItem = original;
+      }
+    });
+
+    it('limpiar tampoco revienta', () => {
+      const original = Storage.prototype.removeItem;
+      Storage.prototype.removeItem = () => {
+        throw new DOMException('SecurityError');
+      };
+      try {
+        expect(() => service.clear(UID)).not.toThrow();
+      } finally {
+        Storage.prototype.removeItem = original;
+      }
+    });
   });
 });

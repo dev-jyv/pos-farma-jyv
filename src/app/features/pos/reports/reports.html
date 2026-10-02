@@ -138,7 +138,102 @@
             ${{ discountTotal() | number: '1.2-2' }}
           </div>
         </div>
+        <div class="rounded-xl border border-[var(--pos-border)] px-4 py-3">
+          <div class="text-xs font-medium text-slate-600">{{ 'reports.cashCollected' | translate }}</div>
+          <div class="text-2xl font-bold tabular-nums text-slate-900">
+            ${{ cashCollected() | number: '1.2-2' }}
+          </div>
+        </div>
+        <div class="rounded-xl border border-[var(--pos-border)] px-4 py-3">
+          <div class="text-xs font-medium text-slate-600">{{ 'reports.cardCollected' | translate }}</div>
+          <div class="text-2xl font-bold tabular-nums text-slate-900">
+            ${{ cardCollected() | number: '1.2-2' }}
+          </div>
+        </div>
+        <div class="rounded-xl border border-[var(--pos-border)] px-4 py-3">
+          <div class="text-xs font-medium text-slate-600">{{ 'reports.expenses' | translate }}</div>
+          <div class="text-2xl font-bold tabular-nums" [class.text-red-700]="expenseTotal() > 0" [class.text-slate-900]="expenseTotal() === 0">
+            ${{ expenseTotal() | number: '1.2-2' }}
+          </div>
+          @if (expenseCount() > 0) {
+            <div class="text-xs text-slate-600">
+              {{ expenseCount() }} {{ 'reports.expenseCount' | translate }}
+            </div>
+          }
+        </div>
+        <!-- Cierra la cuenta del efectivo: cobrado + entradas − gastos y retiros.
+             Sin esto el admin tenía que restar de cabeza para saber qué debe
+             haber en el cajón. No incluye el fondo inicial: no es venta. -->
+        <div class="rounded-xl border border-[var(--pos-border)] bg-slate-50 px-4 py-3">
+          <div class="text-xs font-medium text-slate-600">{{ 'reports.cashInDrawer' | translate }}</div>
+          <div class="text-2xl font-bold tabular-nums text-slate-900">
+            ${{ cashInDrawer() | number: '1.2-2' }}
+          </div>
+          <div class="text-xs text-slate-600">{{ 'reports.cashInDrawerHint' | translate }}</div>
+        </div>
       </div>
+
+      <!-- Farmacia y servicios, separados. Una farmacia que no cobra servicios
+           no ve nada nuevo. -->
+      @if (hasServiceActivity()) {
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div class="rounded-xl border border-(--pos-border) px-4 py-3">
+            <div class="text-xs font-medium text-slate-600">{{ 'reports.pharmacyNet' | translate }}</div>
+            <div class="text-2xl font-bold tabular-nums text-slate-900">
+              ${{ pharmacyNet() | number: '1.2-2' }}
+            </div>
+          </div>
+          <div class="rounded-xl border border-sky-200 bg-sky-50/60 px-4 py-3">
+            <div class="text-xs font-medium text-sky-900">{{ 'reports.servicesNet' | translate }}</div>
+            <div class="text-2xl font-bold tabular-nums text-slate-900">
+              ${{ servicesNet() | number: '1.2-2' }}
+            </div>
+            <div class="text-xs text-slate-600">
+              {{ servicesCount() }} {{ 'reports.servicesCount' | translate }}
+            </div>
+          </div>
+          <div class="rounded-xl border border-(--pos-border) px-4 py-3">
+            <div class="text-xs font-medium text-slate-600">{{ 'reports.commissionTotal' | translate }}</div>
+            <div class="text-2xl font-bold tabular-nums text-slate-900">
+              ${{ commissionTotal() | number: '1.2-2' }}
+            </div>
+          </div>
+          <div class="rounded-xl border border-(--pos-border) px-4 py-3">
+            <div class="text-xs font-medium text-slate-600">{{ 'reports.servicesCash' | translate }}</div>
+            <div class="text-2xl font-bold tabular-nums text-slate-900">
+              ${{ servicesCash() | number: '1.2-2' }}
+            </div>
+          </div>
+        </div>
+      }
+
+      @if (hasMovements()) {
+        <section>
+          <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
+            {{ 'reports.movements' | translate }}
+          </h2>
+          <div class="grid grid-cols-3 gap-3">
+            <div class="rounded-lg border border-[var(--pos-border)] px-3 py-2">
+              <div class="text-xs text-slate-600">{{ 'reports.deposits' | translate }}</div>
+              <div class="text-lg font-semibold tabular-nums text-slate-900">
+                ${{ depositTotal() | number: '1.2-2' }}
+              </div>
+            </div>
+            <div class="rounded-lg border border-[var(--pos-border)] px-3 py-2">
+              <div class="text-xs text-slate-600">{{ 'reports.withdrawals' | translate }}</div>
+              <div class="text-lg font-semibold tabular-nums text-slate-900">
+                ${{ withdrawalTotal() | number: '1.2-2' }}
+              </div>
+            </div>
+            <div class="rounded-lg border border-[var(--pos-border)] px-3 py-2">
+              <div class="text-xs text-slate-600">{{ 'reports.expenses' | translate }}</div>
+              <div class="text-lg font-semibold tabular-nums text-slate-900">
+                ${{ expenseTotal() | number: '1.2-2' }}
+              </div>
+            </div>
+          </div>
+        </section>
+      }
 
       <section>
         <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
@@ -214,6 +309,87 @@
       </section>
 
       <div class="grid gap-6 lg:grid-cols-2">
+        @if (hasServiceActivity()) {
+          <section>
+            <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
+              {{ 'reports.topServices' | translate }}
+            </h2>
+            <p-table
+              [value]="topServicesByAmount()"
+              styleClass="pos-product-table"
+              [attr.aria-label]="'reports.topServices' | translate"
+            >
+              <ng-template #header>
+                <tr>
+                  <th scope="col">{{ 'reports.service' | translate }}</th>
+                  <th scope="col" class="text-right">{{ 'reports.quantity' | translate }}</th>
+                  <th scope="col" class="text-right">{{ 'reports.total' | translate }}</th>
+                </tr>
+              </ng-template>
+              <ng-template #body let-row>
+                <tr>
+                  <td class="text-sm">{{ row.name }}</td>
+                  <td class="text-right text-sm font-semibold tabular-nums">{{ row.quantity }}</td>
+                  <td class="text-right text-sm tabular-nums">${{ row.total | number: '1.2-2' }}</td>
+                </tr>
+              </ng-template>
+              <ng-template #emptymessage>
+                <tr>
+                  <td colspan="3" class="!py-8 text-center text-sm text-slate-500">
+                    {{ 'reports.emptyServices' | translate }}
+                  </td>
+                </tr>
+              </ng-template>
+            </p-table>
+          </section>
+
+          <!-- Esta es la tabla con la que se paga: se imprime con la pantalla. -->
+          <section>
+            <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
+              {{ 'reports.commissions' | translate }}
+            </h2>
+            <p-table
+              [value]="commissionsByProvider()"
+              styleClass="pos-product-table"
+              [attr.aria-label]="'reports.commissions' | translate"
+            >
+              <ng-template #header>
+                <tr>
+                  <th scope="col">{{ 'reports.performer' | translate }}</th>
+                  <th scope="col" class="text-right">{{ 'reports.procedures' | translate }}</th>
+                  <th scope="col" class="text-right">{{ 'reports.commissionBase' | translate }}</th>
+                  <th scope="col" class="text-right">{{ 'reports.commissionAmount' | translate }}</th>
+                </tr>
+              </ng-template>
+              <ng-template #body let-row>
+                <tr>
+                  <td class="text-sm">{{ row.name }}</td>
+                  <td class="text-right text-sm tabular-nums">{{ row.count }}</td>
+                  <td class="text-right text-sm tabular-nums">${{ row.baseAmount | number: '1.2-2' }}</td>
+                  <td class="text-right text-sm font-bold tabular-nums">
+                    ${{ row.commissionAmount | number: '1.2-2' }}
+                  </td>
+                </tr>
+              </ng-template>
+              <ng-template #footer>
+                <tr>
+                  <td colspan="3" class="text-sm font-bold">{{ 'reports.total' | translate }}</td>
+                  <td class="text-right text-sm font-bold tabular-nums">
+                    ${{ commissionTotal() | number: '1.2-2' }}
+                  </td>
+                </tr>
+              </ng-template>
+              <ng-template #emptymessage>
+                <tr>
+                  <td colspan="4" class="!py-8 text-center text-sm text-slate-500">
+                    {{ 'reports.emptyServices' | translate }}
+                  </td>
+                </tr>
+              </ng-template>
+            </p-table>
+          </section>
+        }
+
         <section>
           <h2 class="mb-2 text-sm font-bold uppercase tracking-wide text-slate-600">
             {{ 'reports.topByQuantity' | translate }}

@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 
-import { CartLine, Product } from '../../../shared/models';
+import { CartLine } from '../../../shared/models';
+import { normalizeStoredLine } from '../../../shared/utils/cart-line';
 
 /**
  * Autoguardado del ticket en curso.
@@ -19,7 +20,12 @@ export interface StoredCart {
 }
 
 interface StoredCartDto {
-  lines: Array<{ product: Product; quantity: number; discountAmount: number }>;
+  /**
+   * Se guardan crudas. Un ticket guardado ANTES de los servicios no trae
+   * `kind`: `normalizeStoredLine` lo rellena al leer, o el cajero que recupera
+   * un ticket viejo se encuentra la pantalla rota.
+   */
+  lines: unknown[];
   manualDiscounts: Record<string, number>;
   savedAt: string;
 }
@@ -43,12 +49,14 @@ export class CartStorageService {
       if (!parsed || !Array.isArray(parsed.lines) || parsed.lines.length === 0) {
         return null;
       }
+      const lines = parsed.lines
+        .map((line) => normalizeStoredLine(line))
+        .filter((line): line is CartLine => line !== null);
+      if (!lines.length) {
+        return null;
+      }
       return {
-        lines: parsed.lines.map((line) => ({
-          product: line.product,
-          quantity: line.quantity,
-          discountAmount: line.discountAmount,
-        })),
+        lines,
         manualDiscounts: parsed.manualDiscounts ?? {},
         savedAt: new Date(parsed.savedAt),
       };
@@ -67,20 +75,32 @@ export class CartStorageService {
       return;
     }
     const payload: StoredCartDto = {
-      lines: lines.map((line) => ({
-        product: line.product,
-        quantity: line.quantity,
-        discountAmount: line.discountAmount,
-      })),
+      lines,
       manualDiscounts,
       savedAt: new Date().toISOString(),
     };
-    localStorage.setItem(this.key(uid), JSON.stringify(payload));
+    /**
+     * `setItem` lanza con la cuota llena o con el almacenamiento bloqueado, y
+     * esto corre en un `effect()` en **cada cambio del carrito**: sin guardia,
+     * escanear un producto tumbaba la pantalla de venta. El autoguardado es una
+     * red de seguridad por si se cae la sesión, no parte del cobro — si no se
+     * puede escribir, la venta sigue.
+     */
+    try {
+      localStorage.setItem(this.key(uid), JSON.stringify(payload));
+    } catch {
+      // Sin respaldo del ticket; cobrar no depende de esto.
+    }
   }
 
   clear(uid: string): void {
-    if (uid) {
+    if (!uid) {
+      return;
+    }
+    try {
       localStorage.removeItem(this.key(uid));
+    } catch {
+      // Nada que limpiar si el almacenamiento no está disponible.
     }
   }
 }

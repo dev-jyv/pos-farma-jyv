@@ -412,19 +412,25 @@ isDev = NODE_ENV === 'development' || process.argv.includes('--dev')    // main.
 El `loadFile` sobre `file://` es lo que obliga a `baseHref: './'` en la configuración `electron` de
 `angular.json` (`angular.json:65`).
 
-### 4.3 Los tres canales IPC
+### 4.3 Los canales IPC — de 3 a 21 (pivot local-first, 2026-08-30/31)
 
-`registrarIPCHandlers()` (`main.js:104`) — los tres son `ipcMain.handle` (petición/respuesta,
-`invoke`), no `send`/`on`. No hay canales del main hacia el renderer.
+**Breaking change de arquitectura.** El POS dejó de cobrar y dar de alta stock contra el
+backend por HTTP: ahora escribe primero en un SQLite propio (vía Prisma, en el proceso
+principal de Electron) y sincroniza con el servidor solo en horarios fijos, al login o a mano.
+`registrarIPCHandlers()` (`main.js`) pasó de 3 canales a **21**, todos `ipcMain.handle`
+(petición/respuesta, `invoke`) — sigue sin haber canales del main hacia el renderer.
 
-| Canal | Handler (main) | API expuesta (preload) | Devuelve |
+| Grupo | Canales | Backend en `electron/db/` | Devuelve/hace |
 |---|---|---|---|
-| `get-app-version` | `app.getVersion()` — `main.js:105` | `getAppVersion()` — `preload.js:4` | `string` |
-| `get-device-info` | `obtenerInfoDispositivo()` — `main.js:106` | `getDeviceInfo()` — `preload.js:5` | `{ mac, hostname, plataforma, arquitectura, id }` |
-| `open-cash-drawer` | `abrirCajon(printerName)` — `main.js:107` | `openCashDrawer(printerName)` — `preload.js:6` | `boolean` |
+| Identidad/hardware (sin cambio) | `get-app-version`, `get-device-info`, `open-cash-drawer` | — (funciones locales de `main.js`) | Igual que antes (§4.2 histórico) |
+| Catálogo local | `catalog:search`, `catalog:getByBarcode`, `catalog:recordStockEntry`, `catalog:upsertMany`, `catalog:getBatchesByProduct`, `catalog:getPendingStockEntries`, `catalog:markStockEntrySynced`, `catalog:markStockEntryPushFailed` | `products.js` | Búsqueda/alta 100% local; `upsertMany` es el pull del catálogo remoto |
+| Ventas locales | `sales:createLocal`, `sales:list`, `sales:getPendingPush`, `sales:markSynced`, `sales:markPushFailed`, `sales:voidLocal`, `sales:clearPushError`, `sales:discard` | `sales.js` | Cobro 100% local; el resto es soporte de la cola de push |
+| Sync | `sync:getStatus`, `sync:recordRun` | `sync-runs.js` | Bitácora de corridas de sincronización |
 
-`preload.js:3` expone exactamente esas tres funciones bajo `window.electronAPI` vía
-`contextBridge.exposeInMainWorld` — superficie mínima, sin fugas de `ipcRenderer`.
+`preload.js` expone las mismas funciones bajo `window.electronAPI`, agrupadas en los
+namespaces `catalog`, `sales` y `sync` (más las tres sueltas de siempre) vía
+`contextBridge.exposeInMainWorld` — superficie más grande, pero sigue sin fugar `ipcRenderer`
+al renderer.
 
 **Identificación del equipo** — `obtenerInfoDispositivo()` (`main.js:152`) construye un `id` estable
 `${hostname}-${mac sin dos puntos}` (`main.js:154`), con fallback a solo el hostname si no hay MAC.
@@ -486,6 +492,69 @@ borra siempre en `finally`, ignorando fallos de borrado (`main.js:131-137`). Nun
 
 Diseño deliberadamente **no-op ante fallo**: los tres caminos de error (`main.js:81`, `91`, `94`)
 están anotados como tal. Un feed caído nunca impide vender.
+
+### 4.6 SQLite/Prisma local y `SyncScheduler` (2026-08-30/31)
+
+**Por qué**: cobrar y dar de alta stock no deben depender de la red en el instante de la
+acción — con el paciente/cliente enfrente, un timeout de la API no puede bloquear el cobro.
+La solución: un SQLite embebido en el proceso principal, con Prisma como ORM, que el renderer
+nunca toca directo (todo pasa por los canales IPC de §4.3).
+
+- **Prisma pineado en v6.19.3, a propósito, no v7** — v7 introdujo `prisma.config.ts` y una
+  arquitectura de driver-adapters incompatible con el empaquetado clásico de Electron.
+- **Migration runner casero** (`electron/db/migrate.js`), no `prisma migrate deploy` — evita
+  bundlear el schema-engine de Prisma (binario aparte) en la app empaquetada; solo se
+  distribuye el query engine, que `@prisma/client` ya necesita de todos modos. Aplica archivos
+  `.sql` en orden, registrando cada uno aplicado en una tabla `_local_migrations`. Parte cada
+  archivo en statements con una regex (`;\s*(?:\r?\n|$)`) — frágil si algún día una migración
+  necesita un `;` dentro de un string/trigger.
+- **`electron/db/client.js`**: `getPrisma()` singleton, base de datos en
+  `app.getPath('userData')/farmajyv-pos.sqlite`, corre las migraciones una sola vez al primer
+  uso.
+
+  **Dónde está el archivo, en concreto.** `userData` depende del nombre de la app, así que
+  **desarrollo y producción usan bases distintas** — de ahí que la app empaquetada no vea las
+  ventas hechas con `electron:dev`:
+
+  | Entorno | Ruta (macOS) |
+  |---|---|
+  | `electron:dev` / `electron:start` (binario de Electron sin empaquetar) | `~/Library/Application Support/Electron/farmajyv-pos.sqlite` |
+  | Empaquetada (`build.productName: "FarmaJyV Venta"`) | `~/Library/Application Support/FarmaJyV Venta/farmajyv-pos.sqlite` |
+
+  En Windows es `%APPDATA%\<mismo nombre>\farmajyv-pos.sqlite`.
+
+  Se inspecciona con `sqlite3` sin abrir la app, que es como se diagnosticaron los pushes
+  atascados (ver `GOALS.md`, "El push dejaba ventas y productos atrás"):
+
+  ```bash
+  sqlite3 "$HOME/Library/Application Support/Electron/farmajyv-pos.sqlite" \
+    "SELECT folio, pendingPush, pushError, voidedAt FROM Sale ORDER BY createdAt DESC LIMIT 10;"
+  ```
+
+  Con la app abierta, SQLite permite leer en paralelo; evita escribir desde fuera mientras
+  corre, o el proceso principal se topará con la base bloqueada.
+- **Modelos** (`electron/prisma/schema.prisma`): `Product`, `Batch`, `Sale`, `SaleItem`,
+  `SyncRun`. Cada entidad sincronizable tiene `id` (uuid local) y `remoteId` (id de Firestore,
+  `null` hasta el primer sync exitoso) — la dualidad de ids que ya causó varios bugs reales
+  (ver `docs/arquitectura/pos.md` §4 y §10, hallazgo #1).
+- **`electron/db/products.js`**: `search`/`getByBarcode` (lectura local para el POS),
+  `recordStockEntry` (alta/reabasto unificado: crea o actualiza el producto y el lote en una
+  sola función, guarda el payload crudo para reenviarlo tal cual al sincronizar),
+  `upsertMany` (aplica el pull de `GET /products/sync`, producto por producto sin transacción
+  ni batch — candidato a `prisma.$transaction` si el catálogo crece).
+- **`electron/db/sales.js`**: `createLocal` (venta + partidas en una transacción, decremento de
+  stock por id local), `list`, `voidLocal`, `getPendingPush`/`markSynced`/`markPushFailed`
+  (soporte de la cola de push).
+- **`SyncSchedulerService`** (`src/app/core/sync/sync-scheduler.service.ts`): arma **3
+  horarios fijos al día** (10:30, 14:00, 20:00) y dispara `runNow()`; también se llama una vez
+  al iniciar sesión (`Login.onSubmit()`, único trigger "al abrir sesión" — no en cada reapertura
+  de la app con sesión persistida) y desde el botón manual del header (`syncNow()`, con
+  confirmación). Cada corrida: `apiHealth.checkNow()` → `pullProducts()` (`GET
+  /products/sync` con cursor por `updatedAt`, una sola llamada, no paginado en loop) →
+  `saleService.flushQueue()` → `stockEntryService.flushQueue()`. `pullProducts()` no tiene
+  guardia de reentrancia propia (a diferencia de los `flushQueue()`, que sí la tienen);
+  sync manual + horario fijo casi simultáneos pueden duplicar el fetch (no corrompe, por ser
+  upsert, pero desperdicia).
 
 ---
 
@@ -575,13 +644,19 @@ para equipos de mostrador administrados.
 
 ## 6. Frontera renderer ↔ preload ↔ main
 
+**Nota (2026-09-03)**: el diagrama de abajo es el original, previo al pivot local-first —
+sigue siendo correcto para los tres canales que muestra (identidad/hardware/cajón), pero ya
+no es todo el panorama: hoy hay 21 canales (§4.3). Faltan en este dibujo los namespaces
+`catalog`/`sales`/`sync` y sus 18 handlers, respaldados por `electron/db/{products,sales,
+sync-runs}.js` sobre SQLite/Prisma (§4.6) — pendiente de rehacer el diagrama completo.
+
 ```mermaid
 flowchart LR
   subgraph R["Renderer — Angular 22 (sandbox)"]
     direction TB
     CD["CashDrawerService<br/>cash-drawer.service.ts:16"]
-    OTROS["Checkout / Ticket / Cola offline"]
-    API["window.electronAPI<br/>(tipado en cash-drawer.service.ts:5-13)"]
+    OTROS["Checkout / Ticket / SaleService / StockEntryService"]
+    API["window.electronAPI<br/>(tipado en core/electron/window.d.ts)"]
     CD --> API
     OTROS -.-> API
   end
@@ -591,18 +666,21 @@ flowchart LR
     F1["getAppVersion()  preload.js:4"]
     F2["getDeviceInfo()  preload.js:5"]
     F3["openCashDrawer(printerName)  preload.js:6"]
-    BRIDGE --> F1 & F2 & F3
+    NS["catalog.* / sales.* / sync.*<br/>18 funciones más, ver §4.3"]
+    BRIDGE --> F1 & F2 & F3 & NS
   end
 
   subgraph M["main.js — proceso principal (Node)"]
-    H["registrarIPCHandlers()<br/>main.js:104"]
-    H1["app.getVersion()  main.js:105"]
-    H2["obtenerInfoDispositivo()  main.js:152"]
-    H3["abrirCajon()  main.js:110"]
-    MAC["obtenerMacAddress()  main.js:140"]
-    UPD["verificarActualizaciones()<br/>main.js:68"]
-    PERM["configurarPermisos()<br/>main.js:98"]
+    H["registrarIPCHandlers()<br/>main.js"]
+    H1["app.getVersion()"]
+    H2["obtenerInfoDispositivo()"]
+    H3["abrirCajon()"]
+    MAC["obtenerMacAddress()"]
+    UPD["verificarActualizaciones()"]
+    PERM["configurarPermisos()"]
+    DB["electron/db/{products,sales,sync-runs}.js<br/>sobre SQLite/Prisma, §4.6"]
     H --> H1 & H2 & H3
+    H --> DB
     H2 --> MAC
   end
 
@@ -641,34 +719,32 @@ Puntos de la frontera:
 
 ### Seguridad
 
-1. **Interpolación en shell para abrir el cajón — el riesgo más serio de la capa Electron.**
-   `main.js:123` construye la línea de Windows por concatenación de string y la pasa a `cmd /c`:
-   ```js
-   execFileSync('cmd', ['/c', `copy /b "${tempFile}" "${name}"`], { stdio: 'ignore' });
-   ```
-   `name` viene de `printerName` sin más saneo que `trim()` y una comprobación de no-vacío
-   (`main.js:111-115`). Las comillas dobles no protegen contra `&`, `|` o `^` en `cmd`, así que un
-   `printerName` malicioso lograría **ejecución de comandos con los privilegios de la app**. Hoy el
-   valor procede de `environment.cashDrawer.printerName` (configuración local, no entrada de
-   usuario, `cash-drawer.service.ts:18`), lo que lo hace *actualmente* no explotable — pero es un
-   canal IPC que acepta un argumento arbitrario del renderer (`main.js:107`), de modo que
-   cualquier XSS o cambio futuro que alimente ese parámetro desde datos del backend lo convierte en
-   RCE. Conviene validar `printerName` contra una lista blanca o un patrón estricto en el main, y
-   evitar `cmd /c` a favor de escritura directa al dispositivo.
-2. **`geolocation` es el único permiso concedido** (`main.js:100`) y un POS de farmacia no
+1. **[Corregido, 2026-08-30] Interpolación en shell para abrir el cajón.** El `main.js`
+   original construía la línea de Windows por concatenación de string y la pasaba a `cmd /c
+   copy /b "..." "..."` — un `printerName` con `&`/`|`/`^` habría logrado ejecución de comandos
+   arbitraria. Se reemplazó por `fs.copyFileSync(tempFile, name)`, que escribe el binario
+   directo al recurso de la impresora sin invocar ningún shell. Verificado en el SAST de la
+   corrida E2E de 2026-08-30 (`qa/e2e/2026-08-30/reporte.md`, SEC-01).
+2. **[Corregido, 2026-09-03] `abrirCajon` era bloqueante y de un solo hilo** —
+   `fs.copyFileSync` (Windows) y `execFileSync('lp', ...)` (macOS/Linux) corrían síncronos en el
+   único hilo del proceso principal: si el cajón/impresora no respondía, toda la ventana —y todo
+   el IPC— se congelaba durante el cobro. Fix: `execFile`/`fs.promises` (async) + `withTimeout`
+   de 5 s — un timeout no cancela la syscall real, pero libera el proceso principal para seguir
+   atendiendo IPC en vez de congelarse.
+3. **`geolocation` es el único permiso concedido** (`main.js:100`) y un POS de farmacia no
    necesita geolocalización. La lista blanca debería ser vacía (`callback(false)`).
-3. **No hay `setPermissionCheckHandler`**, solo `setPermissionRequestHandler` (`main.js:99`). La
+4. **No hay `setPermissionCheckHandler`**, solo `setPermissionRequestHandler` (`main.js:99`). La
    verificación síncrona de permisos queda con el comportamiento por defecto de Electron.
-4. **No hay `will-navigate` ni `setWindowOpenHandler`**: nada impide que el contenido cargado
+5. **No hay `will-navigate` ni `setWindowOpenHandler`**: nada impide que el contenido cargado
    navegue a un origen arbitrario o abra ventanas nuevas. Tampoco se define CSP desde el main.
-5. **Ausencia de firma de código.** `identity: null` en macOS (`package.json:60`) desactiva
+6. **Ausencia de firma de código.** `identity: null` en macOS (`package.json:60`) desactiva
    explícitamente la firma, y la configuración de Windows (`package.json:66-72`) no declara
    `certificateFile`/`signingHashAlgorithms`. Consecuencias: Gatekeeper bloquea el `.dmg` sin
    notarización (el usuario debe autorizarlo a mano), SmartScreen advierte en Windows y —lo más
    grave— **el auto-updater con `autoDownload = true` (`main.js:73`) descarga e instala binarios
    sin verificar firma**, lo que hace del canal de actualización un vector de compromiso si el feed
    o el DNS se ven afectados.
-6. **Feed de actualizaciones sobre un dominio no verificado en el repo.**
+7. **Feed de actualizaciones sobre un dominio no verificado en el repo.**
    `https://updates.farmajyv.mx/pos` (`package.json:39`) y el override por `UPDATE_URL`
    (`main.js:75-78`) no tienen validación de esquema: una variable de entorno puede redirigir las
    actualizaciones a cualquier host (`http://` incluido). Combinado con el punto 5, cualquiera que
@@ -678,16 +754,16 @@ Puntos de la frontera:
 
 ### Empaquetado
 
-7. **`electron/assets/` está vacío.** `package.json:67` declara `win.icon:
+8. **`electron/assets/` está vacío.** `package.json:67` declara `win.icon:
    "electron/assets/icon.png"` y `directories.buildResources` apunta ahí (`package.json:28`), pero
    el directorio no contiene ningún archivo. `electron:dist:win` fallará o caerá al icono por
    defecto de Electron; en macOS el `.dmg` saldrá sin identidad visual. `main.js:30-33` ya lo
    sortea en runtime con `fs.existsSync`, lo que **enmascara el problema en desarrollo** hasta el
    momento de empaquetar.
-8. **La configuración `electron` de `angular.json` no tiene budgets** (`angular.json:64-73`),
+9. **La configuración `electron` de `angular.json` no tiene budgets** (`angular.json:64-73`),
    mientras `production` sí (`angular.json:39-50`). El artefacto que realmente se distribuye a los
    mostradores es justo el que no tiene control de tamaño: un bundle inflado pasa sin aviso.
-9. **`strict` de TypeScript no está activado** en `tsconfig.json`. Hay flags sueltos
+10. **`strict` de TypeScript no está activado** en `tsconfig.json`. Hay flags sueltos
    (`noImplicitOverride`, `noImplicitReturns`, `noFallthroughCasesInSwitch`,
    `noPropertyAccessFromIndexSignature`) pero no `strict: true`, así que **`strictNullChecks` está
    apagado**. En un modelo cuya semántica descansa en distinguir `null` de `0` —`cashAmount`,
@@ -696,37 +772,40 @@ Puntos de la frontera:
 
 ### Pruebas
 
-10. **`money.ts` es la única de las cinco reglas sin spec propio**, y es la base de las otras
+11. **`money.ts` es la única de las cinco reglas sin spec propio**, y es la base de las otras
     cuatro. Un cambio en `toCents` rompería en silencio impuestos, tender y corte de caja a la vez,
     y solo se detectaría por rebote.
-11. **`hasPermission` y los `parse*` de `models/index.ts` no tienen pruebas**, pese a ser
+12. **`hasPermission` y los `parse*` de `models/index.ts` no tienen pruebas**, pese a ser
     control de acceso y parseo de datos externos.
-12. **4 specs para 53 archivos `.ts`.** Sin cobertura la cola offline, `SaleService`,
-    `CashSessionService`, guards, interceptor ni `electron/main.js`. El builder `test`
-    (`angular.json:89-91`) no configura umbral ni reporte de cobertura.
+13. **Sin cobertura de la capa local-first.** `SaleService`, `StockEntryService`,
+    `SyncSchedulerService`, `CashSessionService`, guards, interceptor y todo `electron/main.js`
+    + `electron/db/*.js` (SQLite/Prisma) siguen sin ningún test. El builder `test` no configura
+    umbral ni reporte de cobertura. Es justo esta capa la que en la auditoría de 2026-09-03
+    reveló el bug de `recordStockEntry` (ver `docs/arquitectura/pos.md` §10, hallazgo #1) — un
+    test de integración sobre `electron/db/products.js` lo habría atrapado antes de producción.
 
 ### Modelo y reglas
 
-13. **`StaffRole = string`** (`models/index.ts:1`) — se perdió el tipado cerrado del rol, y
+14. **`StaffRole = string`** (`models/index.ts:1`) — se perdió el tipado cerrado del rol, y
     `hasPermission` compara contra el literal `'admin'` hardcodeado (`models/index.ts:65`). Un
     cambio de slug en el backend degrada silenciosamente a un admin en usuario sin permisos.
-14. **`invoiceStatus: 'pending' | null`** (`models/index.ts:246`) no puede representar una factura
+15. **`invoiceStatus: 'pending' | null`** (`models/index.ts:246`) no puede representar una factura
     ya timbrada: el POS no distingue "sin factura" de "facturada".
-15. **Deuda de datos históricos por partida triple**: `taxSummary`, `cashAmount` y `SaleItem.taxes`
+16. **Deuda de datos históricos por partida triple**: `taxSummary`, `cashAmount` y `SaleItem.taxes`
     son `null`/opcionales *solo* por ventas anteriores a sendas migraciones
     (`models/index.ts:223`, `229-231`, `199`). Todo consumidor debe ramificar en cada uso; no hay
     una función de normalización compartida que absorba la diferencia.
-16. **Réplica sin verificación de deriva.** Las cinco reglas dicen ser "espejo" de archivos
+17. **Réplica sin verificación de deriva.** Las cinco reglas dicen ser "espejo" de archivos
     concretos del backend (`money.ts:4`, `tender.ts:5-6`, `taxes.ts:5-6`, `controlled.ts:4-6`,
     `session-expiry.ts:2`), pero nada —ni un test de contrato, ni un fixture compartido, ni una
     versión de esquema— detecta que el backend cambie primero. Los mensajes de error están
     duplicados literalmente en ambos lados (`controlled.ts:164`). Es la deuda estructural de esta
     capa: es correcta hoy porque alguien la mantuvo a mano.
-17. **`prorateDiscount` devuelve `[...lineAmounts]` cuando el descuento iguala o supera el total**
+18. **`prorateDiscount` devuelve `[...lineAmounts]` cuando el descuento iguala o supera el total**
     (`taxes.ts:103-105`). Es correcto en efecto (cada partida queda en cero), pero devuelve los
     importes brutos como si fueran *descuentos*, lo que hace la firma confusa y produce un total
     cobrado de `0` sin ninguna señal explícita.
-18. **Coste de `getSessionExpiryMs`.** La búsqueda binaria (`session-expiry.ts:31-43`) recorre una
+19. **Coste de `getSessionExpiryMs`.** La búsqueda binaria (`session-expiry.ts:31-43`) recorre una
     ventana de 28 h al milisegundo: ~**27 iteraciones**, cada una construyendo un
     `Intl.DateTimeFormat` nuevo (`session-expiry.ts:14`). Si `isSessionExpired` se invoca en un
     intervalo corto, conviene memoizar el formateador o el resultado por día.

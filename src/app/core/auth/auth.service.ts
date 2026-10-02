@@ -13,6 +13,7 @@ import { Observable, catchError, finalize, map, of, shareReplay, switchMap, tap 
 
 import { FIREBASE_AUTH } from '../firebase/firebase.providers';
 import { unwrapEntity } from '../api/api.utils';
+import { CashSessionService } from '../../features/pos/services/cash-session.service';
 import { NotificationService } from '../notifications/notification.service';
 import { getSessionExpiryMs, isSessionExpired } from '../../shared/utils/session-expiry';
 import {
@@ -42,6 +43,12 @@ export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
   private readonly notifications = inject(NotificationService);
+  /**
+   * A propósito, `CashSessionService` NO inyecta `AuthService` de vuelta (lo
+   * necesita `endExpiredSession()` para el auto-cierre a las 24h) — Angular no
+   * resuelve un ciclo entre dos `providedIn: 'root'` que se inyectan mutuamente.
+   */
+  private readonly cashSessionService = inject(CashSessionService);
   private readonly apiUrl = environment.apiUrl;
   private profileRequest$: Observable<StaffProfile | null> | null = null;
   /** Último perfil resuelto, con el `uid` al que pertenece y cuándo se resolvió. */
@@ -104,7 +111,20 @@ export class AuthService {
     return hasPermission(this.profile(), area, level);
   }
 
-  /** Cierra la sesión avisando el motivo; el ticket queda en `localStorage`. */
+  /**
+   * Cierra la sesión avisando el motivo; el ticket queda en `localStorage`.
+   *
+   * **El turno de caja NO se cierra aquí.** Antes se cerraba solo a las 24:00, y
+   * eso dejaba el peor escenario posible: el turno quedaba cerrado en local con
+   * sus gastos y ventas todavía en cola, y como el cierre viajaba en el mismo
+   * ciclo, cualquier rezagado llegaba al servidor con el turno ya cerrado y
+   * moría en 400. Además nadie estaba presente para ver el error.
+   *
+   * Ahora el turno sobrevive a la medianoche y se liquida al entrar la siguiente
+   * sesión (`SyncScheduler.settleStaleShift`), en orden y con la pantalla
+   * bloqueada: primero suben movimientos y ventas, después el cierre, y solo
+   * entonces se ofrece abrir el turno nuevo.
+   */
   async endExpiredSession(detail?: string): Promise<void> {
     this.clearExpiryTimer();
     this.notifications.sessionExpired(detail);

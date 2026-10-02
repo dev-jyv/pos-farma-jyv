@@ -3,6 +3,7 @@
 # Compiled output
 /dist
 /release
+/release-dev
 /tmp
 /out-tsc
 /bazel-out
@@ -49,3 +50,14 @@ Thumbs.db
 
 # Artefactos de auditoría con Playwright MCP
 /.playwright-mcp/
+/dist-updates
+/dist-updates-dev
+
+# Caché de despliegue de Firebase Hosting (feed de actualizaciones)
+/.firebase/
+
+# Base local de desarrollo (la real vive en userData de Electron).
+# Estuvo versionada por error: un esqueleto de `prisma migrate dev` que además
+# se quedaba atrás del schema.
+electron/prisma/*.sqlite
+electron/prisma/*.sqlite-journal

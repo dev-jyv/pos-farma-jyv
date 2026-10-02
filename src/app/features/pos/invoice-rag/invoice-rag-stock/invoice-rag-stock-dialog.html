@@ -1,0 +1,188 @@
+<p-dialog
+  [visible]="visible()"
+  (visibleChange)="visible.set($event)"
+  (onShow)="load()"
+  [modal]="true"
+  [draggable]="false"
+  [closable]="!applying()"
+  [style]="{ width: 'min(80rem, 96vw)' }"
+  [header]="'invoiceRag.stock.title' | translate"
+>
+  @if (loading()) {
+    <div class="flex justify-center py-10"><p-progressspinner /></div>
+  } @else {
+    <div class="flex flex-col gap-4">
+      <p class="text-sm text-slate-600">{{ 'invoiceRag.stock.hint' | translate }}</p>
+
+      <section class="flex flex-col gap-2 rounded-xl border border-(--pos-border) p-3">
+        <label for="rag-stock-invoice" class="text-sm font-semibold text-slate-700">{{ 'invoiceRag.stock.purchaseInvoice' | translate }}</label>
+        <div class="flex flex-wrap items-center gap-2">
+          <p-select
+            inputId="rag-stock-invoice"
+            [options]="invoiceOptions()"
+            optionLabel="label"
+            optionValue="value"
+            [ngModel]="invoiceId()"
+            (ngModelChange)="invoiceId.set($event)"
+            [filter]="true"
+            [showClear]="true"
+            appendTo="body"
+            [placeholder]="'invoiceRag.stock.choosePurchaseInvoice' | translate"
+            styleClass="min-w-80 flex-1"
+          />
+          @if (!registering()) {
+            <p-button icon="pi pi-plus" [label]="'invoiceRag.stock.registerInvoice' | translate" severity="secondary" [outlined]="true" size="small" (onClick)="startRegister()" />
+          }
+        </div>
+        @if (folioMatches()) {
+          <span class="text-xs text-emerald-700"><i class="pi pi-check-circle"></i> {{ 'invoiceRag.stock.folioMatches' | translate }}</span>
+        }
+        @if (invoicesError(); as error) {
+          <span class="text-xs text-red-600">{{ error }}</span>
+        }
+        @if (registering()) {
+          @let invoiceData = data();
+          <div class="flex flex-col gap-2 rounded-lg bg-slate-50 p-3">
+            @if (missingInvoiceData()) {
+              <p class="text-xs text-amber-700">{{ 'invoiceRag.stock.missingInvoiceData' | translate }}</p>
+            } @else {
+              <p class="text-xs text-slate-600">
+                {{ 'invoiceRag.folio' | translate }}: <b>{{ invoiceData?.folio }}</b> ·
+                {{ 'invoiceRag.issueDate' | translate }}: <b>{{ invoiceData?.issueDate }}</b> ·
+                {{ 'invoiceRag.total' | translate }}: <b>{{ invoiceData?.total | number: '1.2-2' }}</b>
+              </p>
+            }
+            <div class="flex flex-wrap items-center gap-2">
+              <p-select
+                [options]="suppliers()"
+                optionLabel="name"
+                optionValue="id"
+                [ngModel]="supplierId()"
+                (ngModelChange)="supplierId.set($event)"
+                [filter]="true"
+                appendTo="body"
+                [placeholder]="'invoiceRag.stock.chooseSupplier' | translate"
+                [ariaLabel]="'invoiceRag.stock.chooseSupplier' | translate"
+                styleClass="min-w-72 flex-1"
+              />
+              <p-button
+                icon="pi pi-check"
+                [label]="'invoiceRag.stock.register' | translate"
+                size="small"
+                [loading]="creatingInvoice()"
+                [disabled]="missingInvoiceData() || !supplierId()"
+                (onClick)="registerInvoice()"
+              />
+              <p-button [label]="'invoiceRag.cancel' | translate" severity="secondary" [text]="true" size="small" (onClick)="registering.set(false)" />
+            </div>
+          </div>
+        }
+      </section>
+
+      <div class="overflow-x-auto">
+        <table class="w-full min-w-[64rem] text-sm">
+          <thead>
+            <tr class="border-b border-(--pos-border) text-left text-xs text-slate-500">
+              <th class="w-10 py-2"></th>
+              <th class="py-2">{{ 'invoiceRag.stock.concept' | translate }}</th>
+              <th class="w-72 py-2">{{ 'invoiceRag.stock.product' | translate }}</th>
+              <th class="w-28 py-2">{{ 'invoiceRag.stock.pieces' | translate }}</th>
+              <th class="w-28 py-2">{{ 'invoiceRag.stock.cost' | translate }}</th>
+              <th class="w-36 py-2">{{ 'invoiceRag.lotNumber' | translate }}</th>
+              <th class="w-40 py-2">{{ 'invoiceRag.expiryDate' | translate }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of rows().controls; track row; let i = $index) {
+              @let value = rowValues()[i];
+              <tr [formGroup]="row" class="border-b border-slate-100 align-top" [class.opacity-50]="!value.include">
+                <td class="py-2">
+                  <p-checkbox formControlName="include" [binary]="true" [ariaLabel]="'invoiceRag.stock.include' | translate" />
+                </td>
+                <td class="py-2 pr-2">
+                  <p class="font-medium text-slate-800">{{ value.description }}</p>
+                  <input pInputText formControlName="barcode" inputmode="numeric" maxlength="14" [placeholder]="'invoiceRag.barcode' | translate" class="mt-1 w-40 font-mono text-xs" />
+                </td>
+                <td class="py-2 pr-2">
+                  <p-autocomplete
+                    formControlName="product"
+                    [suggestions]="suggestions()"
+                    (completeMethod)="searchProducts($event)"
+                    (onSelect)="row.controls.include.setValue(true)"
+                    optionLabel="name"
+                    [forceSelection]="true"
+                    [minQueryLength]="2"
+                    [delay]="250"
+                    appendTo="body"
+                    [placeholder]="'invoiceRag.stock.searchProduct' | translate"
+                    styleClass="w-full"
+                    inputStyleClass="w-full"
+                    [invalid]="hasError(i, 'product')"
+                  >
+                    <ng-template #item let-product>
+                      <div class="flex flex-col">
+                        <span class="font-medium">{{ product.name }}</span>
+                        <span class="text-xs text-slate-500">{{ product.barcode ?? product.sku }} · {{ 'invoiceRag.stock.stock' | translate }}: {{ product.stock }}</span>
+                      </div>
+                    </ng-template>
+                  </p-autocomplete>
+                  @if (value.product; as product) {
+                    <p class="mt-1 text-xs text-slate-500">
+                      {{ 'invoiceRag.stock.stock' | translate }}: {{ product.stock }}
+                      @if (value.include && value.quantity) {
+                        → <b class="text-emerald-700">{{ product.stock + value.quantity }}</b>
+                      }
+                    </p>
+                    @if (savesBarcode(value)) {
+                      <p class="text-xs text-sky-700"><i class="pi pi-barcode"></i> {{ 'invoiceRag.stock.savesBarcode' | translate }}</p>
+                    }
+                  } @else if (value.barcode) {
+                    <p class="mt-1 text-xs text-amber-700">{{ 'invoiceRag.stock.noMatch' | translate }}</p>
+                  }
+                </td>
+                <td class="py-2 pr-2">
+                  <p-inputnumber formControlName="quantity" [min]="1" [maxFractionDigits]="0" [useGrouping]="false" styleClass="w-full" inputStyleClass="w-full" [invalid]="hasError(i, 'quantity')" />
+                </td>
+                <td class="py-2 pr-2">
+                  <p-inputnumber formControlName="costPrice" [min]="0" [minFractionDigits]="2" [maxFractionDigits]="2" prefix="$" styleClass="w-full" inputStyleClass="w-full" />
+                </td>
+                <td class="py-2 pr-2">
+                  <input pInputText formControlName="lotNumber" maxlength="40" class="w-full" [invalid]="hasError(i, 'lotNumber')" [attr.aria-label]="'invoiceRag.lotNumber' | translate" />
+                </td>
+                <td class="py-2">
+                  <input
+                    type="date"
+                    formControlName="expiryDate"
+                    [min]="today"
+                    class="w-full rounded-lg border px-3 py-2 text-sm"
+                    [class]="hasError(i, 'expiryDate') ? 'border-red-400' : 'border-slate-300'"
+                    [attr.aria-label]="'invoiceRag.expiryDate' | translate"
+                  />
+                </td>
+              </tr>
+            } @empty {
+              <tr>
+                <td colspan="7" class="py-6 text-center text-slate-400">{{ 'invoiceRag.noItems' | translate }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  }
+
+  <ng-template #footer>
+    <div class="flex w-full flex-wrap items-center gap-3">
+      <div class="flex min-w-0 flex-1 flex-col text-left text-xs">
+        <span class="font-semibold text-slate-700">
+          {{ 'invoiceRag.stock.summary' | translate: { rows: included().length, pieces: totalPieces() } }}
+        </span>
+        @for (blocker of blockers(); track blocker) {
+          <span class="text-amber-700">{{ blocker | translate }}</span>
+        }
+      </div>
+      <p-button [label]="'invoiceRag.cancel' | translate" severity="secondary" [text]="true" [disabled]="applying()" (onClick)="visible.set(false)" />
+      <p-button icon="pi pi-box" [label]="'invoiceRag.stock.apply' | translate" [loading]="applying()" [disabled]="!canApply()" (onClick)="apply()" />
+    </div>
+  </ng-template>
+</p-dialog>

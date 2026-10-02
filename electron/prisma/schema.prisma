@@ -1,0 +1,440 @@
+generator client {
+  provider      = "prisma-client-js"
+  // "native" cubre la máquina donde se corre `prisma generate` (dev); los otros
+  // tres son los targets que de verdad se empaquetan y distribuyen.
+  binaryTargets = ["native", "darwin", "darwin-arm64", "windows"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Catálogo local, sincronizado desde Firestore `products` (pull) y hacia
+/// `POST /stock-entries` para altas hechas sin red (push).
+model Product {
+  id                   String   @id @default(uuid())
+  /// Id del documento en Firestore una vez sincronizado; null mientras es solo local.
+  remoteId             String?  @unique
+  sku                  String
+  barcode              String?
+  name                 String
+  activeIngredient     String?
+  concentration        String?
+  categoryId           String?
+  unit                 String?
+  salePrice            Float
+  minStock             Float    @default(0)
+  hasIva               Boolean  @default(false)
+  hasIvaZero           Boolean  @default(false)
+  hasIeps              Boolean  @default(false)
+  iepsRate             Float?
+  controlledGroup      String?
+  requiresPrescription Boolean  @default(false)
+  isActive             Boolean  @default(true)
+  /// Array de ids de proveedor codificado como JSON (SQLite no tiene tipo array).
+  suppliersJson        String?
+  /// Foto de stock total al último sync/venta local; no es tiempo real entre cajas.
+  totalStock           Float    @default(0)
+  /// Reservado para el push embebido de `POST /stock-entries` (alta/edición
+  /// de producto junto con un lote). No lo toca el módulo de edición de
+  /// catálogo — usa `pendingCatalogPush` aparte para no pisarse: un producto
+  /// nuevo dado de alta desde "Entrada de stock" ya se crea remoto dentro de
+  /// esa llamada, y si el módulo de catálogo lo reintentara por su cuenta con
+  /// este mismo flag crearía un duplicado en Firestore.
+  pendingPush          Boolean  @default(false)
+  pushError            String?
+  /// Alta/edición desde el módulo de catálogo (`/pos/productos`), sin lote de
+  /// por medio: se sube con `POST /products` o `PATCH /products/:id` en el
+  /// siguiente sync.
+  pendingCatalogPush   Boolean  @default(false)
+  catalogPushError     String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  batches              Batch[]
+
+  @@index([sku])
+  @@index([barcode])
+  @@index([pendingPush])
+  @@index([pendingCatalogPush])
+}
+
+/// Lote de un producto; una alta de producto nuevo crea Product + Batch juntos
+/// (igual que `POST /stock-entries` hoy).
+model Batch {
+  id          String    @id @default(uuid())
+  remoteId    String?   @unique
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  lotNumber   String?
+  expiryDate  DateTime?
+  quantity    Float
+  pendingPush Boolean   @default(false)
+  pushError   String?
+  /// `CreateStockEntryPayload` (JSON) tal como se mandaría a `POST /stock-entries`;
+  /// null en lotes que llegaron por el pull (ya existen remotos).
+  payloadJson String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([productId])
+  @@index([pendingPush])
+}
+
+/// Venta: se crea siempre local-first (`checkout.ts`), se empuja a `POST /sales`
+/// en los horarios fijos de sync.
+model Sale {
+  id                     String         @id @default(uuid())
+  remoteId               String?        @unique
+  /// Folio provisional mostrado en el ticket antes de sincronizar (patrón `PENDIENTE-...`).
+  folio                  String
+  /// Folio real asignado por el backend; null hasta el push exitoso.
+  remoteFolio            String?
+  /// Reenviado sin cambios en cada intento de push; evita duplicar la venta en Firestore.
+  idempotencyKey         String         @unique
+  subtotal               Float
+  discountTotal          Float
+  total                  Float
+  paymentMethod          String
+  amountReceived         Float?
+  change                 Float?
+  cashAmount             Float?
+  cardAmount             Float?
+  cardPaymentReference   String?
+  cashSessionId          String
+  cashierId              String
+  customerId             String?
+  customerName           String?
+  prescriptionJson       String?
+  prescriptionRetained   Boolean        @default(false)
+  /// Array de `ControlledGroup` (JSON) presentes en la venta; vacío si nada era controlado.
+  controlledGroupsJson   String         @default("[]")
+  /// `SaleTaxSummary` (JSON); null en ventas sin desglose de impuestos aún.
+  taxSummaryJson         String?
+  billingJson            String?
+  invoiceStatus          String?
+  voidedAt               DateTime?
+  voidedBy               String?
+  pendingPush            Boolean        @default(true)
+  pushError              String?
+  /// Se anuló en local justo mientras el push seguía en vuelo: el servidor ya
+  /// tiene la venta creada (activa) y hace falta un `POST /sales/:id/void`
+  /// remoto explícito para que no quede viva ahí sin que nadie se entere.
+  needsRemoteVoid        Boolean        @default(false)
+  /// El servidor no pudo registrar la venta (stock, producto) y quedó guardada
+  /// en `unreconciledSales`: el dinero y el movimiento están, el inventario no
+  /// cuadra. Sale de la cola de push, pero el historial la sigue mostrando.
+  unreconciledAt         DateTime?
+  unreconciledReason     String?
+  /// `CreateSalePayload` (JSON) tal como se mandaría a `POST /sales`; se reenvía
+  /// sin cambios en el push, el backend recalcula los totales autoritativos.
+  payloadJson            String
+  /// Intentos consecutivos en los que el payload no pudo resolver sus ids
+  /// remotos. Pasado el tope se marca `pushError` y la venta entra al flujo de
+  /// revisión manual: antes se saltaba en silencio, para siempre.
+  payloadResolveAttempts Int            @default(0)
+  /// Totales denormalizados por rama. El corte y los reportes los leen sin
+  /// recorrer partidas — `buildSummary` proyecta la venta, nunca sus items.
+  /// En ventas anteriores a los servicios: farmacia = total, servicios = 0.
+  pharmacyTotal          Float?
+  servicesTotal          Float?
+  /// Reparto del efectivo: los servicios se cubren primero.
+  pharmacyCashAmount     Float?
+  servicesCashAmount     Float?
+  commissionTotal        Float          @default(0)
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+  items                  SaleItem[]
+  movements              SaleMovement[]
+
+  @@index([cashSessionId])
+  @@index([createdAt])
+  @@index([pendingPush])
+}
+
+/**
+ * Bitácora de la venta: un renglón por movimiento (`sale`, `void`), con quién y
+ * cuándo. La venta guarda el **estado** (`voidedAt`/`voidedBy`); esto guarda la
+ * **historia**, que es lo que se revisa cuando falta dinero en el turno.
+ * Vive en local porque la caja opera sin red: el equivalente remoto es
+ * `auditLogs` en Firestore, que solo se escribe cuando el movimiento sincroniza.
+ */
+model SaleMovement {
+  id         String   @id @default(uuid())
+  saleId     String
+  sale       Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  /// `sale` (cobrada) | `void` (anulada).
+  type       String
+  userId     String
+  /// Correo del cajero en el momento del movimiento: el uid no le dice nada a nadie.
+  userLabel  String?
+  reason     String?
+  occurredAt DateTime @default(now())
+
+  @@index([saleId])
+  @@index([occurredAt])
+}
+
+/// Partida de venta. Es una **unión discriminada** por `kind`: una partida de
+/// producto tiene `productId` y mueve inventario; una de servicio tiene
+/// `serviceId`, no tiene stock que descontar y puede generar comisión.
+/// La migración añade un CHECK que impide mezclarlas (uno u otro, nunca ambos
+/// ni ninguno); ese CHECK no se puede expresar aquí, así que vive en el SQL.
+model SaleItem {
+  id                String  @id @default(uuid())
+  saleId            String
+  sale              Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  /// 'product' | 'service'
+  kind              String  @default("product")
+  /// Solo en partidas de producto; es el id LOCAL del producto.
+  productId         String?
+  /// Solo en partidas de servicio; el id ya es el remoto (el catálogo es solo-pull).
+  serviceId         String?
+  /// Doctor al que se acredita la comisión. No es un usuario del sistema.
+  providerId        String?
+  providerName      String?
+  /// Congelados al cobrar: la tarifa del catálogo puede cambiar después,
+  /// lo devengado no.
+  commissionRate    Float?
+  commissionAmount  Float?
+  productName       String
+  unitPrice         Float
+  discountAmount    Float
+  quantity          Float
+  subtotal          Float
+  /// Parte del descuento a nivel venta prorrateada a esta partida.
+  saleDiscountShare Float?
+  /// Importe realmente cobrado por la partida (impuestos incluidos).
+  netAmount         Float?
+  /// `SaleItemTaxes` (JSON); ausente en ventas anteriores al desglose de impuestos.
+  taxesJson         String?
+  /// Promoción aplicada (id remoto). El backend recalcula su monto con la regla.
+  promotionId       String?
+  promotionName     String?
+  /// Parte de `discountAmount` que aportó la promoción.
+  promotionDiscount Float?
+
+  @@index([saleId])
+  @@index([serviceId])
+  @@index([providerId])
+}
+
+/// Catálogo de servicios (consultas, procedimientos, otros conceptos). **Solo
+/// lectura en la caja**: lo administra el admin web y llega por pull, así que
+/// no tiene colas de push ni `remoteId` — el `id` local ES el de Firestore.
+/// Que aquí no exista `stock`, `minStock` ni `controlledGroup` es parte del
+/// diseño: hace imposible darle entrada de inventario.
+model PharmacyService {
+  id                String   @id
+  code              String
+  name              String
+  description       String?
+  /// 'consultation' | 'procedure' | 'other'
+  serviceType       String
+  /// Impuesto incluido, mismo criterio que `Product.salePrice`.
+  price             Float
+  /// 'exempt' | 'zero' | 'iva16' — exento y tasa 0 dan $0 de IVA, pero se
+  /// distinguen para cuando se facture.
+  taxMode           String   @default("exempt")
+  hasIeps           Boolean  @default(false)
+  iepsRate          Float?
+  /// Porcentaje 0..100. 0 = sin comisión.
+  commissionRate    Float    @default(0)
+  /// Si es true, al cobrar es obligatorio elegir quién lo realizó.
+  requiresPerformer Boolean  @default(false)
+  isActive          Boolean  @default(true)
+  updatedAt         DateTime
+
+  @@index([isActive])
+  @@index([code])
+}
+
+/// "Doctores": quienes realizan procedimientos y cobran comisión. NO son
+/// usuarios del sistema (un externo puede no tener cuenta). Solo-pull, igual
+/// que `PharmacyService`.
+model ServiceProvider {
+  id                    String   @id
+  name                  String
+  /// Cédula profesional.
+  license               String?
+  /// El servicio manda si no se define.
+  defaultCommissionRate Float?
+  isActive              Boolean  @default(true)
+  updatedAt             DateTime
+
+  @@index([isActive])
+}
+
+/// Turno de caja local-first: se abre y cierra en SQLite sin red, sube a
+/// `POST /cash-sessions` / `POST /cash-sessions/:id/close` en el siguiente sync.
+/// Un cajero solo debería tener una fila sin `closedAtLocal` a la vez —
+/// enforced en `db/cash-sessions.js`, no en el schema (SQLite no expresa esa
+/// invariante entre filas).
+model CashSession {
+  id                         String         @id @default(uuid())
+  remoteId                   String?        @unique
+  openedBy                   String
+  /// Correo del cajero al abrir; igual patrón que `SaleMovement.userLabel`.
+  openedByLabel              String?
+  openingAmount              Float
+  /// Snapshot al cerrar local; antes de eso se calcula en vivo con `getLiveSummary`.
+  expectedCashAmount         Float?
+  countedCashAmount          Float?
+  cashDifference             Float?
+  /// `CashSessionSummary` (JSON), snapshot al cierre local.
+  summaryJson                String?
+  closedBy                   String?
+  closedByLabel              String?
+  openedAt                   DateTime       @default(now())
+  closedAtLocal              DateTime?
+  /// `true` si `|cashDifference| >= 0.01` al cerrar y el cierre no fue automático.
+  hasPendingAdjustment       Boolean        @default(false)
+  /// 'pending' | 'approved' | 'rejected'; null si no aplica. Solo lo escribe el
+  /// pull (`pullAdjustmentStatus`) reflejando lo que un admin resolvió en el backend.
+  adjustmentStatus           String?
+  adjustmentReviewedBy       String?
+  adjustmentReviewedAt       DateTime?
+  adjustmentNote             String?
+  /// `true` si el auto-cierre a las 24:00 (expiración de sesión) fue quien cerró este turno.
+  autoClosedByExpiry         Boolean        @default(false)
+  /// Cola de alta: sigue `true` hasta que `POST /cash-sessions` responde con éxito.
+  pendingPush                Boolean        @default(true)
+  pushError                  String?
+  /// El alta ya subió (`remoteId` no null) pero el cierre local todavía no se
+  /// refleja allá — caso delicado: create y close pueden pushearse en momentos
+  /// distintos, ver `CashSessionService.flushQueue()`.
+  pendingClosePush           Boolean        @default(false)
+  closePushError             String?
+  /// El fondo inicial es de farmacia; servicios abre en 0. El campo existe
+  /// desde ya por si mañana se pide fondo aparte.
+  servicesOpeningAmount      Float          @default(0)
+  /// Esperado del bloque de servicios al cerrar. El conteo es UNO SOLO (mismo
+  /// cajón físico): la diferencia se calcula contra la suma de los dos esperados.
+  expectedServicesCashAmount Float?
+  createdAt                  DateTime       @default(now())
+  updatedAt                  DateTime       @updatedAt
+  movements                  CashMovement[]
+
+  @@index([openedBy])
+  @@index([pendingPush])
+  @@index([pendingClosePush])
+  @@index([closedAtLocal])
+}
+
+/// Depósito/retiro/gasto de un turno. Espejo de `cashMovements` en Firestore.
+/// Un "gasto" es esta misma entidad con `type: 'expense'` — no hay tabla aparte.
+model CashMovement {
+  id             String       @id @default(uuid())
+  remoteId       String?      @unique
+  /// `null` en la caja de la farmacia: el admin mete o saca efectivo sin turno
+  /// abierto, y esos movimientos no entran a ningún corte.
+  cashSessionId  String?
+  cashSession    CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: Cascade)
+  /// 'deposit' | 'withdrawal' | 'expense'
+  type           String
+  /// 'pharmacy' | 'services' — a qué bloque del corte pertenece. En v1 todos
+  /// los movimientos son de farmacia; el campo existe desde ya para no tener
+  /// que migrar datos el día que se separen.
+  bucket         String       @default("pharmacy")
+  amount         Float
+  reason         String
+  /// Solo poblado cuando `type = 'expense'`: salary|food|rent|contingency|
+  /// electricity|supplies|supplier|other.
+  category       String?
+  /// Obligatoria solo si `category` ∈ (supplies, supplier, other) — validado
+  /// en `db/cash-movements.js` con el mismo criterio que el backend.
+  description    String?
+  createdBy      String
+  createdByLabel String?
+  createdAt      DateTime     @default(now())
+  pendingPush    Boolean      @default(true)
+  pushError      String?
+
+  @@index([cashSessionId])
+  @@index([pendingPush])
+  @@index([createdAt])
+}
+
+/// Historial de corridas del scheduler (10:30/14:00/20:00): trae qué se
+/// sincronizó, con qué cursor y si falló, para el indicador de "última sync".
+model SyncRun {
+  id           String    @id @default(uuid())
+  entity       String
+  direction    String
+  status       String
+  cursor       String?
+  errorMessage String?
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+
+  @@index([entity, direction, startedAt])
+}
+
+/// Promociones por cantidad. **Solo-pull** como los servicios: las administra
+/// el admin web y llegan por `GET /promotions/sync`, así que el `id` es el de
+/// Firestore. La regla es inmutable en el backend; aquí se guarda como JSON.
+model Promotion {
+  id             String    @id
+  name           String
+  /// 'tiered' | 'nxm' | 'percent'
+  type           String
+  /// `PromotionRule` (JSON).
+  ruleJson       String
+  /// Ids **remotos** de producto (JSON array).
+  productIdsJson String
+  startsAt       DateTime
+  endsAt         DateTime?
+  isActive       Boolean   @default(true)
+  deactivatedAt  DateTime?
+  updatedAt      DateTime
+
+  @@index([isActive])
+}
+
+/// Facturas-RAG: comprobante (factura o recibo) leído por un LLM con visión.
+/// Local a la caja, sin sync. El archivo vive en `userData/invoice-rag/`.
+model InvoiceDocument {
+  id            String            @id @default(uuid())
+  fileName      String
+  mimeType      String
+  sizeBytes     Int
+  filePath      String
+  fileSha256    String            @unique
+  /// 'uploaded' | 'extracted' | 'indexed' | 'failed'
+  status        String            @default("uploaded")
+  /// 'invoice' | 'receipt' | 'other'
+  documentType  String?
+  confidence    Float?
+  /// JSON tal como lo devolvió el LLM.
+  extractedJson String?
+  /// JSON revisado por el usuario; es el que se embebe.
+  confirmedJson String?
+  extractError  String?
+  model         String?
+  createdBy     String
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  /// Se aplica al inventario una sola vez; lo marca `applyStock`.
+  stockAppliedAt   DateTime?
+  stockAppliedBy   String?
+  /// Resumen `[{productId, name, quantity, stock}]` de lo que entró.
+  stockAppliedJson String?
+  /// Ruta del archivo en R2 (`POST /uploads/facturas`), subido al indexar.
+  storagePath      String?
+  uploadedAt       DateTime?
+  embedding     InvoiceEmbedding?
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+/// Embedding del JSON confirmado. `vector` es un Float32Array en crudo.
+model InvoiceEmbedding {
+  documentId  String          @id
+  model       String
+  dims        Int
+  vector      Bytes
+  contentText String
+  createdAt   DateTime        @default(now())
+  document    InvoiceDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+}
