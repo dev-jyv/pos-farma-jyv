@@ -243,6 +243,10 @@ export interface CashOnHand {
 declare global {
   interface Window {
     electronAPI?: {
+      log?: {
+        write: (level: 'info' | 'warn' | 'error', event: string, data?: Record<string, unknown>) => Promise<void>;
+        getDir: () => Promise<string>;
+      };
       app: {
         /**
          * La ventana pidió cerrarse: el renderer decide si sale. Devuelve la baja

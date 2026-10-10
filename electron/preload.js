@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     confirmClose: () => ipcRenderer.invoke('app:confirm-close'),
     cancelClose: () => ipcRenderer.invoke('app:cancel-close'),
   },
+  log: {
+    write: (level, event, data) => ipcRenderer.invoke('log:write', level, event, data),
+    getDir: () => ipcRenderer.invoke('log:getDir'),
+  },
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   getDeviceInfo: () => ipcRenderer.invoke('get-device-info'),
   openCashDrawer: (printerName) => ipcRenderer.invoke('open-cash-drawer', printerName),

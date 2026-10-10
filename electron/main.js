@@ -46,6 +46,7 @@ function withTimeout(promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 const { getPrisma } = require('./db/client');
+const { createLogger, sanitizeArgs } = require('./logger');
 const { isAllowedNavigation, isSafePrinterTarget, isDevToolsShortcut } = require('./security');
 const productsDb = require('./db/products');
 const salesDb = require('./db/sales');
@@ -160,7 +161,45 @@ function cerrarVentana() {
   mainWindow?.close();
 }
 
+/** Canales de lectura pura: no se loguean (son miles por turno y no cambian nada). */
+const CANALES_SILENCIOSOS = /^(catalog:(search|getByBarcode|getByIds|getBatchesByProduct|getProductById)|sales:(list|listMovements)|cashSessions:(getLiveSummary|getCashOnHand|listLocal|getOpenLocal.*)|promotions:listActive|pharmacyServices:list.*|sync:getStatus|.*:(getPending\w*|getNeeding\w*|listBlocked\w*))$/;
+
+let log = { info() {}, warn() {}, error() {}, prune() {} };
+
+/** Envuelve `ipcMain.handle` para asentar canal, duración y resultado de cada escritura. */
+function instrumentarIPC() {
+  const original = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = (channel, handler) =>
+    original(channel, async (event, ...args) => {
+      const silencioso = CANALES_SILENCIOSOS.test(channel);
+      const inicio = Date.now();
+      try {
+        const result = await handler(event, ...args);
+        if (!silencioso) {
+          log.info('ipc', { channel, ms: Date.now() - inicio, args: sanitizeArgs(args) });
+        }
+        return result;
+      } catch (error) {
+        log.error('ipc-error', {
+          channel,
+          ms: Date.now() - inicio,
+          args: sanitizeArgs(args),
+          message: error?.message ?? String(error),
+          code: error?.code,
+        });
+        throw error;
+      }
+    });
+}
+
 app.whenReady().then(() => {
+  log = createLogger(path.join(app.getPath('userData'), 'logs'));
+  log.prune();
+  log.info('app-start', { version: app.getVersion(), env: APP_ENV, platform: process.platform });
+  process.on('uncaughtException', (error) => log.error('uncaughtException', { message: error?.message, stack: error?.stack }));
+  process.on('unhandledRejection', (reason) => log.error('unhandledRejection', { message: String(reason?.message ?? reason) }));
+  app.on('render-process-gone', (_e, _wc, details) => log.error('render-process-gone', { ...details }));
+  instrumentarIPC();
   configurarPermisos();
   instalarMenu();
   registrarIPCHandlers();
@@ -347,6 +386,12 @@ function configurarPermisos() {
 }
 
 function registrarIPCHandlers() {
+  // Log del renderer (errores de UI, ventas rechazadas, sync). Solo escritura.
+  ipcMain.handle('log:write', (_event, level, event, data) => {
+    const fn = ['info', 'warn', 'error'].includes(level) ? level : 'info';
+    log[fn](`ui:${String(event).slice(0, 60)}`, data && typeof data === 'object' ? data : { value: data });
+  });
+  ipcMain.handle('log:getDir', () => path.join(app.getPath('userData'), 'logs'));
   ipcMain.handle('get-app-version', () => app.getVersion());
   ipcMain.handle('get-device-info', () => obtenerInfoDispositivo());
   ipcMain.handle('open-cash-drawer', async (_event, printerName) => abrirCajon(printerName));
