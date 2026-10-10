@@ -229,14 +229,54 @@ describe('el esquema real impide lo que el diseño prohíbe', () => {
     expect(await prisma.saleMovement.count()).toBe(0);
   });
 
-  it('la llave de idempotencia es única de verdad: no se puede duplicar una venta', async () => {
+  it('la llave de idempotencia es única de verdad: el esquema no acepta dos ventas con la misma', async () => {
     const sesion = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
     await unProducto();
     const payload = { ...ventaPayload([partidaProducto()]), cashSessionId: sesion.id };
 
     await ventas.createLocal(prisma, payload);
+    const fila = await prisma.sale.findFirst();
+    const { id, items, ...resto } = fila;
 
-    await expect(ventas.createLocal(prisma, payload)).rejects.toThrow();
+    await expect(prisma.sale.create({ data: { ...resto } })).rejects.toThrow();
+    expect(await prisma.sale.count()).toBe(1);
+  });
+
+  it('reintentar createLocal con la misma llave devuelve la misma venta y NO vuelve a descontar stock', async () => {
+    const sesion = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    await unProducto();
+    const payload = { ...ventaPayload([partidaProducto()]), cashSessionId: sesion.id };
+
+    const primera = await ventas.createLocal(prisma, payload);
+    const stockTras1 = (await prisma.product.findFirst()).totalStock;
+    const segunda = await ventas.createLocal(prisma, payload);
+
+    expect(segunda.id).toBe(primera.id);
+    expect(await prisma.sale.count()).toBe(1);
+    expect((await prisma.product.findFirst()).totalStock).toBe(stockTras1);
+  });
+
+  it('dos cobros simultáneos con la misma llave producen una sola venta y un solo descuento', async () => {
+    const sesion = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    await unProducto();
+    const payload = { ...ventaPayload([partidaProducto()]), cashSessionId: sesion.id };
+    const antes = (await prisma.product.findFirst()).totalStock;
+
+    const resultados = await Promise.allSettled([
+      ventas.createLocal(prisma, payload),
+      ventas.createLocal(prisma, payload),
+    ]);
+
+    expect(await prisma.sale.count()).toBe(1);
+    expect(resultados.filter((r) => r.status === 'fulfilled').length).toBeGreaterThanOrEqual(1);
+    expect((await prisma.product.findFirst()).totalStock).toBe(antes - payload.items[0].quantity);
+  });
+
+  it('sin llave de idempotencia no se registra la venta', async () => {
+    const sesion = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    await unProducto();
+    const payload = { ...ventaPayload([partidaProducto()]), cashSessionId: sesion.id, idempotencyKey: undefined };
+    await expect(ventas.createLocal(prisma, payload)).rejects.toThrow(/idempotencyKey/);
   });
 
   it('un servicio no puede tener stock ni lote: no hay columnas ni relación para eso', async () => {

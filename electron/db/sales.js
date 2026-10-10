@@ -95,6 +95,43 @@ function toSaleDto(row) {
  * controlados). El proceso main solo persiste; no rehace esa lógica.
  */
 async function createLocal(prisma, sale) {
+  if (!sale?.idempotencyKey) {
+    throw new Error('createLocal requiere `idempotencyKey`');
+  }
+  // Reintento con la misma llave (doble clic, IPC repetido, reintento tras un
+  // error de la UI): devuelve la venta ya registrada y NO vuelve a descontar stock.
+  const previa = await findByIdempotencyKey(prisma, sale.idempotencyKey);
+  if (previa) {
+    return toSaleDto(previa);
+  }
+  try {
+    return await prisma.$transaction((tx) => createLocalTx(tx, sale));
+  } catch (error) {
+    // Carrera entre dos llamadas simultáneas: la restricción UNIQUE de SQLite
+    // rechaza a la segunda, que debe resolver a la venta de la primera.
+    if (error?.code === 'P2002') {
+      const ganadora = await findByIdempotencyKey(prisma, sale.idempotencyKey);
+      if (ganadora) {
+        return toSaleDto(ganadora);
+      }
+    }
+    throw error;
+  }
+}
+
+function findByIdempotencyKey(db, idempotencyKey) {
+  return db.sale.findUnique({
+    where: { idempotencyKey },
+    include: { items: true, movements: true },
+  });
+}
+
+/**
+ * Venta + descuento de stock en UNA transacción: si el proceso muere a medias,
+ * o no hay venta ni descuento, o están los dos. Antes eran dos escrituras y un
+ * corte entre ellas dejaba la venta sin descontar.
+ */
+async function createLocalTx(prisma, sale) {
   const created = await prisma.sale.create({
     data: {
       folio: sale.folio,
@@ -179,15 +216,11 @@ async function createLocal(prisma, sale) {
   // stock quedaba descontado a medias. El orden se conserva: `$transaction` con
   // arreglo ejecuta en secuencia.
   const productItems = productItemsOf(sale.items);
-  if (productItems.length) {
-    await prisma.$transaction(
-      productItems.map((item) =>
-        prisma.product.updateMany({
-          where: { id: item.productId },
-          data: { totalStock: { decrement: item.quantity } },
-        }),
-      ),
-    );
+  for (const item of productItems) {
+    await prisma.product.updateMany({
+      where: { id: item.productId },
+      data: { totalStock: { decrement: item.quantity } },
+    });
   }
 
   return toSaleDto(created);

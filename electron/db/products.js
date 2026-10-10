@@ -113,6 +113,16 @@ async function getByBarcode(prisma, code) {
  * asigna los ids reales.
  */
 async function recordStockEntry(prisma, payload) {
+  // Producto + lote + stock en una transacción: un corte a medias dejaba un
+  // producto alta sin lote, o un lote sin sumar al stock.
+  // Si ya viene dentro de una transacción (facturas-RAG), no se anida otra.
+  if (typeof prisma.$transaction !== 'function') {
+    return recordStockEntryTx(prisma, payload);
+  }
+  return prisma.$transaction((tx) => recordStockEntryTx(tx, payload));
+}
+
+async function recordStockEntryTx(prisma, payload) {
   let productId = payload.productId ?? null;
 
   if (productId) {
