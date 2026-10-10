@@ -200,15 +200,23 @@ async function createLocal(prisma, sale) {
  * backend (`POST /sales/:id/void`) — esta función solo refleja el resultado local.
  */
 async function voidLocal(prisma, localId, voidedBy, voidedByLabel, reason) {
-  const sale = await prisma.sale.findUnique({ where: { id: localId }, include: { items: true } });
-  if (!sale || sale.voidedAt) {
-    return sale ? toSaleDto(sale) : null;
-  }
+  /**
+   * Todo dentro de una transacción y **reclamando** la venta con
+   * `updateMany({ voidedAt: null })`: solo quien logra marcarla repone stock.
+   * Leer `voidedAt` fuera de la transacción dejaba pasar a dos anulaciones
+   * simultáneas (doble clic, o el sync y la UI a la vez) y cada una reponía el
+   * stock completo: la caja quedaba con piezas que el servidor no tiene, y el
+   * pull no lo corrige porque solo trae productos que cambiaron allá.
+   */
+  return prisma.$transaction(async (tx) => {
+    const sale = await tx.sale.findUnique({ where: { id: localId }, include: { items: true } });
+    if (!sale || sale.voidedAt) {
+      return sale ? toSaleDto(sale) : null;
+    }
 
-  const voidedAt = new Date();
-  const [updated] = await prisma.$transaction([
-    prisma.sale.update({
-      where: { id: localId },
+    const voidedAt = new Date();
+    const claimed = await tx.sale.updateMany({
+      where: { id: localId, voidedAt: null },
       data: {
         voidedAt,
         voidedBy,
@@ -217,27 +225,37 @@ async function voidLocal(prisma, localId, voidedBy, voidedByLabel, reason) {
         // siempre el cierre remoto: el éxito online lo limpia con
         // `markRemoteVoided`.
         ...(sale.remoteId ? { needsRemoteVoid: true } : {}),
-        // La anulación se asienta como movimiento propio: el flag dice *que*
-        // está anulada, el renglón dice *quién* y *cuándo* —que es lo que se
-        // revisa cuando el turno no cuadra.
+      },
+    });
+    if (claimed.count === 0) {
+      // Otra anulación ganó la carrera: ya repuso el stock y asentó su movimiento.
+      return toSaleDto(await tx.sale.findUnique({ where: { id: localId }, include: { items: true } }));
+    }
+
+    // Solo productos, y con `updateMany`: una partida cuyo producto ya no existe
+    // en local devolvía P2025 y **abortaba la anulación entera**, dejando la
+    // venta viva. Anular nunca puede fallar por un problema de catálogo.
+    for (const item of productItemsOf(sale.items)) {
+      await tx.product.updateMany({
+        where: { id: item.productId },
+        data: { totalStock: { increment: item.quantity } },
+      });
+    }
+
+    // La anulación se asienta como movimiento propio: el flag dice *que*
+    // está anulada, el renglón dice *quién* y *cuándo* —que es lo que se
+    // revisa cuando el turno no cuadra.
+    const updated = await tx.sale.update({
+      where: { id: localId },
+      data: {
         movements: {
           create: [{ type: 'void', userId: voidedBy, userLabel: voidedByLabel ?? null, reason: reason ?? null, occurredAt: voidedAt }],
         },
       },
       include: { items: true },
-    }),
-    // Solo productos, y con `updateMany`: una partida cuyo producto ya no existe
-    // en local devolvía P2025 y **abortaba la anulación entera**, dejando la
-    // venta viva. Anular nunca puede fallar por un problema de catálogo.
-    ...productItemsOf(sale.items).map((item) =>
-      prisma.product.updateMany({
-        where: { id: item.productId },
-        data: { totalStock: { increment: item.quantity } },
-      }),
-    ),
-  ]);
-
-  return toSaleDto(updated);
+    });
+    return toSaleDto(updated);
+  });
 }
 
 async function list(prisma, filters = {}) {
@@ -793,21 +811,30 @@ async function clearPushError(prisma, localId) {
   });
 }
 
-/** Descarta una venta que el servidor rechazó (nunca sincronizó): repone stock y borra. */
+/**
+ * Descarta una venta que el servidor rechazó (nunca sincronizó): repone stock y borra.
+ *
+ * El stock solo se repone si la venta seguía viva: una anulada ya lo repuso en
+ * `voidLocal`, y reponerlo otra vez dejaba la caja con piezas de más. El borrado
+ * reclama la fila (`deleteMany`), así que dos descartes simultáneos no reponen dos veces.
+ */
 async function discard(prisma, localId) {
-  const sale = await prisma.sale.findUnique({ where: { id: localId }, include: { items: true } });
-  if (!sale) {
-    return;
-  }
-  await prisma.$transaction([
-    ...productItemsOf(sale.items).map((item) =>
-      prisma.product.updateMany({
+  await prisma.$transaction(async (tx) => {
+    const sale = await tx.sale.findUnique({ where: { id: localId }, include: { items: true } });
+    if (!sale) {
+      return;
+    }
+    const deleted = await tx.sale.deleteMany({ where: { id: localId } });
+    if (deleted.count === 0 || sale.voidedAt) {
+      return;
+    }
+    for (const item of productItemsOf(sale.items)) {
+      await tx.product.updateMany({
         where: { id: item.productId },
         data: { totalStock: { increment: item.quantity } },
-      }),
-    ),
-    prisma.sale.delete({ where: { id: localId } }),
-  ]);
+      });
+    }
+  });
 }
 
 module.exports = {

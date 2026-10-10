@@ -5,7 +5,8 @@ import { BlockedSyncRecord } from '../electron/window.d';
 import { pushOwnerFilter } from './push-owner';
 
 /**
- * Registros que el servidor rechazó al sincronizar.
+ * Registros que el servidor rechazó al sincronizar (ventas, gastos, turnos,
+ * lotes de entrada de stock y productos del catálogo).
  *
  * Un rechazo (4xx) no se reintenta solo, a propósito: turno cerrado, sin stock o
  * precio cambiado no se arreglan reintentando. El problema era que tampoco se
@@ -21,19 +22,21 @@ export class BlockedSyncService {
   readonly records = signal<BlockedSyncRecord[]>([]);
   readonly count = signal(0);
 
-  /** Relee las tres fuentes. Silencioso ante fallo: es un indicador, no una operación. */
+  /** Relee las cinco fuentes. Silencioso ante fallo: es un indicador, no una operación. */
   async refresh(): Promise<void> {
     const api = window.electronAPI;
     if (!api) {
       return;
     }
     try {
-      const [sales, movements, sessions] = await Promise.all([
+      const [sales, movements, sessions, stockEntries, products] = await Promise.all([
         api.sales.listBlocked(pushOwnerFilter(this.auth)),
         api.cashMovements.listBlocked(),
         api.cashSessions.listBlocked(),
+        api.catalog.listBlockedStockEntries(),
+        api.catalog.listBlockedProducts(),
       ]);
-      const all = [...sales, ...movements, ...sessions].sort(
+      const all = [...sales, ...movements, ...sessions, ...stockEntries, ...products].sort(
         (a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime(),
       );
       this.records.set(all);
@@ -44,11 +47,12 @@ export class BlockedSyncService {
   }
 
   /**
-   * Solo los gastos se pueden corregir desde la caja: una venta ya cobrada no se
-   * edita (se descarta y se vuelve a registrar), y un turno tampoco.
+   * Se corrigen los gastos y los productos del catálogo (en su propia pantalla):
+   * una venta ya cobrada no se edita (se descarta y se vuelve a registrar), y un
+   * turno o un lote tampoco.
    */
   canFix(record: BlockedSyncRecord): boolean {
-    return record.kind === 'cashMovement';
+    return record.kind === 'cashMovement' || record.kind === 'product';
   }
 
   /**
@@ -61,6 +65,11 @@ export class BlockedSyncService {
       // control sin dejar rastro: igual que en la cola normal, solo el admin.
       return this.auth.isAdmin();
     }
+    if (record.kind === 'stockEntry') {
+      // Quita piezas del stock local sin dejar rastro: como una venta, solo el admin.
+      return this.auth.isAdmin();
+    }
+    // Un producto no se descarta: ventas y lotes locales cuelgan de él.
     return record.kind === 'cashMovement';
   }
 
@@ -76,6 +85,8 @@ export class BlockedSyncService {
     }
     if (record.kind === 'sale') {
       await api.sales.discard(record.id);
+    } else if (record.kind === 'stockEntry') {
+      await api.catalog.discardStockEntry(record.id);
     } else {
       await api.cashMovements.discard(record.id);
     }
@@ -96,6 +107,10 @@ export class BlockedSyncService {
       await api.sales.clearPushError(record.id);
     } else if (record.kind === 'cashMovement') {
       await api.cashMovements.clearPushError(record.id);
+    } else if (record.kind === 'stockEntry') {
+      await api.catalog.clearStockEntryPushError(record.id);
+    } else if (record.kind === 'product') {
+      await api.catalog.clearCatalogPushError(record.id);
     } else {
       await api.cashSessions.clearPushError(record.id);
     }

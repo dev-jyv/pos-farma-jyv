@@ -13,6 +13,10 @@ describe('codeFromReason: textos reales del backend y de la caja', () => {
     ['El turno de caja ya está cerrado: el gasto no se puede corregir', 'turno-cerrado'],
     ['Turno de caja no encontrado', 'turno-no-encontrado'],
     ['Producto no encontrado', 'producto-no-encontrado'],
+    [
+      'Esta entrada quedó a medio registrar en un intento anterior. Revisa el lote en inventario antes de volver a capturarla.',
+      'entrada-a-medias',
+    ],
     ['Stock insuficiente para Paracetamol', 'sin-stock'],
     ['Stock insuficiente. Faltan 2 unidades.', 'sin-stock'],
     ['La promoción "2x1 Jarabes" no está vigente', 'promocion-no-vigente'],

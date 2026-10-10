@@ -348,7 +348,9 @@ export class SyncScheduler {
        */
       api.sales.getNeedingRemoteVoid(owner),
       api.catalog.getPendingCatalogPush(),
-      api.catalog.getPendingStockEntries(),
+      // `includeWaiting`: una entrada que espera a su producto no se envía todavía,
+      // pero está pendiente: sin contarla no sería ni pendiente ni rechazada.
+      api.catalog.getPendingStockEntries({ includeWaiting: true }),
       api.cashMovements.getPendingPush(owner),
       api.cashSessions.getPendingPush(owner),
       api.cashSessions.getPendingClosePush(owner),

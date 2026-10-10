@@ -46,11 +46,28 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
       'al administrador; después reintenta la venta.',
     recommended: 'avisar-admin',
   }),
-  'producto-no-encontrado': () => ({
-    title: 'Un producto de esta venta ya no existe',
+  'producto-no-encontrado': (_dep, record) =>
+    record.kind === 'stockEntry'
+      ? {
+          title: 'El servidor no conoce el producto de esta entrada',
+          explanation:
+            'Casi siempre el producto aún no había subido cuando se envió la entrada. Con ' +
+            'conexión, pulsa Reintentar: la caja sube primero el producto y después la entrada.',
+          recommended: 'reintentar',
+        }
+      : {
+          title: 'Un producto de esta venta ya no existe',
+          explanation:
+            'Probablemente se borró del catálogo. Avisa al administrador antes de descartar la venta: ' +
+            'el cobro ya se hizo.',
+          recommended: 'avisar-admin',
+        },
+  'entrada-a-medias': () => ({
+    title: 'El servidor dejó esta entrada a medias',
     explanation:
-      'Probablemente se borró del catálogo. Avisa al administrador antes de descartar la venta: ' +
-      'el cobro ya se hizo.',
+      'Un intento anterior no terminó de registrar la entrada y el servidor no la acepta otra vez ' +
+      'hasta que alguien la revise. No la reintentes: avisa al administrador para que revise el ' +
+      'lote en inventario. Si ya está registrado ahí, esta copia se puede descartar.',
     recommended: 'avisar-admin',
   }),
   'listo-para-reintentar': () => ({
@@ -116,10 +133,12 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
       'administrador: decide si se respeta el precio cobrado.',
     recommended: 'avisar-admin',
   }),
-  desconocido: () => ({
+  desconocido: (_dep, record) => ({
     title: 'Motivo no reconocido',
     explanation:
-      'Lee el detalle de abajo y avisa al administrador antes de descartar: puede ser dinero ya cobrado.',
+      record.kind === 'stockEntry' || record.kind === 'product'
+        ? 'Lee el detalle de abajo y avisa al administrador antes de descartar: la mercancía ya está en esta caja y el servidor no la conoce.'
+        : 'Lee el detalle de abajo y avisa al administrador antes de descartar: puede ser dinero ya cobrado.',
     recommended: 'avisar-admin',
   }),
 };

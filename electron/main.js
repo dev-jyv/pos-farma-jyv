@@ -363,8 +363,16 @@ function registrarIPCHandlers() {
     productsDb.upsertMany(await getPrisma(), products));
   ipcMain.handle('catalog:getBatchesByProduct', async (_event, productId) =>
     productsDb.getBatchesByProduct(await getPrisma(), productId));
-  ipcMain.handle('catalog:getPendingStockEntries', async () =>
-    productsDb.getPendingStockEntries(await getPrisma()));
+  ipcMain.handle('catalog:getPendingStockEntries', async (_event, options) =>
+    productsDb.getPendingStockEntries(await getPrisma(), options));
+  ipcMain.handle('catalog:listBlockedStockEntries', async () =>
+    productsDb.listBlockedStockEntries(await getPrisma()));
+  ipcMain.handle('catalog:clearStockEntryPushError', async (_event, batchLocalId) =>
+    productsDb.clearStockEntryPushError(await getPrisma(), batchLocalId));
+  ipcMain.handle('catalog:discardStockEntry', async (_event, batchLocalId) =>
+    productsDb.discardStockEntry(await getPrisma(), batchLocalId));
+  ipcMain.handle('catalog:listBlockedProducts', async () =>
+    productsDb.listBlockedProducts(await getPrisma()));
   ipcMain.handle('catalog:markStockEntrySynced', async (_event, batchLocalId, remoteProductId) =>
     productsDb.markStockEntrySynced(await getPrisma(), batchLocalId, remoteProductId));
   ipcMain.handle('catalog:markStockEntryPushFailed', async (_event, batchLocalId, message) =>

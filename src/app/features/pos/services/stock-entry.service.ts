@@ -160,7 +160,7 @@ flushQueueAsync(): Promise<void> {
                * —existencias que no existen—. El backend la usa igual que en las
                * ventas y en el reintento devuelve la entrada ya registrada.
                */
-              idempotencyKey: item.id,
+              idempotencyKey: (item.payload as { idempotencyKey?: string }).idempotencyKey ?? item.id,
             })
             .pipe(
             concatMap((response) => {

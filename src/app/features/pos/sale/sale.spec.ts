@@ -410,6 +410,20 @@ describe('Sale', () => {
       expect(notifyError).toHaveBeenCalledWith('Cantidad supera el stock disponible.');
     });
 
+    it('al rechazar una cantidad, el campo vuelve a mostrar la que sí se cobra', () => {
+      fixture.detectChanges();
+      const input = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>(
+        'input[type="number"][aria-label^="Cantidad de"]',
+      )!;
+      // El cajero teclea «99» con 2 en el ticket: se rechaza, pero el campo quedaba en 99.
+      input.value = '99';
+      input.dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+
+      expect(component.cart()[0].quantity).toBe(2);
+      expect(input.value).toBe('2');
+    });
+
     it('bumpQuantity suma y resta sobre la partida', () => {
       component.bumpQuantity('product:p1', 1);
       expect(component.cart()[0].quantity).toBe(3);
