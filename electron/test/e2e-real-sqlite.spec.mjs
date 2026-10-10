@@ -386,6 +386,22 @@ describe('jornada completa contra SQLite real', () => {
     expect(await prisma.sale.count({ where: { id: venta.id } })).toBe(0);
   });
 
+  it('descartar una venta que ya subió no la borra: el servidor la tiene viva', async () => {
+    await unProducto({ stock: 20 });
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    const venta = await ventas.createLocal(prisma, {
+      ...ventaPayload([partidaProducto()]),
+      cashSessionId: turno.id,
+    });
+    await ventas.markSynced(prisma, venta.id, 'fs-venta-1', 'V-000001');
+
+    await ventas.discard(prisma, venta.id);
+
+    // Sigue en la caja y el stock no se repone: la venta existe en el servidor.
+    expect(await prisma.sale.count({ where: { id: venta.id } })).toBe(1);
+    expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(18);
+  });
+
   it('dos descartes simultáneos de la misma venta reponen el stock una sola vez', async () => {
     await unProducto({ stock: 20 });
     const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });

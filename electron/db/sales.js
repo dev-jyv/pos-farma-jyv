@@ -813,6 +813,7 @@ async function clearPushError(prisma, localId) {
 
 /**
  * Descarta una venta que el servidor rechazó (nunca sincronizó): repone stock y borra.
+ * Una venta que ya subió (`remoteId`) no se descarta: se anula.
  *
  * El stock solo se repone si la venta seguía viva: una anulada ya lo repuso en
  * `voidLocal`, y reponerlo otra vez dejaba la caja con piezas de más. El borrado
@@ -821,10 +822,13 @@ async function clearPushError(prisma, localId) {
 async function discard(prisma, localId) {
   await prisma.$transaction(async (tx) => {
     const sale = await tx.sale.findUnique({ where: { id: localId }, include: { items: true } });
-    if (!sale) {
+    // Con `remoteId` el servidor ya la tiene viva: borrarla aquí dejaría las dos
+    // bases discrepando (venta cobrada allá, sin rastro acá). Se anula, no se descarta.
+    if (!sale || sale.remoteId) {
       return;
     }
-    const deleted = await tx.sale.deleteMany({ where: { id: localId } });
+    // `remoteId: null` en el borrado: si la venta sube entre la lectura y aquí, no se toca.
+    const deleted = await tx.sale.deleteMany({ where: { id: localId, remoteId: null } });
     if (deleted.count === 0 || sale.voidedAt) {
       return;
     }
