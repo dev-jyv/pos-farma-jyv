@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { firstValueFrom, map } from 'rxjs';
 
 import { getApiErrorMessage, unwrapEntity } from '../../../../core/api/api.utils';
+import { AutoPushService } from '../../../../core/sync/auto-push.service';
 import { AuthService } from '../../../../core/auth/auth.service';
 import {
   InvoiceRagData,
@@ -84,6 +85,7 @@ export class InvoiceRagService {
   private readonly http = inject(HttpClient);
   private readonly auth = inject(AuthService);
   private readonly uploads = inject(UploadsService);
+  private readonly autoPush = inject(AutoPushService);
   private readonly apiUrl = `${environment.apiUrl}/invoice-rag`;
 
   readonly available = !!window.electronAPI?.invoiceRag;
@@ -156,8 +158,10 @@ export class InvoiceRagService {
     return this.store.markUploaded(id, storagePath);
   }
 
-  applyStock(id: string, entries: CreateStockEntryPayload[]): Promise<InvoiceRagDocument> {
-    return this.store.applyStock(id, { entries, appliedBy: this.auth.user()?.uid ?? '' });
+  async applyStock(id: string, entries: CreateStockEntryPayload[]): Promise<InvoiceRagDocument> {
+    const document = await this.store.applyStock(id, { entries, appliedBy: this.auth.user()?.uid ?? '' });
+    this.autoPush.notifyChange();
+    return document;
   }
 
   async search(query: string, limit = 10): Promise<InvoiceRagSearchHit[]> {
