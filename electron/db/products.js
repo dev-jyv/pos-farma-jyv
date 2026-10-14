@@ -1,4 +1,6 @@
+const { randomUUID } = require('node:crypto');
 const { toDate } = require('./timestamps');
+const { codeFromReason } = require('./blocked-diagnosis');
 
 /** Forma que consume el POS (búsqueda/carrito), igual a `shared/models`' `Product`. */
 function toProductDto(row) {
@@ -111,6 +113,16 @@ async function getByBarcode(prisma, code) {
  * asigna los ids reales.
  */
 async function recordStockEntry(prisma, payload) {
+  // Producto + lote + stock en una transacción: un corte a medias dejaba un
+  // producto alta sin lote, o un lote sin sumar al stock.
+  // Si ya viene dentro de una transacción (facturas-RAG), no se anida otra.
+  if (typeof prisma.$transaction !== 'function') {
+    return recordStockEntryTx(prisma, payload);
+  }
+  return prisma.$transaction((tx) => recordStockEntryTx(tx, payload));
+}
+
+async function recordStockEntryTx(prisma, payload) {
   let productId = payload.productId ?? null;
 
   if (productId) {
@@ -298,19 +310,85 @@ async function getBatchesByProduct(prisma, productId) {
   });
 }
 
-async function getPendingStockEntries(prisma) {
+/**
+ * Mensaje con que el backend rechaza una entrada cuyo `productId` no existe. Lo
+ * dejó la versión que congelaba el id LOCAL en el payload: esos lotes quedaron
+ * bloqueados aunque el producto ya subió.
+ */
+const PRODUCTO_NO_ENCONTRADO = 'Producto no encontrado';
+
+/**
+ * Entradas de stock listas para subir. El `productId` del payload se resuelve
+ * **aquí**, al subir, contra el `remoteId` actual del producto (igual que las
+ * ventas con `resolvePayloadProductIds`): al grabar la entrada el producto
+ * puede no haber subido aún y el payload solo lleva su UUID local, que el
+ * servidor no conoce (404 "Producto no encontrado" y stock solo en la caja).
+ *
+ * - Producto sin `remoteId` y sin `product` embebido: la entrada espera; sube
+ *   cuando el catálogo suba al producto (el push va primero). Con `includeWaiting`
+ *   también se devuelve (sin resolver) para contarla como pendiente.
+ * - Con `product` embebido el alta viaja en la propia entrada: se envía tal cual.
+ * - Un lote bloqueado por "Producto no encontrado" se reintenta una sola vez si
+ *   ahora hay un `remoteId` distinto del que mandó; si ya iba con el correcto,
+ *   el 404 es otro problema y no se reintenta en bucle.
+ */
+async function getPendingStockEntries(prisma, { includeWaiting = false } = {}) {
   const rows = await prisma.batch.findMany({
     // Igual que `getPendingPush` de ventas: un lote con `pushError` ya quedó
     // bloqueado a propósito y no debe reintentarse solo en cada horario fijo.
-    where: { pendingPush: true, pushError: null, payloadJson: { not: null } },
+    where: {
+      pendingPush: true,
+      payloadJson: { not: null },
+      OR: [{ pushError: null }, { pushError: PRODUCTO_NO_ENCONTRADO }],
+    },
     orderBy: { createdAt: 'asc' },
+    include: { product: { select: { remoteId: true } } },
   });
-  return rows.map((row) => ({
-    id: row.id,
-    productId: row.productId,
-    payload: JSON.parse(row.payloadJson),
-    pushError: row.pushError ?? null,
-  }));
+
+  const listos = [];
+  for (const row of rows) {
+    const payload = JSON.parse(row.payloadJson);
+    const remoteId = row.product?.remoteId ?? null;
+
+    if (!payload.product) {
+      if (!remoteId) {
+        // Espera a que suba su producto: no se envía, pero el aviso de pendientes
+        // debe contarla (`includeWaiting`), o quedaría invisible: ni pendiente ni rechazada.
+        if (includeWaiting && !row.pushError) {
+          listos.push({ id: row.id, productId: row.productId, payload, pushError: null });
+        }
+        continue;
+      }
+      if (row.pushError && payload.productId === remoteId) {
+        continue;
+      }
+      if (payload.productId !== remoteId) {
+        // Se guarda el id ya resuelto: así el siguiente rechazo con este mismo
+        // id se reconoce como otro problema y no se reintenta en bucle.
+        payload.productId = remoteId;
+        if (row.pushError) {
+          // El 404 dejó la llave de idempotencia (el id del lote) reservada en
+          // el backend: reenviarla da 409 "quedó a medio registrar". Un 404 no
+          // registró nada, así que se reintenta con una llave nueva.
+          payload.idempotencyKey = randomUUID();
+        }
+        await prisma.batch.update({
+          where: { id: row.id },
+          data: { payloadJson: JSON.stringify(payload) },
+        });
+      }
+    } else if (row.pushError) {
+      continue;
+    }
+
+    listos.push({
+      id: row.id,
+      productId: row.productId,
+      payload,
+      pushError: row.pushError ?? null,
+    });
+  }
+  return listos;
 }
 
 async function markStockEntrySynced(prisma, batchLocalId, remoteProductId) {
@@ -328,6 +406,57 @@ async function markStockEntrySynced(prisma, batchLocalId, remoteProductId) {
 
 async function markStockEntryPushFailed(prisma, batchLocalId, message) {
   await prisma.batch.update({ where: { id: batchLocalId }, data: { pushError: message } });
+}
+
+/**
+ * Lotes que el servidor rechazó, para el panel "Rechazados al sincronizar".
+ * No eran ni pendientes (`getPendingStockEntries` excluye los que tienen
+ * `pushError`) ni rechazados a la vista: el stock quedaba solo en la caja y
+ * el aviso decía "Sincronizado".
+ */
+async function listBlockedStockEntries(prisma) {
+  const rows = await prisma.batch.findMany({
+    where: { pendingPush: true, pushError: { not: null }, payloadJson: { not: null } },
+    orderBy: { createdAt: 'asc' },
+    include: { product: { select: { name: true } } },
+  });
+  return rows.map((row) => ({
+    kind: 'stockEntry',
+    id: row.id,
+    label: `Entrada ${row.lotNumber ?? 'sin lote'}`,
+    detail: `${row.product?.name ?? 'Producto'} · ${row.quantity} pzas`,
+    occurredAt: row.createdAt,
+    reason: row.pushError,
+    diagnosis: { code: codeFromReason(row.pushError) },
+  }));
+}
+
+/** Devuelve un lote rechazado a la cola normal (se usa tras corregir la causa). */
+async function clearStockEntryPushError(prisma, batchLocalId) {
+  await prisma.batch.update({ where: { id: batchLocalId }, data: { pushError: null } });
+}
+
+/**
+ * Borra un lote que **nunca llegó** al servidor y le quita al producto las piezas
+ * que había sumado en local. Reclama la fila con `deleteMany({ pendingPush })`:
+ * un lote que ya subió no se toca (el servidor lo tiene) y dos descartes
+ * simultáneos no restan dos veces.
+ */
+async function discardStockEntry(prisma, batchLocalId) {
+  await prisma.$transaction(async (tx) => {
+    const batch = await tx.batch.findUnique({ where: { id: batchLocalId } });
+    if (!batch || !batch.pendingPush) {
+      return;
+    }
+    const deleted = await tx.batch.deleteMany({ where: { id: batchLocalId, pendingPush: true } });
+    if (deleted.count === 0) {
+      return;
+    }
+    await tx.product.updateMany({
+      where: { id: batch.productId },
+      data: { totalStock: { decrement: batch.quantity } },
+    });
+  });
 }
 
 /**
@@ -436,6 +565,23 @@ async function clearCatalogPushError(prisma, localId) {
   await prisma.product.update({ where: { id: localId }, data: { catalogPushError: null } });
 }
 
+/** Altas o ediciones de catálogo que el servidor rechazó, para el panel de rechazados. */
+async function listBlockedProducts(prisma) {
+  const rows = await prisma.product.findMany({
+    where: { pendingCatalogPush: true, catalogPushError: { not: null } },
+    orderBy: { updatedAt: 'asc' },
+  });
+  return rows.map((row) => ({
+    kind: 'product',
+    id: row.id,
+    label: row.name,
+    detail: `SKU ${row.sku}`,
+    occurredAt: row.updatedAt,
+    reason: row.catalogPushError,
+    diagnosis: { code: codeFromReason(row.catalogPushError) },
+  }));
+}
+
 module.exports = {
   search,
   getByBarcode,
@@ -446,6 +592,10 @@ module.exports = {
   getPendingStockEntries,
   markStockEntrySynced,
   markStockEntryPushFailed,
+  listBlockedStockEntries,
+  clearStockEntryPushError,
+  discardStockEntry,
+  listBlockedProducts,
   getProductById,
   createCatalogProduct,
   updateCatalogProduct,

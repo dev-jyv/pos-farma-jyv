@@ -19,6 +19,7 @@
 
 /** Orden importa: el primero que coincide gana. */
 const PATRONES = [
+  ['entrada-a-medias', /qued[oó] a medio registrar/i],
   ['turno-duplicado', /turno remoto .* ya pertenece a otro turno/i],
   ['turno-abierto-existente', /ya tienes un turno de caja abierto/i],
   ['turno-ajeno', /solo el cajero que abri[oó] el turno/i],

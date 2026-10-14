@@ -1,4 +1,4 @@
-import { ApplicationConfig, provideBrowserGlobalErrorListeners } from '@angular/core';
+import { ApplicationConfig, ErrorHandler, provideBrowserGlobalErrorListeners } from '@angular/core';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { provideRouter, withHashLocation } from '@angular/router';
 import { provideTranslateService } from '@ngx-translate/core';
@@ -9,6 +9,7 @@ import { providePrimeNG } from 'primeng/config';
 import { environment } from '../environments/environment';
 import { routes } from './app.routes';
 import { authInterceptor } from './core/api/auth.interceptor';
+import { LoggingErrorHandler } from './core/logging/app-log.service';
 import { provideFirebase } from './core/firebase/firebase.providers';
 import { PosPreset } from './core/theme/pos.preset';
 
@@ -16,6 +17,7 @@ export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     MessageService,
+    { provide: ErrorHandler, useClass: LoggingErrorHandler },
     provideRouter(routes, ...(environment.isElectron ? [withHashLocation()] : [])),
     provideHttpClient(withInterceptors([authInterceptor])),
     provideTranslateService({

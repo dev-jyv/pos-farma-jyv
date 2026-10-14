@@ -11,6 +11,7 @@ import { SaleService } from '../../features/pos/services/sale.service';
 import { StockEntryService } from '../../features/pos/services/stock-entry.service';
 import { environment } from '../../../environments/environment';
 import { AuthService } from '../auth/auth.service';
+import { AutoPushService } from './auto-push.service';
 import { pushOwnerFilter } from './push-owner';
 import { PROMOTIONS_SYNCED_EVENT } from './sync-events';
 
@@ -141,7 +142,14 @@ export class SyncScheduler {
 
   private readonly destroyRef = inject(DestroyRef);
 
+  private readonly autoPush = inject(AutoPushService);
+
   constructor() {
+    // Solo subir: el envío automático tras cada venta nunca baja el catálogo.
+    this.autoPush.register({
+      flush: () => this.flushPendingNow(),
+      countPending: () => this.countPending(),
+    });
     this.destroyRef.onDestroy(() => {
       this.clearCooldownTimer();
       this.stop();
@@ -348,7 +356,9 @@ export class SyncScheduler {
        */
       api.sales.getNeedingRemoteVoid(owner),
       api.catalog.getPendingCatalogPush(),
-      api.catalog.getPendingStockEntries(),
+      // `includeWaiting`: una entrada que espera a su producto no se envía todavía,
+      // pero está pendiente: sin contarla no sería ni pendiente ni rechazada.
+      api.catalog.getPendingStockEntries({ includeWaiting: true }),
       api.cashMovements.getPendingPush(owner),
       api.cashSessions.getPendingPush(owner),
       api.cashSessions.getPendingClosePush(owner),

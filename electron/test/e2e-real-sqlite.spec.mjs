@@ -229,14 +229,54 @@ describe('el esquema real impide lo que el diseño prohíbe', () => {
     expect(await prisma.saleMovement.count()).toBe(0);
   });
 
-  it('la llave de idempotencia es única de verdad: no se puede duplicar una venta', async () => {
+  it('la llave de idempotencia es única de verdad: el esquema no acepta dos ventas con la misma', async () => {
     const sesion = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
     await unProducto();
     const payload = { ...ventaPayload([partidaProducto()]), cashSessionId: sesion.id };
 
     await ventas.createLocal(prisma, payload);
+    const fila = await prisma.sale.findFirst();
+    const { id, items, ...resto } = fila;
 
-    await expect(ventas.createLocal(prisma, payload)).rejects.toThrow();
+    await expect(prisma.sale.create({ data: { ...resto } })).rejects.toThrow();
+    expect(await prisma.sale.count()).toBe(1);
+  });
+
+  it('reintentar createLocal con la misma llave devuelve la misma venta y NO vuelve a descontar stock', async () => {
+    const sesion = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    await unProducto();
+    const payload = { ...ventaPayload([partidaProducto()]), cashSessionId: sesion.id };
+
+    const primera = await ventas.createLocal(prisma, payload);
+    const stockTras1 = (await prisma.product.findFirst()).totalStock;
+    const segunda = await ventas.createLocal(prisma, payload);
+
+    expect(segunda.id).toBe(primera.id);
+    expect(await prisma.sale.count()).toBe(1);
+    expect((await prisma.product.findFirst()).totalStock).toBe(stockTras1);
+  });
+
+  it('dos cobros simultáneos con la misma llave producen una sola venta y un solo descuento', async () => {
+    const sesion = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    await unProducto();
+    const payload = { ...ventaPayload([partidaProducto()]), cashSessionId: sesion.id };
+    const antes = (await prisma.product.findFirst()).totalStock;
+
+    const resultados = await Promise.allSettled([
+      ventas.createLocal(prisma, payload),
+      ventas.createLocal(prisma, payload),
+    ]);
+
+    expect(await prisma.sale.count()).toBe(1);
+    expect(resultados.filter((r) => r.status === 'fulfilled').length).toBeGreaterThanOrEqual(1);
+    expect((await prisma.product.findFirst()).totalStock).toBe(antes - payload.items[0].quantity);
+  });
+
+  it('sin llave de idempotencia no se registra la venta', async () => {
+    const sesion = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    await unProducto();
+    const payload = { ...ventaPayload([partidaProducto()]), cashSessionId: sesion.id, idempotencyKey: undefined };
+    await expect(ventas.createLocal(prisma, payload)).rejects.toThrow(/idempotencyKey/);
   });
 
   it('un servicio no puede tener stock ni lote: no hay columnas ni relación para eso', async () => {
@@ -345,6 +385,74 @@ describe('jornada completa contra SQLite real', () => {
     expect(vivo.expectedCashAmount).toBe(0);
     expect(vivo.expectedServicesCashAmount).toBe(0);
     expect(vivo.summary.services).toMatchObject({ count: 0, voidedCount: 1 });
+  });
+
+  /**
+   * Bug "no respeta la BD": el stock se reponía más de una vez por la misma
+   * venta (caja con piezas que el servidor no tiene, y el pull no lo corrige
+   * porque solo trae productos que cambiaron allá).
+   */
+  it('dos anulaciones simultáneas de la misma venta reponen el stock una sola vez', async () => {
+    await unProducto({ stock: 20 });
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    const venta = await ventas.createLocal(prisma, {
+      ...ventaPayload([partidaProducto()]),
+      cashSessionId: turno.id,
+    });
+    expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(18);
+
+    await Promise.all([
+      ventas.voidLocal(prisma, venta.id, ADMIN, 'admin@farmajyv.mx'),
+      ventas.voidLocal(prisma, venta.id, ADMIN, 'admin@farmajyv.mx'),
+    ]);
+
+    expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(20);
+    expect(await prisma.saleMovement.count({ where: { saleId: venta.id, type: 'void' } })).toBe(1);
+  });
+
+  it('descartar una venta ya anulada no repone el stock otra vez', async () => {
+    await unProducto({ stock: 20 });
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    const venta = await ventas.createLocal(prisma, {
+      ...ventaPayload([partidaProducto()]),
+      cashSessionId: turno.id,
+    });
+    await ventas.voidLocal(prisma, venta.id, ADMIN);
+    expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(20);
+
+    await ventas.discard(prisma, venta.id);
+
+    expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(20);
+    expect(await prisma.sale.count({ where: { id: venta.id } })).toBe(0);
+  });
+
+  it('descartar una venta que ya subió no la borra: el servidor la tiene viva', async () => {
+    await unProducto({ stock: 20 });
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    const venta = await ventas.createLocal(prisma, {
+      ...ventaPayload([partidaProducto()]),
+      cashSessionId: turno.id,
+    });
+    await ventas.markSynced(prisma, venta.id, 'fs-venta-1', 'V-000001');
+
+    await ventas.discard(prisma, venta.id);
+
+    // Sigue en la caja y el stock no se repone: la venta existe en el servidor.
+    expect(await prisma.sale.count({ where: { id: venta.id } })).toBe(1);
+    expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(18);
+  });
+
+  it('dos descartes simultáneos de la misma venta reponen el stock una sola vez', async () => {
+    await unProducto({ stock: 20 });
+    const turno = await cashSessions.createLocal(prisma, { openedBy: CAJERO, openingAmount: 0 });
+    const venta = await ventas.createLocal(prisma, {
+      ...ventaPayload([partidaProducto()]),
+      cashSessionId: turno.id,
+    });
+
+    await Promise.all([ventas.discard(prisma, venta.id), ventas.discard(prisma, venta.id)]);
+
+    expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(20);
   });
 
   it('anular una venta cuyo producto ya no está en el catálogo local no rompe la anulación', async () => {
@@ -492,7 +600,7 @@ describe('jornada completa contra SQLite real', () => {
     expect(entrada.stock).toBe(12);
 
     // La entrada queda en cola: se vende contra stock local, sin red de por medio.
-    expect(await productos.getPendingStockEntries(prisma)).toHaveLength(1);
+    expect(await prisma.batch.count({ where: { productId: producto.id, pendingPush: true } })).toBe(1);
 
     await ventas.createLocal(prisma, {
       ...ventaPayload([partidaProducto(producto.id)]),
@@ -500,6 +608,168 @@ describe('jornada completa contra SQLite real', () => {
     });
 
     expect((await prisma.product.findUnique({ where: { id: producto.id } })).totalStock).toBe(10);
+  });
+
+  /**
+   * Bug "no respeta la BD": una entrada sobre un producto que aún no subió
+   * congelaba su id LOCAL en el payload y `POST /stock-entries` respondía 404
+   * "Producto no encontrado": el stock quedaba solo en la caja.
+   */
+  it('una entrada sobre un producto sin remoteId espera a que el producto suba', async () => {
+    const producto = await unProducto({ stock: 0, remoteId: null });
+    await productos.recordStockEntry(prisma, {
+      productId: producto.id,
+      lotNumber: 'L-W',
+      expiryDate: '2027-06-30',
+      quantity: 7,
+      invoiceId: 'inv-w',
+    });
+
+    // Sin remoteId no hay id que mandar: no se envía con el UUID local.
+    expect(await productos.getPendingStockEntries(prisma)).toHaveLength(0);
+
+    await prisma.product.update({ where: { id: producto.id }, data: { remoteId: 'fs-prod-1' } });
+    const [pendiente] = await productos.getPendingStockEntries(prisma);
+    expect(pendiente.payload.productId).toBe('fs-prod-1');
+    expect((await prisma.product.findUnique({ where: { id: producto.id } })).totalStock).toBe(7);
+  });
+
+  it('las entradas rechazadas por un id local se reintentan con el remoteId ya conocido', async () => {
+    const producto = await unProducto({ stock: 0, remoteId: null });
+    await productos.recordStockEntry(prisma, {
+      productId: producto.id,
+      lotNumber: 'L-H',
+      expiryDate: '2027-06-30',
+      quantity: 4,
+      invoiceId: 'inv-h',
+    });
+    const lote = await prisma.batch.findFirst({ where: { productId: producto.id } });
+    // Estado que dejó la versión con el bug: bloqueada con 404 y producto ya subido.
+    await prisma.batch.update({ where: { id: lote.id }, data: { pushError: 'Producto no encontrado' } });
+    await prisma.product.update({ where: { id: producto.id }, data: { remoteId: 'fs-prod-2' } });
+
+    const [pendiente] = await productos.getPendingStockEntries(prisma);
+    expect(pendiente.id).toBe(lote.id);
+    expect(pendiente.payload.productId).toBe('fs-prod-2');
+    // El 404 dejó reservada la llave original en el backend: se reintenta con otra.
+    expect(pendiente.payload.idempotencyKey).toBeTruthy();
+    expect(pendiente.payload.idempotencyKey).not.toBe(lote.id);
+
+    // Si el 404 persiste con el id correcto, no se reintenta en bucle.
+    await productos.markStockEntryPushFailed(prisma, lote.id, 'Producto no encontrado');
+    expect(await productos.getPendingStockEntries(prisma)).toHaveLength(0);
+  });
+
+  /**
+   * Bug "Sincronizado" engañoso: un lote o producto rechazado no era ni pendiente
+   * ni rechazado a la vista, así que el panel no lo mostraba y el stock quedaba
+   * solo en la caja sin que nadie se enterara.
+   */
+  describe('rechazados de entradas de stock y catálogo', () => {
+    async function loteRechazado({ quantity = 5, error = 'Stock inválido' } = {}) {
+      const producto = await unProducto({ stock: 0, remoteId: 'fs-p' });
+      await productos.recordStockEntry(prisma, {
+        productId: producto.id,
+        lotNumber: 'L-R',
+        expiryDate: '2027-06-30',
+        quantity,
+        invoiceId: 'inv-r',
+      });
+      const lote = await prisma.batch.findFirst({ where: { productId: producto.id } });
+      await productos.markStockEntryPushFailed(prisma, lote.id, error);
+      return { producto, lote };
+    }
+
+    it('un lote rechazado aparece en el listado de bloqueados con su producto y motivo', async () => {
+      const { lote } = await loteRechazado({ quantity: 5, error: 'Cantidad inválida' });
+
+      const bloqueados = await productos.listBlockedStockEntries(prisma);
+
+      expect(bloqueados).toHaveLength(1);
+      expect(bloqueados[0]).toMatchObject({
+        kind: 'stockEntry',
+        id: lote.id,
+        reason: 'Cantidad inválida',
+      });
+      expect(bloqueados[0].label).toContain('L-R');
+      expect(bloqueados[0].detail).toContain('Producto p-1');
+      expect(bloqueados[0].diagnosis.code).toBe('desconocido');
+    });
+
+    it('un lote que sigue en cola sin error no es un rechazado', async () => {
+      const producto = await unProducto({ stock: 0, remoteId: 'fs-p' });
+      await productos.recordStockEntry(prisma, {
+        productId: producto.id,
+        lotNumber: 'L-OK',
+        expiryDate: '2027-06-30',
+        quantity: 3,
+        invoiceId: 'inv-ok',
+      });
+      expect(await productos.listBlockedStockEntries(prisma)).toHaveLength(0);
+    });
+
+    it('reintentar un lote rechazado lo devuelve a la cola', async () => {
+      const { lote } = await loteRechazado();
+      expect(await productos.getPendingStockEntries(prisma)).toHaveLength(0);
+
+      await productos.clearStockEntryPushError(prisma, lote.id);
+
+      expect(await productos.getPendingStockEntries(prisma)).toHaveLength(1);
+      expect(await productos.listBlockedStockEntries(prisma)).toHaveLength(0);
+    });
+
+    it('descartar un lote rechazado lo borra y descuenta su stock local una sola vez', async () => {
+      const { producto, lote } = await loteRechazado({ quantity: 5 });
+      expect((await prisma.product.findUnique({ where: { id: producto.id } })).totalStock).toBe(5);
+
+      await Promise.all([
+        productos.discardStockEntry(prisma, lote.id),
+        productos.discardStockEntry(prisma, lote.id),
+      ]);
+
+      expect(await prisma.batch.count({ where: { id: lote.id } })).toBe(0);
+      expect((await prisma.product.findUnique({ where: { id: producto.id } })).totalStock).toBe(0);
+    });
+
+    it('un lote que ya subió no se puede descartar: el servidor lo tiene', async () => {
+      const { producto, lote } = await loteRechazado({ quantity: 5 });
+      await prisma.batch.update({ where: { id: lote.id }, data: { pendingPush: false, pushError: null } });
+
+      await productos.discardStockEntry(prisma, lote.id);
+
+      expect(await prisma.batch.count({ where: { id: lote.id } })).toBe(1);
+      expect((await prisma.product.findUnique({ where: { id: producto.id } })).totalStock).toBe(5);
+    });
+
+    it('una entrada que espera a su producto cuenta como pendiente para el aviso, aunque aún no se envíe', async () => {
+      const producto = await unProducto({ stock: 0, remoteId: null });
+      await productos.recordStockEntry(prisma, {
+        productId: producto.id,
+        lotNumber: 'L-W2',
+        expiryDate: '2027-06-30',
+        quantity: 2,
+        invoiceId: 'inv-w2',
+      });
+
+      expect(await productos.getPendingStockEntries(prisma)).toHaveLength(0);
+      expect(await productos.getPendingStockEntries(prisma, { includeWaiting: true })).toHaveLength(1);
+    });
+
+    it('un producto de catálogo rechazado aparece como bloqueado y se reintenta', async () => {
+      const producto = await unProducto({ stock: 0, remoteId: null });
+      await prisma.product.update({
+        where: { id: producto.id },
+        data: { pendingCatalogPush: true, catalogPushError: 'El SKU ya existe' },
+      });
+
+      const bloqueados = await productos.listBlockedProducts(prisma);
+      expect(bloqueados).toHaveLength(1);
+      expect(bloqueados[0]).toMatchObject({ kind: 'product', id: producto.id, reason: 'El SKU ya existe' });
+      expect(bloqueados[0].label).toBe('Producto p-1');
+
+      await productos.clearCatalogPushError(prisma, producto.id);
+      expect(await productos.listBlockedProducts(prisma)).toHaveLength(0);
+    });
   });
 
   it('recibir un producto que aún no existe lo da de alta y lo deja vendible', async () => {

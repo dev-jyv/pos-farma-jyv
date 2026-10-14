@@ -1,9 +1,10 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, lastValueFrom, from, map } from 'rxjs';
+import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, lastValueFrom, from, map, tap } from 'rxjs';
 import { HttpErrorResponse } from '@angular/common/http';
 
 import { getApiErrorMessage, toDate, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
+import { AutoPushService } from '../../../core/sync/auto-push.service';
 import { Product, ProductFieldsPayload, PurchaseInvoice } from '../../../shared/models';
 import { environment } from '../../../../environments/environment';
 
@@ -64,6 +65,8 @@ export class StockEntryService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = environment.apiUrl;
 
+  private readonly autoPush = inject(AutoPushService);
+
   private flushing = false;
 
   /** Últimas facturas registradas, de la más reciente a la más vieja. */
@@ -75,7 +78,7 @@ export class StockEntryService {
   }
 
   create(payload: CreateStockEntryPayload): Observable<StockEntryResult> {
-    return from(this.api().recordStockEntry(payload));
+    return from(this.api().recordStockEntry(payload)).pipe(tap(() => this.autoPush.notifyChange()));
   }
 
   /**
@@ -160,7 +163,7 @@ flushQueueAsync(): Promise<void> {
                * —existencias que no existen—. El backend la usa igual que en las
                * ventas y en el reintento devuelve la entrada ya registrada.
                */
-              idempotencyKey: item.id,
+              idempotencyKey: (item.payload as { idempotencyKey?: string }).idempotencyKey ?? item.id,
             })
             .pipe(
             concatMap((response) => {
