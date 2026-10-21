@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     confirmClose: () => ipcRenderer.invoke('app:confirm-close'),
     cancelClose: () => ipcRenderer.invoke('app:cancel-close'),
   },
+  log: {
+    write: (level, event, data) => ipcRenderer.invoke('log:write', level, event, data),
+    getDir: () => ipcRenderer.invoke('log:getDir'),
+  },
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   getDeviceInfo: () => ipcRenderer.invoke('get-device-info'),
   openCashDrawer: (printerName) => ipcRenderer.invoke('open-cash-drawer', printerName),
@@ -28,7 +32,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getBatchesByProduct: (productId) => ipcRenderer.invoke('catalog:getBatchesByProduct', productId),
     recordStockEntry: (payload) => ipcRenderer.invoke('catalog:recordStockEntry', payload),
     upsertMany: (products) => ipcRenderer.invoke('catalog:upsertMany', products),
-    getPendingStockEntries: () => ipcRenderer.invoke('catalog:getPendingStockEntries'),
+    getPendingStockEntries: (options) => ipcRenderer.invoke('catalog:getPendingStockEntries', options),
+    listBlockedStockEntries: () => ipcRenderer.invoke('catalog:listBlockedStockEntries'),
+    clearStockEntryPushError: (batchLocalId) =>
+      ipcRenderer.invoke('catalog:clearStockEntryPushError', batchLocalId),
+    discardStockEntry: (batchLocalId) => ipcRenderer.invoke('catalog:discardStockEntry', batchLocalId),
+    listBlockedProducts: () => ipcRenderer.invoke('catalog:listBlockedProducts'),
     markStockEntrySynced: (batchLocalId, remoteProductId) =>
       ipcRenderer.invoke('catalog:markStockEntrySynced', batchLocalId, remoteProductId),
     markStockEntryPushFailed: (batchLocalId, message) =>

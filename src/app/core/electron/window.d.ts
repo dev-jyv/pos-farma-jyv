@@ -182,7 +182,7 @@ export interface LocalCashMovementInput {
  * alguien tiene que leer el motivo y decidir, así que la caja debe mostrarlo.
  */
 export interface BlockedSyncRecord {
-  kind: 'sale' | 'cashMovement' | 'cashSession';
+  kind: 'sale' | 'cashMovement' | 'cashSession' | 'stockEntry' | 'product';
   id: string;
   /** Folio, motivo del gasto o tipo de operación: con qué lo reconoce el cajero. */
   label: string;
@@ -201,6 +201,7 @@ export type BlockedCode =
   | 'producto-rechazado'
   | 'producto-no-encontrado'
   | 'listo-para-reintentar'
+  | 'entrada-a-medias'
   | 'turno-duplicado'
   | 'turno-abierto-existente'
   | 'turno-ajeno'
@@ -244,6 +245,10 @@ export interface CashOnHand {
 declare global {
   interface Window {
     electronAPI?: {
+      log?: {
+        write: (level: 'info' | 'warn' | 'error', event: string, data?: Record<string, unknown>) => Promise<void>;
+        getDir: () => Promise<string>;
+      };
       app: {
         /**
          * La ventana pidió cerrarse: el renderer decide si sale. Devuelve la baja
@@ -267,7 +272,18 @@ declare global {
         upsertMany: (products: unknown[]) => Promise<{ count: number }>;
         /** Lotes (local + sincronizados) de un producto, para caducidad/FEFO al agregar al carrito. */
         getBatchesByProduct: (productId: string) => Promise<ProductBatch[]>;
-        getPendingStockEntries: () => Promise<PendingStockEntry[]>;
+        /**
+         * `includeWaiting`: incluye también las entradas que esperan a que suba su
+         * producto (sin `remoteId`), que no se envían pero sí cuentan como pendientes.
+         */
+        getPendingStockEntries: (options?: { includeWaiting?: boolean }) => Promise<PendingStockEntry[]>;
+        /** Lotes que el servidor rechazó: salen en el panel "Rechazados al sincronizar". */
+        listBlockedStockEntries: () => Promise<BlockedSyncRecord[]>;
+        clearStockEntryPushError: (batchLocalId: string) => Promise<void>;
+        /** Borra un lote que nunca subió y descuenta sus piezas del stock local. */
+        discardStockEntry: (batchLocalId: string) => Promise<void>;
+        /** Altas o ediciones de catálogo que el servidor rechazó. */
+        listBlockedProducts: () => Promise<BlockedSyncRecord[]>;
         markStockEntrySynced: (batchLocalId: string, remoteProductId?: string | null) => Promise<void>;
         markStockEntryPushFailed: (batchLocalId: string, message: string) => Promise<void>;
         /** Acepta id local o `remoteId`; devuelve `null` si no existe. */

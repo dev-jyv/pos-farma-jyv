@@ -216,7 +216,14 @@ function createModel(db, name, defaults) {
     /** Lo usa la purga de promociones viejas (`purgeStale`). Sin cascada: ningún modelo que lo use tiene hijos. */
     async deleteMany({ where } = {}) {
       const antes = model.rows.length;
+      const borrados = model.rows.filter((row) => matchesWhere(row, where, db));
       model.rows = model.rows.filter((row) => !matchesWhere(row, where, db));
+      // Cascada, como el `onDelete: Cascade` del schema (igual que `delete`).
+      for (const borrado of borrados) {
+        for (const { model: childModel, foreignKey } of Object.values(RELATIONS[name] ?? {})) {
+          db[childModel].rows = db[childModel].rows.filter((child) => child[foreignKey] !== borrado.id);
+        }
+      }
       return { count: antes - model.rows.length };
     },
     async updateMany({ where, data }) {
@@ -346,7 +353,10 @@ export function createFakePrisma() {
    * simula atomicidad: si una operación lanza, las anteriores ya se aplicaron.
    * Es suficiente para las pruebas, pero una que dependa del rollback mentiría.
    */
-  db.$transaction = async (operaciones) => Promise.all(operaciones);
+  db.$transaction = async (operaciones) =>
+    // Forma interactiva (`$transaction(async (tx) => …)`): sin aislamiento real,
+    // el fake corre la función contra sí mismo.
+    typeof operaciones === 'function' ? operaciones(db) : Promise.all(operaciones);
 
   return db;
 }

@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { signal } from '@angular/core';
-import { Router } from '@angular/router';
+import { WritableSignal, signal } from '@angular/core';
+import { ActivatedRoute, Router } from '@angular/router';
 import { provideTranslateService } from '@ngx-translate/core';
 import { EMPTY } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -52,6 +52,8 @@ describe('Shell', () => {
     TestBed.configureTestingModule({
       providers: [
         provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
+        // Un `RouterLink` pintado (p. ej. al aparecer el aviso de rechazados) lo pide.
+        { provide: ActivatedRoute, useValue: {} },
         {
           provide: Router,
           useValue: { navigate, createUrlTree: () => ({}), serializeUrl: () => '', events: EMPTY, url: '/pos' },
@@ -475,6 +477,34 @@ describe('Shell', () => {
       expect(component.retryingBlockedId()).toBeNull();
     });
   });
+  /**
+   * Bug "Sincronizado" engañoso: los rechazados no cuentan como pendientes (no se
+   * reintentan solos), así que el aviso afirmaba éxito con mercancía o ventas que
+   * el servidor no aceptó y que solo existían en esta caja.
+   */
+  describe('mensaje al sincronizar a mano', () => {
+    it('con registros rechazados no dice "Sincronizado" y manda a revisarlos', async () => {
+      const blocked = TestBed.inject(BlockedSyncService);
+      const notifications = TestBed.inject(NotificationService);
+      (blocked.count as unknown as WritableSignal<number>).set(2);
+
+      component.syncNow();
+      await vi.waitFor(() => expect(notifications.error).toHaveBeenCalled());
+
+      expect(notifications.error).toHaveBeenCalledWith(expect.stringMatching(/rechaz[oó] 2 registro/));
+      expect(notifications.success).not.toHaveBeenCalled();
+    });
+
+    it('sin rechazados ni pendientes sí confirma el éxito', async () => {
+      const notifications = TestBed.inject(NotificationService);
+
+      component.syncNow();
+      await vi.waitFor(() => expect(notifications.success).toHaveBeenCalled());
+
+      expect(notifications.error).not.toHaveBeenCalled();
+    });
+  });
+
   describe('ayuda con IA', () => {
     const desconocido = {
       kind: 'sale' as const,

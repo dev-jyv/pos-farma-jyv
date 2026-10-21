@@ -756,6 +756,14 @@ describe('SyncScheduler — el conteo de pendientes usa el mismo filtro que el e
     expect(await scheduler.countPending()).toBe(0);
   });
 
+  it('cuenta también las entradas que esperan a su producto: si no, no serían ni pendientes ni rechazadas', async () => {
+    const scheduler = crear(false);
+
+    await scheduler.countPending();
+
+    expect(colas.stockEntries).toHaveBeenCalledWith({ includeWaiting: true });
+  });
+
   it('lo propio sí se cuenta', async () => {
     const scheduler = crear(false);
     colas.movements.mockResolvedValue([{ id: 'mov-1' }, { id: 'mov-2' }]);
