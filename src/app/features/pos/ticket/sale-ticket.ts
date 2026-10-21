@@ -31,6 +31,14 @@ export class SaleTicket {
     return (isSaleProductItem(item) ? item.productId : item.serviceId) + item.productName;
   }
 
+  /**
+   * Clave del `@for`: `itemKey` se repite cuando el mismo servicio va con dos
+   * doctores o el mismo producto en dos lotes (NG0955). Se agrega la posición.
+   */
+  trackItem(index: number, item: SaleItem): string {
+    return `${index}:${this.itemKey(item)}`;
+  }
+
   /** La promo se imprime con su nombre: el cliente debe ver por qué pagó menos. */
   promoOf(item: SaleItem): { name: string; amount: number } | null {
     if (!isSaleProductItem(item) || !item.promotionName || !item.promotionDiscount) {

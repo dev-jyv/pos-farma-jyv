@@ -518,8 +518,9 @@ export class Checkout {
     if (!this.visible() || !event.altKey || event.ctrlKey || event.metaKey) {
       return;
     }
-    const index = Number(event.key) - 1;
-    const method = this.paymentMethods[index];
+    // `event.code`, no `event.key`: en macOS Option+1/2/3 produce '¡', '™', '£'.
+    const digit = /^(?:Digit|Numpad)([1-9])$/.exec(event.code)?.[1];
+    const method = digit ? this.paymentMethods[Number(digit) - 1] : undefined;
     if (!method) {
       return;
     }

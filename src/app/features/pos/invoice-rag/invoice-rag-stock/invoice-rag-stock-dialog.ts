@@ -25,6 +25,7 @@ import { Subscription, catchError, firstValueFrom, of } from 'rxjs';
 import { getApiErrorMessage } from '../../../../core/api/api.utils';
 import { NotificationService } from '../../../../core/notifications/notification.service';
 import { InvoiceRagDocument, Product, PurchaseInvoice, Supplier } from '../../../../shared/models';
+import { todayLocalDateString } from '../../../../shared/utils/local-date';
 import { InvoiceService } from '../../services/invoice.service';
 import { ProductService } from '../../services/product.service';
 import { StockEntryService } from '../../services/stock-entry.service';
@@ -80,7 +81,9 @@ export class InvoiceRagStockDialog {
   readonly visible = model(false);
   readonly applied = output<InvoiceRagDocument>();
 
-  readonly today = new Date().toISOString().slice(0, 10);
+  get today(): string {
+    return todayLocalDateString();
+  }
   readonly loading = signal(false);
   readonly applying = signal(false);
   readonly rows = signal(new FormArray<StockRowGroup>([]));

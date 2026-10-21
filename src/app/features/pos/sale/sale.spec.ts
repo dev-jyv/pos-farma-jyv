@@ -840,6 +840,19 @@ describe('Sale', () => {
         expect(component.catalogTab()).toBe('services');
       });
 
+      it('Option+S de macOS (event.key "ß") abre la pestaña: el atajo va por event.code', () => {
+        component.onTabHotkeys(new KeyboardEvent('keydown', { key: 'ß', code: 'KeyS', altKey: true }));
+        expect(component.catalogTab()).toBe('services');
+
+        component.onTabHotkeys(new KeyboardEvent('keydown', { key: 'µ', code: 'KeyM', altKey: true }));
+        expect(component.catalogTab()).toBe('products');
+      });
+
+      it('sin Alt, S no cambia de pestaña', () => {
+        component.onTabHotkeys(new KeyboardEvent('keydown', { key: 's', code: 'KeyS' }));
+        expect(component.catalogTab()).toBe('products');
+      });
+
       it('sin servicios en el catálogo, Alt+S no hace nada', async () => {
         servicios = [];
         await build();

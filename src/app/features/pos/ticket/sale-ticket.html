@@ -51,7 +51,7 @@
       </tr>
     </thead>
     <tbody>
-      @for (item of sale().items; track itemKey(item)) {
+      @for (item of sale().items; track trackItem($index, item)) {
         <tr>
           <td>{{ item.quantity }}</td>
           <td>
