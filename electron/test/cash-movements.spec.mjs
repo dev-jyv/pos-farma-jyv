@@ -180,6 +180,14 @@ describe('movimientos de un turno ya cerrado en el servidor', () => {
     expect(creado.id).toBeTruthy();
   });
 
+  it('rechaza agregar o corregir un gasto una vez cerrado en el servidor', async () => {
+    const creado = await addMovement(prisma, turno.id, gasto());
+    await cerrarYSincronizar();
+
+    await expect(addMovement(prisma, turno.id, gasto())).rejects.toThrow(/ya se cerró en el servidor/i);
+    await expect(updateExpense(prisma, creado.id, { amount: 99 })).rejects.toThrow(/ya se cerró en el servidor/i);
+  });
+
   it('queda bloqueado con el motivo, no desaparece', async () => {
     // Sacarlo de la cola sin más escondería dinero: el contador de pendientes
     // diría 0 con un gasto real sin registrar en el servidor.

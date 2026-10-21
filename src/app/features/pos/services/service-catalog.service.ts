@@ -1,6 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 import { Observable, catchError, from, of, tap } from 'rxjs';
 
+import { SERVICES_SYNCED_EVENT } from '../../../core/sync/sync-events';
 import { PharmacyService, ServiceProvider } from '../../../shared/models';
 
 /**
@@ -25,6 +26,12 @@ export class ServiceCatalogService {
 
   /** `true` si la farmacia tiene servicios: si no, la UI no ofrece la pestaña. */
   readonly hasServices = signal(false);
+
+  constructor() {
+    if (typeof window !== 'undefined') {
+      window.addEventListener(SERVICES_SYNCED_EVENT, () => this.refresh().subscribe());
+    }
+  }
 
   /**
    * Carga (o recarga) los dos catálogos. Best-effort: sin Electron o con la
