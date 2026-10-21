@@ -1,5 +1,5 @@
-import { Injectable, signal } from '@angular/core';
-import { Observable, catchError, from, of, tap } from 'rxjs';
+import { DestroyRef, Injectable, inject, signal } from '@angular/core';
+import { Observable, catchError, finalize, forkJoin, from, map, of, tap } from 'rxjs';
 
 import { SERVICES_SYNCED_EVENT } from '../../../core/sync/sync-events';
 import { PharmacyService, ServiceProvider } from '../../../shared/models';
@@ -27,32 +27,59 @@ export class ServiceCatalogService {
   /** `true` si la farmacia tiene servicios: si no, la UI no ofrece la pestaña. */
   readonly hasServices = signal(false);
 
+  /** Cada `refresh()` toma un número: solo el último escribe, uno viejo que termina tarde se descarta. */
+  private refreshSeq = 0;
+
   constructor() {
     if (typeof window !== 'undefined') {
-      window.addEventListener(SERVICES_SYNCED_EVENT, () => this.refresh().subscribe());
+      const onSynced = () => this.refresh().subscribe();
+      window.addEventListener(SERVICES_SYNCED_EVENT, onSynced);
+      // Sin esto cada instancia (cada TestBed) dejaba un listener vivo en `window`.
+      inject(DestroyRef).onDestroy(() => window.removeEventListener(SERVICES_SYNCED_EVENT, onSynced));
     }
   }
 
   /**
    * Carga (o recarga) los dos catálogos. Best-effort: sin Electron o con la
    * base ocupada, la caja sigue vendiendo medicamentos con normalidad.
+   *
+   * Una lectura que falla **conserva lo que ya había**: el sync escribe en la
+   * misma SQLite, y una base ocupada devolvía `[]` que borraba el catálogo (y la
+   * pestaña de servicios) hasta la siguiente carga.
    */
   refresh(): Observable<PharmacyService[]> {
     const api = window.electronAPI;
     if (!api) {
       return of([]);
     }
+    const seq = ++this.refreshSeq;
     this.loading.set(true);
-    from(api.pharmacyServices.listProviders())
-      .pipe(catchError(() => of([] as ServiceProvider[])))
-      .subscribe((providers) => this.providers.set(providers));
-
-    return from(api.pharmacyServices.list()).pipe(
-      catchError(() => of([] as PharmacyService[])),
-      tap((services) => {
-        this.services.set(services);
-        this.hasServices.set(services.length > 0);
-        this.loading.set(false);
+    const providers$ = from(api.pharmacyServices.listProviders()).pipe(
+      map((providers): ServiceProvider[] | null => providers),
+      catchError(() => of(null)),
+    );
+    const services$ = from(api.pharmacyServices.list()).pipe(
+      map((services): PharmacyService[] | null => services),
+      catchError(() => of(null)),
+    );
+    return forkJoin([providers$, services$]).pipe(
+      tap(([providers, services]) => {
+        if (seq !== this.refreshSeq) {
+          return;
+        }
+        if (providers) {
+          this.providers.set(providers);
+        }
+        if (services) {
+          this.services.set(services);
+          this.hasServices.set(services.length > 0);
+        }
+      }),
+      map(([, services]) => services ?? this.services()),
+      finalize(() => {
+        if (seq === this.refreshSeq) {
+          this.loading.set(false);
+        }
       }),
     );
   }

@@ -587,6 +587,33 @@ describe('jornada completa contra SQLite real', () => {
   });
 
   /**
+   * Una edición que llega mientras el PATCH del catálogo está en vuelo no debe
+   * darse por subida: el siguiente pull la pisaría con el valor viejo.
+   */
+  it('una edición de catálogo hecha durante el push sigue pendiente', async () => {
+    const producto = await unProducto({ remoteId: 'REMOTO-C' });
+    await productos.updateCatalogProduct(prisma, producto.id, { salePrice: 60 });
+    const [pendiente] = await productos.getPendingCatalogPush(prisma);
+
+    // Entre la lectura de la cola y la confirmación, el cajero edita otra vez.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await productos.updateCatalogProduct(prisma, producto.id, { salePrice: 75 });
+    await productos.markCatalogSynced(prisma, producto.id, 'REMOTO-C', pendiente.version);
+
+    expect(await productos.getPendingCatalogPush(prisma)).toHaveLength(1);
+  });
+
+  it('una edición de catálogo sin cambios durante el push queda subida', async () => {
+    const producto = await unProducto({ remoteId: 'REMOTO-C' });
+    await productos.updateCatalogProduct(prisma, producto.id, { salePrice: 60 });
+    const [pendiente] = await productos.getPendingCatalogPush(prisma);
+
+    await productos.markCatalogSynced(prisma, producto.id, 'REMOTO-C', pendiente.version);
+
+    expect(await productos.getPendingCatalogPush(prisma)).toHaveLength(0);
+  });
+
+  /**
    * Lo que el cajero se lleva puesto al irse. `countPending` en el renderer suma
    * estas mismas colas: si una quedara fuera, salir con un corte o una entrada
    * sin subir no avisaría nada.

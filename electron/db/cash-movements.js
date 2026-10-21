@@ -296,6 +296,12 @@ async function discard(prisma, id) {
   if (row.remoteId) {
     throw new Error('Este movimiento ya existe en el servidor: no se puede descartar');
   }
+  // Solo se descartan los rechazados (con `pushError`). Uno sin error puede estar
+  // subiéndose ahora mismo, y borrarlo dejaría el movimiento vivo en el servidor y
+  // sin fila local para `markSynced`.
+  if (!row.pushError) {
+    throw new Error('Solo se pueden descartar movimientos rechazados');
+  }
   await prisma.cashMovement.delete({ where: { id } });
 }
 

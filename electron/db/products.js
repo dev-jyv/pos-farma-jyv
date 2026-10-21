@@ -430,15 +430,27 @@ async function getPendingCatalogPush(prisma) {
     remoteId: row.remoteId ?? null,
     fields: toPushFields(row),
     catalogPushError: row.catalogPushError ?? null,
+    // Foto de la edición que se va a subir: `markCatalogSynced` la compara para no
+    // dar por subida una edición que llegó mientras el PATCH estaba en vuelo.
+    version: row.updatedAt ? new Date(row.updatedAt).toISOString() : null,
   }));
 }
 
-async function markCatalogSynced(prisma, localId, remoteId) {
+async function markCatalogSynced(prisma, localId, remoteId, pushedVersion) {
+  // Si el producto se editó mientras el push estaba en vuelo, su `updatedAt` ya no
+  // es el de la foto que se subió: se guarda el `remoteId` pero la edición nueva
+  // sigue pendiente. Si no, se marcaba subida y el siguiente pull la pisaba con el
+  // valor viejo del servidor.
+  const current = pushedVersion
+    ? await prisma.product.findUnique({ where: { id: localId }, select: { updatedAt: true } })
+    : null;
+  const editadoEnVuelo =
+    Boolean(current?.updatedAt) && new Date(current.updatedAt).toISOString() !== pushedVersion;
   await prisma.product.update({
     where: { id: localId },
     data: {
       ...(remoteId ? { remoteId } : {}),
-      pendingCatalogPush: false,
+      ...(editadoEnVuelo ? {} : { pendingCatalogPush: false }),
       catalogPushError: null,
     },
   });

@@ -356,6 +356,13 @@ describe('descartar un rechazado', () => {
     expect((await cashSessions.getLiveSummary(prisma, turno.id)).expectedCashAmount).toBe(500);
   });
 
+  it('no borra uno sin error de rechazo: puede estar subiéndose ahora mismo', async () => {
+    const creado = await addMovement(prisma, turno.id, gasto());
+
+    await expect(discard(prisma, creado.id)).rejects.toThrow(/rechazados/i);
+    expect(prisma.cashMovement.rows).toHaveLength(1);
+  });
+
   it('no borra uno que ya existe en el servidor: quedaría vivo en la auditoría', async () => {
     const creado = await addMovement(prisma, turno.id, gasto());
     await cashSessions.markCreateSynced(prisma, turno.id, 'remote-turno-1');

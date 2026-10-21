@@ -34,6 +34,8 @@ export interface PendingCatalogProduct {
   remoteId: string | null;
   fields: ProductFieldsPayload;
   catalogPushError: string | null;
+  /** `updatedAt` del producto al leer la cola; se devuelve a `markCatalogSynced`. */
+  version?: string | null;
 }
 
 export interface StockEntryLocalResult {
@@ -273,7 +275,7 @@ declare global {
         createCatalogProduct: (fields: ProductFieldsPayload) => Promise<Product>;
         updateCatalogProduct: (id: string, fields: Partial<ProductFieldsPayload>) => Promise<Product>;
         getPendingCatalogPush: () => Promise<PendingCatalogProduct[]>;
-        markCatalogSynced: (localId: string, remoteId?: string | null) => Promise<void>;
+        markCatalogSynced: (localId: string, remoteId?: string | null, pushedVersion?: string | null) => Promise<void>;
         markCatalogPushFailed: (localId: string, message: string) => Promise<void>;
         clearCatalogPushError: (localId: string) => Promise<void>;
       };

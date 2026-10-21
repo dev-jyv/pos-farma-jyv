@@ -190,7 +190,26 @@ async function getOpenLocalAnyUser(prisma) {
   return row ? toCashSessionDto(row) : null;
 }
 
-async function createLocal(prisma, { openedBy, openedByLabel, openingAmount }) {
+/**
+ * Aperturas en curso por cajero. `findFirst` + `create` no son atómicos: dos
+ * llamadas casi simultáneas (doble clic, reintento) pasaban ambas la revisión y
+ * abrían dos turnos. En el proceso main todo pasa por aquí, así que se serializa.
+ */
+const aperturasEnCurso = new Map();
+
+function createLocal(prisma, input) {
+  const previa = aperturasEnCurso.get(input.openedBy) ?? Promise.resolve();
+  const actual = previa.catch(() => undefined).then(() => createLocalSerializado(prisma, input));
+  const seguimiento = actual.catch(() => undefined).then(() => {
+    if (aperturasEnCurso.get(input.openedBy) === seguimiento) {
+      aperturasEnCurso.delete(input.openedBy);
+    }
+  });
+  aperturasEnCurso.set(input.openedBy, seguimiento);
+  return actual;
+}
+
+async function createLocalSerializado(prisma, { openedBy, openedByLabel, openingAmount }) {
   // Defensa contra doble apertura en el mismo equipo: dos turnos abiertos del
   // mismo cajero repartirían las ventas entre dos cortes y, al sincronizar,
   // los dos pelearían por el único turno abierto que admite el backend.

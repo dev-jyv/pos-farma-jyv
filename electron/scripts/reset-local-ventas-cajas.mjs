@@ -36,9 +36,18 @@ function resolveDatabasePath() {
   return path.join(homedir(), '.config', appName, 'farmajyv-pos.sqlite');
 }
 
+/**
+ * ¿Hay un POS abierto con esa base? `pgrep` no existe en Windows (el `catch` daba
+ * siempre "no" y se borraba con la app usando la base), y solo veía el dev server:
+ * no la app empaquetada. Se mira tanto `electron/main.js` como el binario.
+ */
 function appEstaCorriendo() {
   try {
-    execSync('pgrep -f "electron/main.js"', { stdio: 'pipe' });
+    if (process.platform === 'win32') {
+      const salida = execSync('tasklist /FO CSV /NH', { stdio: 'pipe' }).toString().toLowerCase();
+      return salida.includes('farmajyv') || salida.includes('electron.exe');
+    }
+    execSync('pgrep -f "electron/main.js|FarmaJyV"', { stdio: 'pipe' });
     return true;
   } catch {
     return false;

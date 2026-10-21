@@ -161,19 +161,19 @@ flushQueueAsync(): Promise<void> {
   private pushOne(item: PendingCatalogProduct): Observable<unknown> {
     if (item.remoteId) {
       return this.http.patch<unknown>(`${this.apiUrl}/products/${item.remoteId}`, item.fields).pipe(
-        switchMap(() => from(this.api().markCatalogSynced(item.id, item.remoteId))),
+        switchMap(() => from(this.api().markCatalogSynced(item.id, item.remoteId, item.version))),
         catchError((error: unknown) => this.handleFailure(item.id, error)),
       );
     }
     return this.findExistingBySku(item.fields.sku).pipe(
       switchMap((existingId) => {
         if (existingId) {
-          return from(this.api().markCatalogSynced(item.id, existingId));
+          return from(this.api().markCatalogSynced(item.id, existingId, item.version));
         }
         return this.http.post<unknown>(`${this.apiUrl}/products`, item.fields).pipe(
           switchMap((response) => {
             const created = unwrapEntity<ProductSummaryDto>(response);
-            return from(this.api().markCatalogSynced(item.id, created.id));
+            return from(this.api().markCatalogSynced(item.id, created.id, item.version));
           }),
         );
       }),
