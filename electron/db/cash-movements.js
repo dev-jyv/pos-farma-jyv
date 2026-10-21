@@ -22,6 +22,26 @@ function toCashMovementDto(row) {
 }
 
 /**
+ * Un turno cerrado **en el servidor** ya no acepta movimientos: el backend
+ * respondería 400 y el movimiento quedaría bloqueado con el cuadre ya firmado.
+ * Se rechaza al capturar, con un mensaje claro, en vez de aceptar una cifra local
+ * que nunca llegará (ver `bloquearLosDeTurnoCerrado`). Un turno cerrado cuyo cierre
+ * aún está en cola sí admite movimientos: todavía llegan a tiempo.
+ */
+async function assertTurnoAbiertoEnServidor(prisma, cashSessionId) {
+  if (!cashSessionId) {
+    return;
+  }
+  const turno = await prisma.cashSession.findUnique({ where: { id: cashSessionId } });
+  const cerradoEnServidor = Boolean(
+    turno && turno.remoteId && turno.closedAtLocal && !turno.pendingClosePush && !turno.closePushError,
+  );
+  if (cerradoEnServidor) {
+    throw new Error('El turno ya se cerró en el servidor: no se pueden agregar ni corregir movimientos.');
+  }
+}
+
+/**
  * Depósito/retiro/gasto. Un "gasto" es esta misma función con
  * `type: 'expense'` — mismo criterio de validación que el backend
  * (`createCashMovementSchema` en `backend-farma-jyv`): la categoría es
@@ -32,6 +52,7 @@ function toCashMovementDto(row) {
  * desglose solo tiene sentido dentro de un corte.
  */
 async function addMovement(prisma, cashSessionId, { type, amount, reason, category, description, createdBy, createdByLabel }) {
+  await assertTurnoAbiertoEnServidor(prisma, cashSessionId);
   if (type === 'expense' && !category) {
     throw new Error('La categoría es requerida para gastos');
   }
@@ -75,6 +96,7 @@ async function updateExpense(prisma, id, patch) {
   if (current.type !== 'expense') {
     throw new Error('Solo se pueden corregir gastos');
   }
+  await assertTurnoAbiertoEnServidor(prisma, current.cashSessionId);
 
   const amount = patch.amount ?? current.amount;
   const category = patch.category ?? current.category;

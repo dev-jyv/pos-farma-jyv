@@ -735,6 +735,49 @@ describe('SaleService', () => {
     });
 
     /**
+     * Un 404/403 es del despliegue o del permiso, no de una venta: marcarlas
+     * rechazadas sacaba de la cola ventas ya cobradas hasta intervención manual.
+     */
+    it.each([403, 404])('un %i del lote no marca las ventas como rechazadas: siguen en cola', async (status) => {
+      sales.getPendingPush.mockResolvedValue([
+        localSale({ id: 'a', payload: { idempotencyKey: 'k1' } }),
+        localSale({ id: 'b', payload: { idempotencyKey: 'k2' } }),
+      ]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+      http.expectOne(BULK_URL).flush({ error: { message: 'no' } }, { status, statusText: 'Error' });
+      await flushMicrotasks();
+
+      http.expectNone(BULK_URL);
+      expect(sales.markPushFailed).not.toHaveBeenCalled();
+    });
+
+    /**
+     * El empuje en vuelo leyó la cola al arrancar: lo capturado después no entra
+     * en esa pasada, así que debe haber una pasada de seguimiento (una sola).
+     */
+    it('un flushQueue con otro empuje en vuelo encola una pasada de seguimiento', async () => {
+      sales.getPendingPush.mockResolvedValue([localSale({ id: 'a', payload: { idempotencyKey: 'k1' } })]);
+      const respuesta = { data: [{ ok: true, sale: { id: 'remote-a', folio: 'V-A' } }] };
+
+      service.flushQueue();
+      await flushMicrotasks();
+      const primero = http.expectOne(BULK_URL);
+
+      // Dos peticiones durante el vuelo se funden en una sola pasada de seguimiento.
+      service.flushQueue();
+      service.flushQueue();
+      primero.flush(respuesta);
+      await flushMicrotasks();
+
+      const seguimiento = http.expectOne(BULK_URL);
+      seguimiento.flush(respuesta);
+      await flushMicrotasks();
+      http.expectNone(BULK_URL);
+    });
+
+    /**
      * El backend rechaza el arreglo completo si pasa de 200
      * (`bulkCreateSalesSchema`). Un fin de semana sin red con 210 ventas en cola
      * devolvía 400 y las condenaba todas — y reintentar volvía a mandar las 210.

@@ -140,6 +140,11 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // En macOS la app sigue viva sin ventana y `activate` crea otra: sin este
+    // reinicio la nueva ventana heredaría `cierreConfirmado` y cerraría sin preguntar.
+    clearTimeout(cierreTimeout);
+    cierreConfirmado = false;
+    cierreSolicitadoEn = 0;
   });
 }
 

@@ -262,6 +262,13 @@ export class DirectChargeScreen {
     if (!this.canSubmit()) {
       return;
     }
+    // Un cobro ya terminado en `failed`/`canceled` muestra otra vez "Enviar": con
+    // la misma llave el backend devolvería ese cobro muerto (o 409 si cambió el
+    // monto) y nada llegaría a la terminal. Reintentar = cobro nuevo, llave nueva.
+    const previo = this.charge();
+    if (previo && (previo.status === 'failed' || previo.status === 'canceled')) {
+      this.idempotencyKey = newIdempotencyKey();
+    }
     const request: Observable<DirectCharge> =
       this.channel() === 'online'
         ? this.directCharges.createOnline({

@@ -24,6 +24,7 @@ import { SelectModule } from 'primeng/select';
 import {
   EMPTY,
   Subject,
+  Subscription,
   catchError,
   debounceTime,
   distinctUntilChanged,
@@ -745,18 +746,28 @@ export class Checkout {
       .pipe(finalize(() => this.cancelingCard.set(false)))
       .subscribe({
         next: () => {
+          this.stopPolling();
           this.cardOrder.set(null);
           this.cardOrderStartedAt.set(null);
-          this.cardPolling.set(false);
           onCanceled?.();
         },
         error: (error: unknown) => this.notifications.error(getApiErrorMessage(error)),
       });
   }
 
+  /** Sondeo de la order en curso; se corta al cerrar o reabrir el diálogo. */
+  private pollSub: Subscription | null = null;
+
+  private stopPolling(): void {
+    this.pollSub?.unsubscribe();
+    this.pollSub = null;
+    this.cardPolling.set(false);
+  }
+
   private pollOrder(orderId: string): void {
+    this.stopPolling();
     this.cardPolling.set(true);
-    interval(2000)
+    this.pollSub = interval(2000)
       .pipe(
         switchMap(() => this.mercadoPago.getOrder(orderId).pipe(catchError(() => EMPTY))),
         takeWhile((order) => POINT_ORDER_PENDING_STATUSES.includes(order.status), true),
@@ -883,10 +894,29 @@ export class Checkout {
   }
 
   cancel(): void {
+    const order = this.cardOrder();
+    if (order && this.cardOrderApproved()) {
+      // La terminal ya cobró: cerrar sin registrar la venta deja un cargo sin
+      // venta. El diálogo no se deja cerrar hasta confirmar.
+      this.notifications.error('La tarjeta ya se cobró: confirma la venta para no dejar el cargo sin registrar.');
+      return;
+    }
+    // Cerrar con una order viva: se corta el sondeo (si no, seguiría escribiendo en
+    // el cobro siguiente) y se cancela la order en la terminal, o la podrían cobrar
+    // después sin venta.
+    this.stopPolling();
+    if (order && POINT_ORDER_PENDING_STATUSES.includes(order.status)) {
+      this.mercadoPago.cancelOrder(order.id).subscribe({
+        error: () =>
+          this.notifications.error('No se pudo cancelar la orden en la terminal: cancélala en el equipo.'),
+      });
+    }
     this.closed.emit();
   }
 
   private reset(): void {
+    // Un sondeo de la apertura anterior no debe escribir en este cobro.
+    this.stopPolling();
     // Diálogo abierto = cobro nuevo: llave de idempotencia nueva.
     this.idempotencyKey = newIdempotencyKey();
     this.cardAttempt = 0;

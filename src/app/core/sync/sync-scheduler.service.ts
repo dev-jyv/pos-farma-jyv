@@ -12,7 +12,7 @@ import { StockEntryService } from '../../features/pos/services/stock-entry.servi
 import { environment } from '../../../environments/environment';
 import { AuthService } from '../auth/auth.service';
 import { pushOwnerFilter } from './push-owner';
-import { PROMOTIONS_SYNCED_EVENT } from './sync-events';
+import { PROMOTIONS_SYNCED_EVENT, SERVICES_SYNCED_EVENT } from './sync-events';
 
 /**
  * Cuánto espera el cajero entre dos sincronizaciones manuales. El admin no pasa
@@ -114,6 +114,8 @@ export class SyncScheduler {
    * comparten la misma promesa en vuelo.
    */
   private pullInFlight: Promise<SyncOutcome> | null = null;
+  /** Resultado del último pull de promociones (completo o liviano); `false` mientras corre un sync nuevo. */
+  private promotionsPullOk = false;
 
   /** Para el botón/modal manual: si hay un pull en curso ahora mismo. */
   readonly syncing = signal(false);
@@ -188,7 +190,8 @@ export class SyncScheduler {
    * - **No cuenta para el límite del botón "Sincronizar"**: ese cupo protege del
    *   pull del catálogo completo y del push de toda la cola, no de esto.
    * - Si ya hay un sync completo en curso, espera a ese en vez de pedir otro: el
-   *   completo también baja las promociones y avisa al carrito.
+   *   completo también baja las promociones y avisa al carrito. Devuelve si ese
+   *   paso salió bien, no solo que el sync terminó.
    *
    * Devuelve `true` si las promociones quedaron al día (y se avisó al carrito).
    */
@@ -200,8 +203,10 @@ export class SyncScheduler {
       return this.promotionsPullInFlight;
     }
     if (this.pullInFlight) {
+      // Terminar el sync completo no dice si **las promociones** bajaron: se
+      // devuelve lo que ese paso registró, no el solo hecho de que acabó.
       return this.pullInFlight.then(
-        () => true,
+        () => this.promotionsPullOk,
         () => false,
       );
     }
@@ -215,6 +220,7 @@ export class SyncScheduler {
     const ok = await this.pullCatalog('promotions', 'promotions', (items) =>
       window.electronAPI?.promotions?.upsertMany(items),
     );
+    this.promotionsPullOk = ok;
     // Se avisa aunque falle: `PromoService` relee lo que haya en SQLite, que no
     // cambió, y quien espera la recarga no se queda colgado.
     window.dispatchEvent(new Event(PROMOTIONS_SYNCED_EVENT));
@@ -607,6 +613,7 @@ export class SyncScheduler {
     if (this.pullInFlight) {
       return this.pullInFlight;
     }
+    this.promotionsPullOk = false;
     this.pullInFlight = this.doPullProducts().finally(() => {
       this.pullInFlight = null;
     });
@@ -701,12 +708,13 @@ export class SyncScheduler {
     await this.pullCatalog('serviceProviders', 'service-providers', (items) =>
       window.electronAPI?.pharmacyServices.upsertProviders(items),
     );
+    window.dispatchEvent(new Event(SERVICES_SYNCED_EVENT));
     // Promociones: mismo pull incremental. Al terminar se avisa al carrito para
     // que relea las vigentes sin esperar a reiniciar la caja. Si el pull de cada
     // hora va a medias se espera: con los dos a la vez se pediría dos veces lo
     // mismo con el mismo cursor.
     await this.promotionsPullInFlight?.catch(() => false);
-    await this.pullCatalog('promotions', 'promotions', (items) =>
+    this.promotionsPullOk = await this.pullCatalog('promotions', 'promotions', (items) =>
       window.electronAPI?.promotions?.upsertMany(items),
     );
     window.dispatchEvent(new Event(PROMOTIONS_SYNCED_EVENT));

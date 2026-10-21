@@ -12,6 +12,7 @@ const {
   clearPushError,
   getNeedingRemoteVoid,
   list,
+  markSynced,
 } = sales;
 
 const CAJERO = 'uid-cajero';
@@ -518,5 +519,35 @@ describe('historial local: la caja es del equipo, la venta es del cajero', () =>
     await createLocal(prisma, venta([partidaProducto('p-1')], { cashierId: 'uid-otro-cajero' }));
 
     expect(await list(prisma, {})).toHaveLength(2);
+  });
+});
+
+describe('markSynced y anulación local en carrera', () => {
+  async function ventaPendiente() {
+    await producto('p-1');
+    return createLocal(prisma, {
+      folio: 'PENDIENTE-1',
+      idempotencyKey: 'k-1',
+      cashierId: CAJERO,
+      total: 200,
+      items: [partidaProducto('p-1')],
+    });
+  }
+
+  it('si la anulan antes de confirmar el push, queda encolado el void remoto', async () => {
+    const venta = await ventaPendiente();
+    await voidLocal(prisma, venta.id, CAJERO);
+    await markSynced(prisma, venta.id, 'remote-1', 'F-1');
+
+    const [pendiente] = await getNeedingRemoteVoid(prisma);
+    expect(pendiente.remoteId).toBe('remote-1');
+  });
+
+  it('si no hay anulación, se sincroniza normal y no encola void', async () => {
+    const venta = await ventaPendiente();
+    await markSynced(prisma, venta.id, 'remote-1', 'F-1');
+
+    expect(await getNeedingRemoteVoid(prisma)).toHaveLength(0);
+    expect(await getPendingPush(prisma)).toHaveLength(0);
   });
 });

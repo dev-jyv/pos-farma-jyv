@@ -286,6 +286,33 @@ describe('Checkout', () => {
       expect(notifyError).toHaveBeenCalled();
     });
 
+    it('cerrar el diálogo con una order viva la cancela en la terminal y emite closed', () => {
+      const cancelOrder = vi.fn(() => of(undefined));
+      TestBed.inject(MercadoPagoService).cancelOrder = cancelOrder as never;
+      const cerrado = vi.fn();
+      component.closed.subscribe(cerrado);
+
+      component.cardOrder.set(order('at_terminal'));
+      component.cancel();
+
+      expect(cancelOrder).toHaveBeenCalledWith('o1');
+      expect(cerrado).toHaveBeenCalledTimes(1);
+    });
+
+    it('con la tarjeta ya cobrada no se deja cerrar: el cargo quedaría sin venta', () => {
+      const cancelOrder = vi.fn(() => of(undefined));
+      TestBed.inject(MercadoPagoService).cancelOrder = cancelOrder as never;
+      const cerrado = vi.fn();
+      component.closed.subscribe(cerrado);
+
+      component.cardOrder.set(order('processed'));
+      component.cancel();
+
+      expect(cancelOrder).not.toHaveBeenCalled();
+      expect(cerrado).not.toHaveBeenCalled();
+      expect(notifyError).toHaveBeenCalled();
+    });
+
     it('una cancelación fallida deja el botón libre para reintentar', () => {
       TestBed.inject(MercadoPagoService).cancelOrder = (() =>
         throwError(() => new Error('500'))) as never;

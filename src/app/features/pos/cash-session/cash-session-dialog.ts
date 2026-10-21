@@ -116,6 +116,12 @@ export class CashSessionDialog {
    */
   readonly syncPhase = signal<'pre' | 'post' | null>(null);
   readonly summaryLoading = signal(false);
+  /**
+   * El resumen real ya llegó. Hasta entonces el conteo y lo esperado valen 0 y
+   * "Cerrar turno" cerraría con faltante total y sin confirmación (o pisaría el
+   * conteo tecleado cuando por fin llega el resumen).
+   */
+  readonly summaryReady = signal(false);
   readonly summary = signal<CashSessionSummary | null>(null);
   readonly expectedCash = signal(0);
   /** Esperado del bloque de servicios; informativo, el conteo es uno solo. */
@@ -195,6 +201,7 @@ export class CashSessionDialog {
     this.submitting.set(false);
     this.confirmingDifference.set(false);
     this.closeResult.set(null);
+    this.summaryReady.set(false);
     const session = this.session();
     this.sessionAtOpen.set(session);
     if (session) {
@@ -289,7 +296,7 @@ export class CashSessionDialog {
     // El doble clic del mostrador llega en el mismo tick, antes de que el
     // `[loading]` del botón alcance a deshabilitarlo: sin este candado se
     // escribían DOS cierres del mismo turno (y dos cortes) en SQLite.
-    if (this.submitting()) {
+    if (this.submitting() || !this.summaryReady()) {
       return;
     }
     if (Math.abs(this.difference()) < 0.01) {
@@ -411,6 +418,7 @@ export class CashSessionDialog {
         this.expectedServicesCash.set(expectedServicesCashAmount ?? 0);
         this.countedCashAmount.set(expectedCashAmount + (expectedServicesCashAmount ?? 0));
         this.summaryLoading.set(false);
+        this.summaryReady.set(true);
       },
       error: () => {
         this.summaryLoading.set(false);

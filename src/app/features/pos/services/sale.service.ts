@@ -278,6 +278,9 @@ function chunk<T>(items: T[], size: number): T[][] {
   return trozos;
 }
 
+/** 4xx que describen un problema del contenido del lote, no de la ruta o el permiso. */
+const BULK_REJECTION_STATUSES: ReadonlySet<number> = new Set([400, 409, 413, 422]);
+
 @Injectable({ providedIn: 'root' })
 export class SaleService {
   private readonly http = inject(HttpClient);
@@ -550,17 +553,29 @@ export class SaleService {
    * no se marca nada y se reintenta en el próximo sync.
    */
   /**
-   * Disparar y olvidar. Si ya hay un empuje en vuelo **no** encola otro: se
-   * apoya en el que corre, que va a leer la cola igual. Encolar aquí duplicaba
-   * la pasada sin ganar nada. Un empuje **esperado** (`flushQueueAsync`) sí se
-   * encola siempre: quien lo espera necesita que de verdad ocurra.
+   * Disparar y olvidar. El empuje en vuelo leyó la cola **una sola vez** al
+   * arrancar, así que lo capturado o reintentado después no entra en esa pasada:
+   * si ya hay uno corriendo se encola **a lo más una** pasada de seguimiento
+   * (varias peticiones seguidas se funden en ella). Un empuje **esperado**
+   * (`flushQueueAsync`) siempre se encola.
    */
   flushQueue(): void {
-    if (this.cola) {
+    if (!this.cola) {
+      void this.flushQueueAsync();
       return;
     }
-    void this.flushQueueAsync();
+    if (this.seguimientoPendiente) {
+      return;
+    }
+    this.seguimientoPendiente = true;
+    void this.enFila(() => {
+      // Se libera al arrancar: desde aquí la pasada ya lee la cola completa.
+      this.seguimientoPendiente = false;
+      return lastValueFrom(this.flush$().pipe(defaultIfEmpty(null))).then(() => undefined);
+    });
   }
+
+  private seguimientoPendiente = false;
 
   /**
    * Igual que `flushQueue()`, pero esperable. El sincronizador la necesita para
@@ -772,17 +787,16 @@ flushQueueAsync(): Promise<void> {
       );
   }
 
-  /** 4xx estable: reintentar el mismo cuerpo no lo va a arreglar. */
+  /**
+   * El servidor rechazó **el contenido** del lote: reintentar el mismo cuerpo no
+   * lo va a arreglar. Solo cuentan los 4xx que hablan del payload (validación,
+   * conflicto, tamaño). Un 403/404/405 es del despliegue o del permiso —un
+   * deploy a medias, un rol cambiado un rato—, no de una venta: marcarlas como
+   * rechazadas sacaba de la cola ventas ya cobradas hasta intervención manual.
+   */
   private isBulkRejection(error: unknown): boolean {
     const status = getApiErrorStatus(error);
-    return (
-      status !== null &&
-      status >= 400 &&
-      status < 500 &&
-      status !== 401 &&
-      status !== 408 &&
-      status !== 429
-    );
+    return status !== null && BULK_REJECTION_STATUSES.has(status);
   }
 
   /**

@@ -404,6 +404,15 @@ describe('Sale', () => {
       expect(component.cart()[0].quantity).toBe(2);
     });
 
+    it('commitQuantity devuelve al campo la cantidad real cuando se rechaza', () => {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.value = '99';
+      component.commitQuantity('product:p1', input);
+      expect(component.cart()[0].quantity).toBe(2);
+      expect(input.value).toBe('2');
+    });
+
     it('no deja capturar más del stock', () => {
       component.updateQuantity('product:p1', 99);
       expect(component.cart()[0].quantity).toBe(2);

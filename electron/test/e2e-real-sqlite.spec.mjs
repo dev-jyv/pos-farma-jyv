@@ -566,6 +566,27 @@ describe('jornada completa contra SQLite real', () => {
   });
 
   /**
+   * El payload de una entrada se congela al capturarla: un producto de alta local
+   * queda con su id de SQLite. Cuando el alta ya subió, el lote siguiente debe
+   * viajar con el id del servidor, o el backend responde 4xx y lo bloquea.
+   */
+  it('un lote posterior viaja con el id remoto del producto cuando su alta ya subió', async () => {
+    const producto = await unProducto({ stock: 0 });
+    await productos.recordStockEntry(prisma, {
+      productId: producto.id,
+      lotNumber: 'L-2',
+      expiryDate: '2028-01-31',
+      quantity: 4,
+      invoiceId: 'inv-2',
+    });
+
+    expect((await productos.getPendingStockEntries(prisma))[0].payload.productId).toBe(producto.id);
+
+    await prisma.product.update({ where: { id: producto.id }, data: { remoteId: 'REMOTO-X' } });
+    expect((await productos.getPendingStockEntries(prisma))[0].payload.productId).toBe('REMOTO-X');
+  });
+
+  /**
    * Lo que el cajero se lleva puesto al irse. `countPending` en el renderer suma
    * estas mismas colas: si una quedara fuera, salir con un corte o una entrada
    * sin subir no avisaría nada.

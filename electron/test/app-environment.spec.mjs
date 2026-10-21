@@ -26,6 +26,12 @@ describe('resolveAppEnvironment', () => {
     expect(resolveAppEnvironment({ envVar: 'staging', isDev: true, warn })).toBe('emulator');
     expect(warn).toHaveBeenCalledTimes(2);
   });
+
+  it('un FARMAJYV_ENV inválido no tapa el entorno horneado en el binario', () => {
+    const warn = vi.fn();
+    expect(resolveAppEnvironment({ envVar: 'Dev1', bakedEnv: 'dev', isDev: false, warn })).toBe('dev');
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('userDataDirFor', () => {

@@ -304,6 +304,7 @@
             [label]="'cashCut.close' | translate"
             styleClass="flex-[1.4]"
             [loading]="submitting()"
+            [disabled]="!summaryReady()"
             (onClick)="requestClose()"
           />
         } @else {

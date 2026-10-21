@@ -911,6 +911,27 @@ describe('SyncScheduler — pull de promociones cada hora', () => {
     http.verify();
   });
 
+  it('con un sync completo en curso devuelve si las promociones bajaron, no solo que terminó', async () => {
+    const completo = scheduler.syncNow();
+    await flush(60);
+    const products = http.expectOne((r) => r.url.endsWith('/products/sync'));
+    const liviano = scheduler.pullPromotions();
+
+    products.flush({ data: [] });
+    await flush();
+    http.expectOne((r) => r.url.endsWith('/pharmacy-services/sync')).flush({ data: [] });
+    await flush();
+    http.expectOne((r) => r.url.endsWith('/service-providers/sync')).flush({ data: [] });
+    await flush();
+    // El paso de promociones falla (sin red): el cobro no debe creer que están al día.
+    http
+      .expectOne((r) => r.url.endsWith('/promotions/sync'))
+      .flush({}, { status: 500, statusText: 'Internal Server Error' });
+    await completo;
+    await expect(liviano).resolves.toBe(false);
+    http.verify();
+  });
+
   it('no consume el cupo de sincronización manual del cajero', async () => {
     const promesa = scheduler.pullPromotions();
     await flush();

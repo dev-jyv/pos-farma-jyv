@@ -237,6 +237,19 @@ async function voidLocal(prisma, localId, voidedBy, voidedByLabel, reason) {
     ),
   ]);
 
+  // Cierra la otra mitad de la carrera con `markSynced`: si el push terminó entre
+  // la lectura de arriba (sin `remoteId`) y esta anulación, la venta ya existe en
+  // el servidor y nadie encoló el void remoto.
+  if (!sale.remoteId) {
+    const fresh = await prisma.sale.findUnique({
+      where: { id: localId },
+      select: { remoteId: true, needsRemoteVoid: true },
+    });
+    if (fresh?.remoteId && !fresh.needsRemoteVoid) {
+      await prisma.sale.update({ where: { id: localId }, data: { needsRemoteVoid: true } });
+    }
+  }
+
   return toSaleDto(updated);
 }
 
@@ -667,22 +680,24 @@ async function getPendingVoided(prisma, { ownerUid } = {}) {
 }
 
 async function markSynced(prisma, localId, remoteId, remoteFolio) {
-  const current = await prisma.sale.findUnique({ where: { id: localId }, select: { voidedAt: true } });
-  if (current?.voidedAt) {
-    // El cajero anuló esta venta en local mientras el push ya estaba en vuelo:
-    // el servidor la acaba de crear como ACTIVA. No se puede dar por
-    // sincronizada sin más —quedaría viva en el backend sin que nadie se
-    // entere—, así que se guarda el remoteId y se marca para un
-    // `POST /sales/:id/void` remoto explícito en el próximo sync.
-    await prisma.sale.update({
-      where: { id: localId },
-      data: { remoteId, remoteFolio, pushError: null, pendingPush: false, needsRemoteVoid: true },
-    });
+  // Se reclama la venta solo si sigue sin anular, en una sola sentencia: leer
+  // `voidedAt` y escribir después dejaba una ventana en la que una anulación
+  // intermedia quedaba sin cola de void remoto.
+  const claimed = await prisma.sale.updateMany({
+    where: { id: localId, voidedAt: null },
+    data: { remoteId, remoteFolio, pendingPush: false, pushError: null },
+  });
+  if (claimed.count > 0) {
     return;
   }
+  // El cajero anuló esta venta en local mientras el push ya estaba en vuelo:
+  // el servidor la acaba de crear como ACTIVA. No se puede dar por
+  // sincronizada sin más —quedaría viva en el backend sin que nadie se
+  // entere—, así que se guarda el remoteId y se marca para un
+  // `POST /sales/:id/void` remoto explícito en el próximo sync.
   await prisma.sale.update({
     where: { id: localId },
-    data: { remoteId, remoteFolio, pendingPush: false, pushError: null },
+    data: { remoteId, remoteFolio, pushError: null, pendingPush: false, needsRemoteVoid: true },
   });
 }
 

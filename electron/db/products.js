@@ -305,12 +305,28 @@ async function getPendingStockEntries(prisma) {
     where: { pendingPush: true, pushError: null, payloadJson: { not: null } },
     orderBy: { createdAt: 'asc' },
   });
-  return rows.map((row) => ({
-    id: row.id,
-    productId: row.productId,
-    payload: JSON.parse(row.payloadJson),
-    pushError: row.pushError ?? null,
-  }));
+  // El payload se congela al capturar la entrada: si el producto era de alta
+  // local, `productId` quedó con el id de SQLite. Cuando su alta ya subió (tiene
+  // `remoteId`), el segundo lote debe viajar con el id del servidor, o el
+  // backend responde 4xx y el lote queda bloqueado para siempre.
+  const productIds = [...new Set(rows.map((row) => row.productId))];
+  const products = productIds.length
+    ? await prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, remoteId: true } })
+    : [];
+  const remoteByLocal = new Map(products.map((product) => [product.id, product.remoteId ?? null]));
+  return rows.map((row) => {
+    const payload = JSON.parse(row.payloadJson);
+    const remoteId = remoteByLocal.get(row.productId);
+    if (remoteId && !payload.product && payload.productId) {
+      payload.productId = remoteId;
+    }
+    return {
+      id: row.id,
+      productId: row.productId,
+      payload,
+      pushError: row.pushError ?? null,
+    };
+  });
 }
 
 async function markStockEntrySynced(prisma, batchLocalId, remoteProductId) {

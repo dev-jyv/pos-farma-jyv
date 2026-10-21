@@ -28,8 +28,9 @@ const APP_ENVIRONMENTS = ['emulator', 'dev', 'prod'];
  *    binario de dev-cloud nunca arranque sobre la carpeta de producción.
  * 3. `emulator` con `--dev`, `prod` en cualquier otro caso.
  *
- * Un valor desconocido no se adivina: se avisa y se usa el default, que en la
- * app empaquetada es `prod` (la ruta de siempre).
+ * Un valor desconocido no se adivina: se avisa, se ignora y se consulta la
+ * siguiente fuente. Si ninguna es válida se usa el default, que en la app
+ * empaquetada es `prod` (la ruta de siempre).
  */
 function resolveAppEnvironment({ envVar, bakedEnv, isDev = false, warn = console.warn } = {}) {
   const fallback = isDev ? 'emulator' : 'prod';
@@ -41,8 +42,10 @@ function resolveAppEnvironment({ envVar, bakedEnv, isDev = false, warn = console
     if (APP_ENVIRONMENTS.includes(limpio)) {
       return limpio;
     }
-    warn(`[env] ${origen}="${valor}" no es válido (${APP_ENVIRONMENTS.join(' | ')}); se usa "${fallback}"`);
-    return fallback;
+    // Un valor inválido no corta la cadena: si no, un typo en `FARMAJYV_ENV`
+    // haría que un binario de dev-cloud ignore su `farmajyvEnv` horneado y abra
+    // la base de producción.
+    warn(`[env] ${origen}="${valor}" no es válido (${APP_ENVIRONMENTS.join(' | ')}); se ignora`);
   }
   return fallback;
 }

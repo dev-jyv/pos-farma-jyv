@@ -69,17 +69,29 @@ export class ProductCatalogService {
    * `PATCH`, que ya es idempotente por sí solo.
    */
   /**
-   * Disparar y olvidar. Si ya hay un empuje en vuelo **no** encola otro: se
-   * apoya en el que corre, que va a leer la cola igual. Encolar aquí duplicaba
-   * la pasada sin ganar nada. Un empuje **esperado** (`flushQueueAsync`) sí se
-   * encola siempre: quien lo espera necesita que de verdad ocurra.
+   * Disparar y olvidar. El empuje en vuelo leyó la cola **una sola vez** al
+   * arrancar, así que lo capturado o reintentado después no entra en esa pasada:
+   * si ya hay uno corriendo se encola **a lo más una** pasada de seguimiento
+   * (varias peticiones seguidas se funden en ella). Un empuje **esperado**
+   * (`flushQueueAsync`) siempre se encola.
    */
   flushQueue(): void {
-    if (this.cola) {
+    if (!this.cola) {
+      void this.flushQueueAsync();
       return;
     }
-    void this.flushQueueAsync();
+    if (this.seguimientoPendiente) {
+      return;
+    }
+    this.seguimientoPendiente = true;
+    void this.enFila(() => {
+      // Se libera al arrancar: desde aquí la pasada ya lee la cola completa.
+      this.seguimientoPendiente = false;
+      return lastValueFrom(this.flush$().pipe(defaultIfEmpty(null))).then(() => undefined);
+    });
   }
+
+  private seguimientoPendiente = false;
 
   /**
    * Igual que `flushQueue()`, pero esperable: `SyncScheduler` encadena catálogo
