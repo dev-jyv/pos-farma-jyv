@@ -61,3 +61,6 @@ Thumbs.db
 # se quedaba atrás del schema.
 electron/prisma/*.sqlite
 electron/prisma/*.sqlite-journal
+
+# QA local (manifiesto de datos de prueba, informes, evidencias)
+qa/

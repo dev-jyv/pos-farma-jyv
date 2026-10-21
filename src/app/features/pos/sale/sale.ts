@@ -638,21 +638,6 @@ export class Sale {
     this.substitutes.set([]);
   }
 
-  /**
-   * Cantidad tecleada en el campo de la última partida. Se confirma al salir del
-   * campo o con Enter, no tecla a tecla: escribir "20" pasaba por "2" (aceptada)
-   * y luego "20" (rechazada por stock), y el campo se quedaba mostrando 20 con 2
-   * en el carrito. Si la cantidad se rechaza, el campo vuelve a lo que de verdad
-   * hay en la partida.
-   */
-  commitQuantity(productId: string, inputEl: HTMLInputElement): void {
-    this.updateQuantity(productId, inputEl.valueAsNumber);
-    const line = this.cart().find((item) => lineKey(item) === productId);
-    if (line) {
-      inputEl.value = String(line.quantity);
-    }
-  }
-
   updateQuantity(productId: string, rawQuantity: number | null): void {
     // Campo vacío mientras el cajero reescribe la cantidad: no es un 0 deliberado.
     if (rawQuantity === null || !Number.isFinite(rawQuantity)) {
@@ -675,6 +660,14 @@ export class Sale {
     if (max !== null && quantity > max) {
       this.sounds.error();
       this.notifications.error('Cantidad supera el stock disponible.');
+      // El campo dispara el cambio con cada tecla: al teclear «20» con 19 en
+      // existencia, el «2» entra y el «0» se rechaza. El modelo sigue valiendo 2,
+      // así que Angular no reescribe el campo y la pantalla mostraba 20 mientras
+      // se cobraba 2. Se devuelve el campo a la cantidad real.
+      const input = this.lastQtyInput()?.nativeElement;
+      if (input && lineKey(line) === this.lastLineId()) {
+        input.value = String(line.quantity);
+      }
       return;
     }
     this.setCart(

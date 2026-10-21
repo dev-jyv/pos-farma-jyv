@@ -409,8 +409,8 @@
                         min="1"
                         class="[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none h-full w-full border-0 bg-transparent text-center outline-none"
                         [attr.aria-label]="'Cantidad de ' + nameOf(line)"
-                        [value]="line.quantity"
-                        (change)="commitQuantity(keyOf(line), $any($event.target))"
+                        [ngModel]="line.quantity"
+                        (ngModelChange)="updateQuantity(keyOf(line), $event)"
                       />
                     } @else {
                       {{ line.quantity }}

@@ -95,6 +95,43 @@ function toSaleDto(row) {
  * controlados). El proceso main solo persiste; no rehace esa lógica.
  */
 async function createLocal(prisma, sale) {
+  if (!sale?.idempotencyKey) {
+    throw new Error('createLocal requiere `idempotencyKey`');
+  }
+  // Reintento con la misma llave (doble clic, IPC repetido, reintento tras un
+  // error de la UI): devuelve la venta ya registrada y NO vuelve a descontar stock.
+  const previa = await findByIdempotencyKey(prisma, sale.idempotencyKey);
+  if (previa) {
+    return toSaleDto(previa);
+  }
+  try {
+    return await prisma.$transaction((tx) => createLocalTx(tx, sale));
+  } catch (error) {
+    // Carrera entre dos llamadas simultáneas: la restricción UNIQUE de SQLite
+    // rechaza a la segunda, que debe resolver a la venta de la primera.
+    if (error?.code === 'P2002') {
+      const ganadora = await findByIdempotencyKey(prisma, sale.idempotencyKey);
+      if (ganadora) {
+        return toSaleDto(ganadora);
+      }
+    }
+    throw error;
+  }
+}
+
+function findByIdempotencyKey(db, idempotencyKey) {
+  return db.sale.findUnique({
+    where: { idempotencyKey },
+    include: { items: true, movements: true },
+  });
+}
+
+/**
+ * Venta + descuento de stock en UNA transacción: si el proceso muere a medias,
+ * o no hay venta ni descuento, o están los dos. Antes eran dos escrituras y un
+ * corte entre ellas dejaba la venta sin descontar.
+ */
+async function createLocalTx(prisma, sale) {
   const created = await prisma.sale.create({
     data: {
       folio: sale.folio,
@@ -179,15 +216,11 @@ async function createLocal(prisma, sale) {
   // stock quedaba descontado a medias. El orden se conserva: `$transaction` con
   // arreglo ejecuta en secuencia.
   const productItems = productItemsOf(sale.items);
-  if (productItems.length) {
-    await prisma.$transaction(
-      productItems.map((item) =>
-        prisma.product.updateMany({
-          where: { id: item.productId },
-          data: { totalStock: { decrement: item.quantity } },
-        }),
-      ),
-    );
+  for (const item of productItems) {
+    await prisma.product.updateMany({
+      where: { id: item.productId },
+      data: { totalStock: { decrement: item.quantity } },
+    });
   }
 
   return toSaleDto(created);
@@ -200,15 +233,23 @@ async function createLocal(prisma, sale) {
  * backend (`POST /sales/:id/void`) — esta función solo refleja el resultado local.
  */
 async function voidLocal(prisma, localId, voidedBy, voidedByLabel, reason) {
-  const sale = await prisma.sale.findUnique({ where: { id: localId }, include: { items: true } });
-  if (!sale || sale.voidedAt) {
-    return sale ? toSaleDto(sale) : null;
-  }
+  /**
+   * Todo dentro de una transacción y **reclamando** la venta con
+   * `updateMany({ voidedAt: null })`: solo quien logra marcarla repone stock.
+   * Leer `voidedAt` fuera de la transacción dejaba pasar a dos anulaciones
+   * simultáneas (doble clic, o el sync y la UI a la vez) y cada una reponía el
+   * stock completo: la caja quedaba con piezas que el servidor no tiene, y el
+   * pull no lo corrige porque solo trae productos que cambiaron allá.
+   */
+  return prisma.$transaction(async (tx) => {
+    const sale = await tx.sale.findUnique({ where: { id: localId }, include: { items: true } });
+    if (!sale || sale.voidedAt) {
+      return sale ? toSaleDto(sale) : null;
+    }
 
-  const voidedAt = new Date();
-  const [updated] = await prisma.$transaction([
-    prisma.sale.update({
-      where: { id: localId },
+    const voidedAt = new Date();
+    const claimed = await tx.sale.updateMany({
+      where: { id: localId, voidedAt: null },
       data: {
         voidedAt,
         voidedBy,
@@ -217,40 +258,37 @@ async function voidLocal(prisma, localId, voidedBy, voidedByLabel, reason) {
         // siempre el cierre remoto: el éxito online lo limpia con
         // `markRemoteVoided`.
         ...(sale.remoteId ? { needsRemoteVoid: true } : {}),
-        // La anulación se asienta como movimiento propio: el flag dice *que*
-        // está anulada, el renglón dice *quién* y *cuándo* —que es lo que se
-        // revisa cuando el turno no cuadra.
+      },
+    });
+    if (claimed.count === 0) {
+      // Otra anulación ganó la carrera: ya repuso el stock y asentó su movimiento.
+      return toSaleDto(await tx.sale.findUnique({ where: { id: localId }, include: { items: true } }));
+    }
+
+    // Solo productos, y con `updateMany`: una partida cuyo producto ya no existe
+    // en local devolvía P2025 y **abortaba la anulación entera**, dejando la
+    // venta viva. Anular nunca puede fallar por un problema de catálogo.
+    for (const item of productItemsOf(sale.items)) {
+      await tx.product.updateMany({
+        where: { id: item.productId },
+        data: { totalStock: { increment: item.quantity } },
+      });
+    }
+
+    // La anulación se asienta como movimiento propio: el flag dice *que*
+    // está anulada, el renglón dice *quién* y *cuándo* —que es lo que se
+    // revisa cuando el turno no cuadra.
+    const updated = await tx.sale.update({
+      where: { id: localId },
+      data: {
         movements: {
           create: [{ type: 'void', userId: voidedBy, userLabel: voidedByLabel ?? null, reason: reason ?? null, occurredAt: voidedAt }],
         },
       },
       include: { items: true },
-    }),
-    // Solo productos, y con `updateMany`: una partida cuyo producto ya no existe
-    // en local devolvía P2025 y **abortaba la anulación entera**, dejando la
-    // venta viva. Anular nunca puede fallar por un problema de catálogo.
-    ...productItemsOf(sale.items).map((item) =>
-      prisma.product.updateMany({
-        where: { id: item.productId },
-        data: { totalStock: { increment: item.quantity } },
-      }),
-    ),
-  ]);
-
-  // Cierra la otra mitad de la carrera con `markSynced`: si el push terminó entre
-  // la lectura de arriba (sin `remoteId`) y esta anulación, la venta ya existe en
-  // el servidor y nadie encoló el void remoto.
-  if (!sale.remoteId) {
-    const fresh = await prisma.sale.findUnique({
-      where: { id: localId },
-      select: { remoteId: true, needsRemoteVoid: true },
     });
-    if (fresh?.remoteId && !fresh.needsRemoteVoid) {
-      await prisma.sale.update({ where: { id: localId }, data: { needsRemoteVoid: true } });
-    }
-  }
-
-  return toSaleDto(updated);
+    return toSaleDto(updated);
+  });
 }
 
 async function list(prisma, filters = {}) {
@@ -808,21 +846,34 @@ async function clearPushError(prisma, localId) {
   });
 }
 
-/** Descarta una venta que el servidor rechazó (nunca sincronizó): repone stock y borra. */
+/**
+ * Descarta una venta que el servidor rechazó (nunca sincronizó): repone stock y borra.
+ * Una venta que ya subió (`remoteId`) no se descarta: se anula.
+ *
+ * El stock solo se repone si la venta seguía viva: una anulada ya lo repuso en
+ * `voidLocal`, y reponerlo otra vez dejaba la caja con piezas de más. El borrado
+ * reclama la fila (`deleteMany`), así que dos descartes simultáneos no reponen dos veces.
+ */
 async function discard(prisma, localId) {
-  const sale = await prisma.sale.findUnique({ where: { id: localId }, include: { items: true } });
-  if (!sale) {
-    return;
-  }
-  await prisma.$transaction([
-    ...productItemsOf(sale.items).map((item) =>
-      prisma.product.updateMany({
+  await prisma.$transaction(async (tx) => {
+    const sale = await tx.sale.findUnique({ where: { id: localId }, include: { items: true } });
+    // Con `remoteId` el servidor ya la tiene viva: borrarla aquí dejaría las dos
+    // bases discrepando (venta cobrada allá, sin rastro acá). Se anula, no se descarta.
+    if (!sale || sale.remoteId) {
+      return;
+    }
+    // `remoteId: null` en el borrado: si la venta sube entre la lectura y aquí, no se toca.
+    const deleted = await tx.sale.deleteMany({ where: { id: localId, remoteId: null } });
+    if (deleted.count === 0 || sale.voidedAt) {
+      return;
+    }
+    for (const item of productItemsOf(sale.items)) {
+      await tx.product.updateMany({
         where: { id: item.productId },
         data: { totalStock: { increment: item.quantity } },
-      }),
-    ),
-    prisma.sale.delete({ where: { id: localId } }),
-  ]);
+      });
+    }
+  });
 }
 
 module.exports = {
