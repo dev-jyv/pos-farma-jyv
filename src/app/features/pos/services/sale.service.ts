@@ -21,6 +21,7 @@ import {
 
 import { getApiErrorMessage, getApiErrorStatus, unwrapEntity } from '../../../core/api/api.utils';
 import { AuthService } from '../../../core/auth/auth.service';
+import { AutoPushService } from '../../../core/sync/auto-push.service';
 import {
   CartLine,
   PaymentMethod,
@@ -285,6 +286,7 @@ const BULK_REJECTION_STATUSES: ReadonlySet<number> = new Set([400, 409, 413, 422
 export class SaleService {
   private readonly http = inject(HttpClient);
   private readonly auth = inject(AuthService);
+  private readonly autoPush = inject(AutoPushService);
   private readonly apiUrl = environment.apiUrl;
 
   private flushing = false;
@@ -459,7 +461,11 @@ export class SaleService {
     // `defer` por lo mismo que `list()`: si no hay `electronAPI`, el cobro debe
     // fallar por el canal de error del observable y no como excepción suelta.
     return defer(() => this.api().sales.createLocal(input)).pipe(
-      tap(() => this.refreshPending()),
+      tap(() => {
+        this.refreshPending();
+        // Sube en segundo plano (debounce): nunca baja el catálogo.
+        this.autoPush.notifyChange();
+      }),
     );
   }
 
@@ -481,7 +487,10 @@ export class SaleService {
         switchMap((voided) =>
           voided ? of(voided) : throwError(() => new Error('Venta no encontrada.')),
         ),
-        tap(() => this.refreshPending()),
+        tap(() => {
+          this.refreshPending();
+          this.autoPush.notifyChange();
+        }),
       );
     }
     const remoteId = sale.remoteId;

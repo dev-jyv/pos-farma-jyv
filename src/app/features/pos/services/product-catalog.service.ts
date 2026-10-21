@@ -1,8 +1,9 @@
 import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
-import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, lastValueFrom, from, map, of, switchMap, tap } from 'rxjs';
+import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, lastValueFrom, from, map, of, switchMap, tap, throwError } from 'rxjs';
 
 import { getApiErrorMessage, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
+import { AutoPushService } from '../../../core/sync/auto-push.service';
 import { PendingCatalogProduct } from '../../../core/electron/window.d';
 import { Product, ProductFieldsPayload } from '../../../shared/models';
 import { environment } from '../../../../environments/environment';
@@ -30,6 +31,8 @@ export class ProductCatalogService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = environment.apiUrl;
 
+  private readonly autoPush = inject(AutoPushService);
+
   private flushing = false;
 
   /** Altas/ediciones locales sin subir, para el indicador de pendientes del header. */
@@ -44,11 +47,11 @@ export class ProductCatalogService {
   }
 
   create(fields: ProductFieldsPayload): Observable<Product> {
-    return from(this.api().createCatalogProduct(fields)).pipe(tap(() => this.refreshPending()));
+    return from(this.api().createCatalogProduct(fields)).pipe(tap(() => this.afterLocalWrite()));
   }
 
   update(id: string, fields: Partial<ProductFieldsPayload>): Observable<Product> {
-    return from(this.api().updateCatalogProduct(id, fields)).pipe(tap(() => this.refreshPending()));
+    return from(this.api().updateCatalogProduct(id, fields)).pipe(tap(() => this.afterLocalWrite()));
   }
 
   /** Reintenta un producto que el servidor rechazó, tras corregir la causa. */
@@ -175,15 +178,43 @@ flushQueueAsync(): Promise<void> {
             const created = unwrapEntity<ProductSummaryDto>(response);
             return from(this.api().markCatalogSynced(item.id, created.id));
           }),
+          // 409 = el SKU ya existe (p. ej. backend sin el filtro `sku`, que
+          // ignora el parámetro): se adopta el producto existente en vez de
+          // dejarlo rechazado. Camino raro, por eso puede usar la búsqueda amplia.
+          catchError((error: unknown) =>
+            error instanceof HttpErrorResponse && error.status === 409
+              ? this.adoptBySearch(item)
+              : throwError(() => error),
+          ),
         );
       }),
       catchError((error: unknown) => this.handleFailure(item.id, error)),
     );
   }
 
+  private adoptBySearch(item: PendingCatalogProduct): Observable<unknown> {
+    const params = new HttpParams()
+      .set('search', item.fields.sku)
+      .set('activeOnly', 'false')
+      .set('limit', '5');
+    return this.http.get<unknown>(`${this.apiUrl}/products`, { params }).pipe(
+      switchMap((response) => {
+        const normalized = item.fields.sku.trim().toLowerCase();
+        const match = unwrapList<ProductSummaryDto>(response).find(
+          (product) => product.sku.trim().toLowerCase() === normalized,
+        );
+        return match
+          ? from(this.api().markCatalogSynced(item.id, match.id))
+          : throwError(() => new HttpErrorResponse({ status: 409 }));
+      }),
+    );
+  }
+
   /** Defensa contra duplicados: busca por SKU exacto antes de crear. */
   private findExistingBySku(sku: string): Observable<string | null> {
-    const params = new HttpParams().set('search', sku).set('activeOnly', 'false').set('limit', '5');
+    // `sku` exacto = 1 lectura en Firestore. `search` con un SKU que no existe
+    // (el caso normal de un alta) recorre hasta 500 productos.
+    const params = new HttpParams().set('sku', sku.trim()).set('activeOnly', 'false').set('limit', '1');
     return this.http.get<unknown>(`${this.apiUrl}/products`, { params }).pipe(
       map((response) => {
         const items = unwrapList<ProductSummaryDto>(response);
@@ -215,6 +246,11 @@ flushQueueAsync(): Promise<void> {
       error.status !== 408 &&
       error.status !== 429
     );
+  }
+
+  private afterLocalWrite(): void {
+    this.refreshPending();
+    this.autoPush.notifyChange();
   }
 
   private refreshPending(): void {

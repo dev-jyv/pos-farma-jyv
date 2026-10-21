@@ -96,7 +96,13 @@ export class Shell {
   readonly aiHelp = signal<Record<string, { loading: boolean; reply?: SyncHelpReply; error?: string }>>({});
 
   canAskAi(record: BlockedSyncRecord): boolean {
-    return (record.diagnosis?.code ?? 'desconocido') === 'desconocido' && !this.health.degraded();
+    // El asistente del backend solo conoce ventas, gastos y turnos: con otro
+    // `kind` la petición se rechazaría.
+    const conoceElTipo =
+      record.kind === 'sale' || record.kind === 'cashMovement' || record.kind === 'cashSession';
+    return (
+      conoceElTipo && (record.diagnosis?.code ?? 'desconocido') === 'desconocido' && !this.health.degraded()
+    );
   }
 
   aiHelpFor(record: BlockedSyncRecord) {
@@ -154,9 +160,13 @@ export class Shell {
     return this.blockedSync.canDiscard(record);
   }
 
-  /** Abre el gasto en su pantalla, ya cargado para corregirlo. */
+  /** Abre el gasto o el producto en su pantalla, ya cargado para corregirlo. */
   fixBlocked(record: BlockedSyncRecord): void {
     this.blockedDialogVisible.set(false);
+    if (record.kind === 'product') {
+      void this.router.navigate(['/pos/productos', record.id, 'editar']);
+      return;
+    }
     void this.router.navigate(['/pos/gastos'], { queryParams: { corregir: record.id } });
   }
 
@@ -165,10 +175,12 @@ export class Shell {
    * el registro, no con un "¿estás seguro?" genérico.
    */
   async discardBlocked(record: BlockedSyncRecord): Promise<void> {
+    const consecuencia =
+      record.kind === 'stockEntry'
+        ? 'Se borra de este equipo, nunca llegará al servidor y se descuentan esas piezas del stock de esta caja.'
+        : 'Se borra de este equipo y nunca llegará al servidor. Si ya se cobró o se pagó, quedará sin registro.';
     const confirmado = window.confirm(
-      `¿Descartar "${record.label}" (${record.detail})?\n\n` +
-        'Se borra de este equipo y nunca llegará al servidor. ' +
-        'Si ya se cobró o se pagó, quedará sin registro.',
+      `¿Descartar "${record.label}" (${record.detail})?\n\n${consecuencia}`,
     );
     if (!confirmado) {
       return;
@@ -361,15 +373,23 @@ export class Shell {
       await this.blockedSync.refresh();
       return;
     }
+    // Los rechazados se leen **antes** de elegir el mensaje: no cuentan como
+    // pendientes (no se reintentan solos), y con solo mirar los pendientes el
+    // aviso decía "Sincronizado" con mercancía o ventas que el servidor no aceptó.
+    await this.blockedSync.refresh();
+    const rejected = this.blockedCount();
     const pending = await this.syncScheduler.countPending().catch(() => 0);
-    if (pending > 0) {
+    if (rejected > 0) {
+      this.notifications.error(
+        `Catálogo actualizado (${result.pulled} cambios), pero el servidor rechazó ${rejected} registro(s) y no se subieron. Ábrelos en el aviso rojo para ver qué hacer.`,
+      );
+    } else if (pending > 0) {
       this.notifications.error(
         `Catálogo actualizado (${result.pulled} cambios), pero quedan ${pending} movimiento(s) sin subir. Revisa los rechazados o vuelve a intentar.`,
       );
     } else {
       this.notifications.success(`Sincronizado (${result.pulled} cambios de catálogo).`);
     }
-    await this.blockedSync.refresh();
   }
 
   /**

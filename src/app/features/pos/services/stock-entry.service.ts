@@ -1,9 +1,10 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, lastValueFrom, from, map } from 'rxjs';
+import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, lastValueFrom, from, map, tap } from 'rxjs';
 import { HttpErrorResponse } from '@angular/common/http';
 
 import { getApiErrorMessage, toDate, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
+import { AutoPushService } from '../../../core/sync/auto-push.service';
 import { Product, ProductFieldsPayload, PurchaseInvoice } from '../../../shared/models';
 import { environment } from '../../../../environments/environment';
 
@@ -64,6 +65,8 @@ export class StockEntryService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = environment.apiUrl;
 
+  private readonly autoPush = inject(AutoPushService);
+
   private flushing = false;
 
   /** Últimas facturas registradas, de la más reciente a la más vieja. */
@@ -75,7 +78,7 @@ export class StockEntryService {
   }
 
   create(payload: CreateStockEntryPayload): Observable<StockEntryResult> {
-    return from(this.api().recordStockEntry(payload));
+    return from(this.api().recordStockEntry(payload)).pipe(tap(() => this.autoPush.notifyChange()));
   }
 
   /**
@@ -145,10 +148,6 @@ flushQueueAsync(): Promise<void> {
 
   private flush$(): Observable<unknown> {
     this.flushing = true;
-    // La lista se lee una sola vez: si el alta de un producto sube en esta misma
-    // pasada, los lotes siguientes del mismo producto traen su id local. Se
-    // reescriben con el id del servidor que acaba de devolver el alta.
-    const remoteByLocal = new Map<string, string>();
     return from(this.api().getPendingStockEntries())
       .pipe(
         concatMap((pending) => from(pending)),
@@ -156,7 +155,6 @@ flushQueueAsync(): Promise<void> {
           this.http
             .post<unknown>(`${this.apiUrl}/stock-entries`, {
               ...(item.payload as Record<string, unknown>),
-              ...this.productIdOverride(item, remoteByLocal),
               /**
                * Llave estable por entrada: el id local, que no cambia entre
                * reintentos. Sin ella, un alta que sí se aplicó pero cuya
@@ -165,14 +163,11 @@ flushQueueAsync(): Promise<void> {
                * —existencias que no existen—. El backend la usa igual que en las
                * ventas y en el reintento devuelve la entrada ya registrada.
                */
-              idempotencyKey: item.id,
+              idempotencyKey: (item.payload as { idempotencyKey?: string }).idempotencyKey ?? item.id,
             })
             .pipe(
             concatMap((response) => {
               const result = unwrapEntity<StockEntryResult>(response);
-              if (result.product?.id) {
-                remoteByLocal.set(item.productId, result.product.id);
-              }
               return from(this.api().markStockEntrySynced(item.id, result.product?.id ?? null));
             }),
             catchError((error: unknown) => {
@@ -187,16 +182,6 @@ flushQueueAsync(): Promise<void> {
           this.flushing = false;
         }),
       );
-  }
-
-  /** `productId` del servidor para un lote cuyo producto subió antes en esta pasada. */
-  private productIdOverride(
-    item: { productId: string; payload: unknown },
-    remoteByLocal: Map<string, string>,
-  ): Record<string, string> {
-    const payload = item.payload as { product?: unknown; productId?: string };
-    const remote = remoteByLocal.get(item.productId);
-    return remote && !payload.product && payload.productId ? { productId: remote } : {};
   }
 
   private isPermanentFailure(error: unknown): boolean {

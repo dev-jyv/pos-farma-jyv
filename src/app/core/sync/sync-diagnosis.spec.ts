@@ -49,6 +49,26 @@ describe('describeBlocked', () => {
     expect(ayuda.recommended).toBe('avisar-admin');
   });
 
+  it('una entrada a medias en el servidor se consulta con el admin, no se reintenta', () => {
+    const ayuda = describeBlocked({
+      kind: 'stockEntry',
+      id: 'b1',
+      diagnosis: { code: 'entrada-a-medias' },
+    } as BlockedSyncRecord);
+    expect(ayuda.recommended).toBe('avisar-admin');
+    expect(ayuda.title).toMatch(/a medias|medio/i);
+  });
+
+  it('un lote cuyo producto el servidor no conoce se reintenta; no habla de una venta', () => {
+    const ayuda = describeBlocked({
+      kind: 'stockEntry',
+      id: 'b1',
+      diagnosis: { code: 'producto-no-encontrado' },
+    } as BlockedSyncRecord);
+    expect(ayuda.recommended).toBe('reintentar');
+    expect(`${ayuda.title} ${ayuda.explanation}`).not.toMatch(/venta/i);
+  });
+
   it('nunca recomienda descartar', () => {
     const codes = [
       'turno-sin-subir', 'turno-rechazado', 'producto-sin-subir', 'producto-rechazado',
