@@ -21,6 +21,7 @@ import { getApiErrorMessage } from '../../../core/api/api.utils';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { Category, ControlledGroup, Product, PurchaseInvoice } from '../../../shared/models';
 import { CONTROLLED_GROUPS, CONTROLLED_GROUP_RULES } from '../../../shared/utils/controlled';
+import { todayLocalDateString } from '../../../shared/utils/local-date';
 import { roundMoney } from '../../../shared/utils/money';
 import { DEFAULT_UNIT, buildUnitOptions } from '../../../shared/utils/units';
 import { CategoryService } from '../services/category.service';
@@ -148,9 +149,17 @@ export class StockEntryScreen {
   readonly currentStock = computed(() => this.selectedProduct()?.stock ?? 0);
   readonly resultingStock = computed(() => this.currentStock() + Math.max(0, this.quantity() ?? 0));
 
-  /** Hoy en la zona del equipo; el backend rechaza caducidades pasadas. */
-  private readonly today = new Date().toISOString().slice(0, 10);
-  readonly minExpiryDate = this.today;
+  /**
+   * Hoy en la zona del equipo; el backend rechaza caducidades pasadas. Se lee en
+   * cada validación: una pantalla abierta pasada la medianoche no debe seguir con
+   * el día anterior.
+   */
+  private get today(): string {
+    return todayLocalDateString();
+  }
+  get minExpiryDate(): string {
+    return this.today;
+  }
 
   /**
    * Por qué no se puede guardar todavía, en el orden en que el cajero lo

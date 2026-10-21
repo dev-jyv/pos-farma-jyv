@@ -1,33 +1,25 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, OnDestroy, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
+import { AbstractControl, FormBuilder, ReactiveFormsModule, ValidationErrors, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { TranslatePipe } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
 import { SelectModule } from 'primeng/select';
-import { Observable, map, of, switchMap } from 'rxjs';
+import { Observable, map, of, switchMap, tap } from 'rxjs';
 
 import { getApiErrorMessage } from '../../../../core/api/api.utils';
 import { NotificationService } from '../../../../core/notifications/notification.service';
 import { Supplier } from '../../../../shared/models';
+import { todayLocalDateString } from '../../../../shared/utils/local-date';
 import { InvoiceService } from '../../services/invoice.service';
 import { SupplierService } from '../../services/supplier.service';
 import { UploadsService, validateUploadFile } from '../../services/uploads.service';
 
-/**
- * `toISOString()` da la fecha en UTC: entre ~18:00 y medianoche hora de México
- * (UTC-6) eso adelanta el campo al día siguiente. Se arma el string a mano con
- * los componentes locales de `Date` para que la fecha por defecto sea la de
- * hoy, no la de mañana.
- */
-function todayLocalDateString(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+/** `Validators.required` acepta "   "; el número se envía con `trim()`, o sea vacío. */
+function notBlank(control: AbstractControl<string>): ValidationErrors | null {
+  return control.value?.trim() ? null : { required: true };
 }
 
 @Component({
@@ -55,7 +47,7 @@ export class InvoiceForm implements OnDestroy {
   readonly form = this.fb.nonNullable.group({
     supplierId: ['', Validators.required],
     // Límite alineado a `backend-farma-jyv/functions/src/schemas/inventory.ts`.
-    invoiceNumber: ['', [Validators.required, Validators.maxLength(60)]],
+    invoiceNumber: ['', [Validators.required, notBlank, Validators.maxLength(60)]],
     invoiceDate: [todayLocalDateString(), Validators.required],
     totalAmount: [0, [Validators.required, Validators.min(0.01)]],
     hasInvoice: [true],
@@ -128,6 +120,9 @@ export class InvoiceForm implements OnDestroy {
     this.filePreviewUrl.set(null);
   }
 
+  /** Último comprobante subido con éxito, para no repetirlo si el alta de la factura falla. */
+  private uploaded: { file: File; storagePath: string } | null = null;
+
   save(): void {
     // Mismo caso que `Login.onSubmit()`: el `[disabled]` del botón llega un
     // tick después del clic, así que un doble clic real puede llamar a
@@ -158,9 +153,17 @@ export class InvoiceForm implements OnDestroy {
      * llegue después. Sin archivo no se llama a `uploads` — una subida vacía
      * sería un viaje de red y un objeto huérfano en el Storage.
      */
-    const fileUrl$: Observable<string | undefined> = file
-      ? this.uploadsService.uploadInvoice(file).pipe(map((upload) => upload.storagePath))
-      : of(undefined);
+    // Si la factura falla tras subir el archivo, el reintento reusa lo ya subido
+    // en vez de dejar un objeto huérfano y subirlo otra vez.
+    const subido = this.uploaded;
+    const fileUrl$: Observable<string | undefined> = !file
+      ? of(undefined)
+      : subido && subido.file === file
+        ? of(subido.storagePath)
+        : this.uploadsService.uploadInvoice(file).pipe(
+            map((upload) => upload.storagePath),
+            tap((storagePath) => (this.uploaded = { file, storagePath })),
+          );
 
     fileUrl$
       .pipe(

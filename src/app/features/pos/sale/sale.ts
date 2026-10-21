@@ -122,15 +122,13 @@ function isTypingTarget(target: EventTarget | null): boolean {
   ],
   templateUrl: './sale.html',
   host: {
-    '(document:keydown.alt.m)': 'onProductsTabHotkey($event)',
-    '(document:keydown.alt.s)': 'onServicesTabHotkey($event)',
     '(document:keydown.f2)': 'focusSearch($event)',
     '(document:keydown.f4)': 'focusLastQty($event)',
     '(document:keydown.f6)': 'holdSaleFromHotkey($event)',
     '(document:keydown.f9)': 'openCheckout($event)',
     '(document:keydown.escape)': 'onEscape($event)',
     '(document:keydown.delete)': 'onDeleteLine($event)',
-    '(document:keydown)': 'onSignedQtyKey($event)',
+    '(document:keydown)': 'onDocumentKeydown($event)',
   },
 })
 export class Sale {
@@ -476,6 +474,12 @@ export class Sale {
     this.removeFromCart(lastId);
   }
 
+  /** Un solo `keydown` de documento: Angular no admite dos claves iguales en `host`. */
+  onDocumentKeydown(event: KeyboardEvent): void {
+    this.onTabHotkeys(event);
+    this.onSignedQtyKey(event);
+  }
+
   onSignedQtyKey(event: KeyboardEvent): void {
     if (this.dialogOpen) {
       return;
@@ -679,6 +683,21 @@ export class Sale {
   }
 
   /* ── Servicios ────────────────────────────────────────────────────────── */
+
+  /**
+   * `Alt+M` / `Alt+S`, por `event.code`: en macOS Option+M y Option+S producen
+   * 'µ' y 'ß' en `event.key`, y los atajos nunca disparaban.
+   */
+  onTabHotkeys(event: KeyboardEvent): void {
+    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+      return;
+    }
+    if (event.code === 'KeyM') {
+      this.onProductsTabHotkey(event);
+    } else if (event.code === 'KeyS') {
+      this.onServicesTabHotkey(event);
+    }
+  }
 
   /** `Alt+S` no debe abrir una pestaña que no existe si no hay servicios. */
   onServicesTabHotkey(event: Event): void {
