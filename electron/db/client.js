@@ -23,7 +23,14 @@ function getPrisma() {
     // migración pendiente (ver `backupBeforeMigrating`).
     prismaPromise = runMigrations(prisma, { databasePath: dbPath })
       .then(() => healOrphanRemoteVoidsOnce(prisma))
-      .then(() => prisma);
+      .then(() => prisma)
+      .catch((error) => {
+        // No se cachea el fallo: un bloqueo pasajero del disco (antivirus en
+        // Windows) dejaba rechazada toda llamada IPC hasta reiniciar la app.
+        prismaPromise = null;
+        prisma.$disconnect().catch(() => undefined);
+        throw error;
+      });
   }
   return prismaPromise;
 }

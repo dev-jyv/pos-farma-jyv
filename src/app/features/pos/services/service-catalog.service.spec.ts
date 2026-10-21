@@ -50,6 +50,32 @@ describe('ServiceCatalogService', () => {
     expect(service.hasServices()).toBe(true);
   });
 
+  it('si la lectura falla después de tener catálogo, conserva el que había', async () => {
+    await new Promise<void>((resolve) => service.refresh().subscribe(() => resolve()));
+    list.mockRejectedValue(new Error('SQLITE_BUSY'));
+    listProviders.mockRejectedValue(new Error('SQLITE_BUSY'));
+
+    await new Promise<void>((resolve) => service.refresh().subscribe(() => resolve()));
+
+    expect(service.services()).toHaveLength(2);
+    expect(service.providers()).toHaveLength(1);
+    expect(service.hasServices()).toBe(true);
+    expect(service.loading()).toBe(false);
+  });
+
+  it('un refresh viejo que termina tarde no pisa al más reciente', async () => {
+    let soltarViejo!: (value: PharmacyService[]) => void;
+    list.mockReturnValueOnce(new Promise<PharmacyService[]>((resolve) => (soltarViejo = resolve)));
+    const viejo = new Promise<void>((resolve) => service.refresh().subscribe(() => resolve()));
+
+    list.mockResolvedValueOnce([servicio({ id: 'nuevo' })]);
+    await new Promise<void>((resolve) => service.refresh().subscribe(() => resolve()));
+    soltarViejo([servicio({ id: 'viejo-1' }), servicio({ id: 'viejo-2' })]);
+    await viejo;
+
+    expect(service.services().map((item) => item.id)).toEqual(['nuevo']);
+  });
+
   it('sin servicios, la UI no debe ofrecer la pestaña', async () => {
     list.mockResolvedValue([]);
     await new Promise<void>((resolve) => service.refresh().subscribe(() => resolve()));

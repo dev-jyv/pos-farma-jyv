@@ -437,8 +437,8 @@ function registrarIPCHandlers() {
     productsDb.updateCatalogProduct(await getPrisma(), id, fields));
   ipcMain.handle('catalog:getPendingCatalogPush', async () =>
     productsDb.getPendingCatalogPush(await getPrisma()));
-  ipcMain.handle('catalog:markCatalogSynced', async (_event, localId, remoteId) =>
-    productsDb.markCatalogSynced(await getPrisma(), localId, remoteId));
+  ipcMain.handle('catalog:markCatalogSynced', async (_event, localId, remoteId, pushedVersion) =>
+    productsDb.markCatalogSynced(await getPrisma(), localId, remoteId, pushedVersion));
   ipcMain.handle('catalog:markCatalogPushFailed', async (_event, localId, message) =>
     productsDb.markCatalogPushFailed(await getPrisma(), localId, message));
   ipcMain.handle('catalog:clearCatalogPushError', async (_event, localId) =>

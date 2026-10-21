@@ -35,6 +35,16 @@ function sale(overrides = {}) {
 }
 
 describe('buildSummary — espejo de la aritmética del backend', () => {
+  it('dos aperturas simultáneas del mismo cajero abren un solo turno', async () => {
+    const resultados = await Promise.allSettled([
+      createLocal(prisma, { openedBy: CAJERO, openingAmount: 100 }),
+      createLocal(prisma, { openedBy: CAJERO, openingAmount: 100 }),
+    ]);
+
+    expect(resultados.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(prisma.cashSession.rows).toHaveLength(1);
+  });
+
   it('suma al cajón solo la parte en efectivo de las ventas cash y mixed', () => {
     const { expectedCashAmount, summary } = buildSummary(500, [
       sale({ paymentMethod: 'cash', total: 100, cashAmount: 100 }),

@@ -237,12 +237,19 @@ export class SyncScheduler {
 
   /** Corrida de horario/arranque: no bloquea a nadie, dispara y sigue. */
   runNow(): void {
+    // Sin sesión no hay token: cada pull respondería 401 y escribiría filas de
+    // error en `sync_run` (el horario fijo también corre con el login abierto).
+    if (!this.auth.user()) {
+      return;
+    }
     // Sin polling propio: aquí es donde de verdad importa saber si hay red.
     this.apiHealth.checkNow();
     this.cashSessionService.pullAdjustmentStatus();
     // El pull va **después** del push: el catálogo trae el stock del servidor,
     // que todavía no descuenta las ventas que aún no subieron.
-    void this.pushPending().finally(() => void this.pullProducts());
+    void this.pushPending()
+      .catch((error: unknown) => console.error('[sync] falló el push programado', error))
+      .finally(() => void this.pullProducts());
   }
 
   /**
@@ -601,7 +608,12 @@ export class SyncScheduler {
   private scheduleNext(): void {
     const delay = this.msUntilNextRun();
     this.timer = setTimeout(() => {
-      this.runNow();
+      try {
+        this.runNow();
+      } catch (error: unknown) {
+        // Un fallo síncrono no debe dejar sin programar el siguiente horario fijo.
+        console.error('[sync] falló la corrida programada', error);
+      }
       this.scheduleNext();
     }, delay);
   }
@@ -712,13 +724,17 @@ export class SyncScheduler {
    * sigue vendiendo medicamentos con el catálogo que ya tiene.
    */
   private async doPullServiceCatalogs(): Promise<void> {
-    await this.pullCatalog('pharmacyServices', 'pharmacy-services', (items) =>
+    const servicesOk = await this.pullCatalog('pharmacyServices', 'pharmacy-services', (items) =>
       window.electronAPI?.pharmacyServices.upsertMany(items),
     );
-    await this.pullCatalog('serviceProviders', 'service-providers', (items) =>
+    const providersOk = await this.pullCatalog('serviceProviders', 'service-providers', (items) =>
       window.electronAPI?.pharmacyServices.upsertProviders(items),
     );
-    window.dispatchEvent(new Event(SERVICES_SYNCED_EVENT));
+    // Solo si algún pull salió bien: con los dos caídos no hay nada nuevo que
+    // releer, y cada aviso dispara una lectura completa de la SQLite.
+    if (servicesOk || providersOk) {
+      window.dispatchEvent(new Event(SERVICES_SYNCED_EVENT));
+    }
     // Promociones: mismo pull incremental. Al terminar se avisa al carrito para
     // que relea las vigentes sin esperar a reiniciar la caja. Si el pull de cada
     // hora va a medias se espera: con los dos a la vez se pediría dos veces lo
