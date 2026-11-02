@@ -331,4 +331,33 @@ describe('snapshot de diagnóstico', () => {
     expect(foto.recentSyncRuns[0]).toMatchObject({ entity: 'products', status: 'error', errorMessage: '503' });
     expect(foto.syncLog.some((r) => r.entity === 'sale' && r.level === 'warn')).toBe(true);
   });
+
+  const DEVICE = { deviceId: 'caja-1', deviceName: 'caja-1', appVersion: '1.0.9', platform: 'win32' };
+
+  it('openCashSessionId es null sin turno abierto (no alerta por silencio)', async () => {
+    await turno('cs-cerrado', { remoteId: 'remoto-1', closedAtLocal: new Date('2026-10-01T10:00:00Z') });
+
+    const foto = await diagnostics.buildSnapshot(prisma, DEVICE);
+
+    expect(foto.openCashSessionId).toBeNull();
+  });
+
+  it('openCashSessionId usa el remoteId del turno abierto, o el id local si aún no sube', async () => {
+    await turno('cs-local', { openedAt: new Date('2026-10-01T09:00:00Z') });
+    expect((await diagnostics.buildSnapshot(prisma, DEVICE)).openCashSessionId).toBe('cs-local');
+
+    await prisma.cashSession.update({ where: { id: 'cs-local' }, data: { remoteId: 'Ab3dE6gH9jK2mN5pQ8sT' } });
+    expect((await diagnostics.buildSnapshot(prisma, DEVICE)).openCashSessionId).toBe('Ab3dE6gH9jK2mN5pQ8sT');
+  });
+
+  it('si no puede leer el turno omite el campo en vez de mandar null', async () => {
+    prisma.cashSession.findFirst = async () => {
+      throw new Error('SQLITE_BUSY');
+    };
+
+    const foto = await diagnostics.buildSnapshot(prisma, DEVICE);
+
+    expect('openCashSessionId' in foto).toBe(false);
+    expect(JSON.parse(JSON.stringify(foto))).not.toHaveProperty('openCashSessionId');
+  });
 });

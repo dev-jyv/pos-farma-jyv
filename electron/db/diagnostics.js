@@ -120,11 +120,41 @@ async function recentSyncRunsOf(prisma) {
 }
 
 /**
+ * Turno abierto en este equipo (de quien sea): `remoteId` si ya subió, si no el
+ * id local, o `null` si no hay ninguno abierto.
+ *
+ * Con esto el backend sabe qué caja tiene un turno en curso (`cashSessions` no
+ * guarda el equipo) y solo alerta por silencio a esas: una caja apagada fuera
+ * de horario, sin turno, no debe mandar correo. Si la consulta falla se omite
+ * el campo (no se manda `null`): `null` diría "sin turno" y apagaría el aviso
+ * justo cuando no sabemos.
+ */
+async function openCashSessionIdOf(prisma) {
+  try {
+    const row = await prisma.cashSession.findFirst({
+      where: { closedAtLocal: null },
+      orderBy: { openedAt: 'desc' },
+    });
+    return row ? (row.remoteId ?? row.id) : null;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Arma el `PosDiagnosticsInput`. `device` lo pone el proceso main (identidad
  * del equipo y versión), que es quien la conoce.
  */
 async function buildSnapshot(prisma, device, now = new Date()) {
-  const [pendingSalesCount, blockedSales, blockedCashSessions, unsyncedProducts, recentSyncRuns, log] =
+  const [
+    pendingSalesCount,
+    blockedSales,
+    blockedCashSessions,
+    unsyncedProducts,
+    recentSyncRuns,
+    log,
+    openCashSessionId,
+  ] =
     await Promise.all([
       prisma.sale.count({ where: { pendingPush: true, pushError: null } }),
       blockedSalesOf(prisma),
@@ -132,6 +162,7 @@ async function buildSnapshot(prisma, device, now = new Date()) {
       unsyncedProductsOf(prisma),
       recentSyncRunsOf(prisma),
       syncLog.listRecent(prisma, LIMITS.syncLog).catch(() => []),
+      openCashSessionIdOf(prisma),
     ]);
   return {
     deviceId: device.deviceId,
@@ -145,6 +176,8 @@ async function buildSnapshot(prisma, device, now = new Date()) {
     unsyncedProducts,
     recentSyncRuns,
     syncLog: log,
+    // `undefined` (consulta fallida) desaparece al serializar a JSON.
+    ...(openCashSessionId === undefined ? {} : { openCashSessionId }),
   };
 }
 
