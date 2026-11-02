@@ -890,6 +890,11 @@ export interface PosDiagnosticsInput {
    * turno (SPEC 44). Opcional: se omite si la caja no pudo leerlo.
    */
   openCashSessionId?: string | null;
+  /**
+   * Última copia local de rutina de la base (ISO) en `Documentos/FarmaJyV/respaldos`,
+   * o `null` si no hay ninguna (SPEC 37). Opcional en el backend.
+   */
+  lastLocalBackupAt?: string | null;
 }
 
 export type PosCommandType = 'retrySale' | 'retryCashSession' | 'retryProduct' | 'sendSaleToUnreconciled';

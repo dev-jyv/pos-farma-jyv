@@ -45,7 +45,8 @@ function withTimeout(promise, ms) {
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
-const { getPrisma } = require('./db/client');
+const { getPrisma, getPrismaIfOpen, resolveDatabasePath } = require('./db/client');
+const { createRoutineBackups, routineBackupsDir } = require('./db/backup');
 const { createLogger, sanitizeArgs } = require('./logger');
 const { isAllowedNavigation, isSafePrinterTarget, isDevToolsShortcut } = require('./security');
 const productsDb = require('./db/products');
@@ -174,6 +175,29 @@ const CANALES_SILENCIOSOS = /^(catalog:(search|getByBarcode|getByIds|getBatchesB
 
 let log = { info() {}, warn() {}, error() {}, prune() {} };
 
+/** Cuánto puede retrasar el cierre de la app la copia de salida (SPEC 37). */
+const QUIT_BACKUP_TIMEOUT_MS = 5_000;
+
+/**
+ * Copias de rutina de la base en `Documentos/FarmaJyV/respaldos`, tras cada
+ * corte Z y al salir (ver `db/backup.js`). Nunca lanzan: un fallo se asienta en
+ * el log de disco y en `SyncLog`, que viaja en el diagnóstico remoto.
+ * Solo copian una base ya abierta (`getPrismaIfOpen`): salir sin haberla tocado
+ * no la abre ni corre migraciones.
+ */
+const routineBackups = createRoutineBackups({
+  getPrisma: getPrismaIfOpen,
+  getDir: () => routineBackupsDir(app.getPath('documents'), APP_ENV),
+  databasePath: resolveDatabasePath(),
+  log: {
+    info: (event, data) => log.info(event, data),
+    error: (event, data) => log.error(event, data),
+  },
+  syncLog: syncLogDb,
+});
+/** La copia de salida ya se hizo (o se intentó) en este intento de cierre. */
+let copiaDeSalidaHecha = false;
+
 /** Envuelve `ipcMain.handle` para asentar canal, duración y resultado de cada escritura. */
 function instrumentarIPC() {
   const original = ipcMain.handle.bind(ipcMain);
@@ -233,13 +257,29 @@ app.whenReady().then(() => {
   verificarActualizaciones();
 });
 
-app.on('before-quit', async () => {
-  try {
-    const prisma = await getPrisma();
-    await prisma.$disconnect();
-  } catch {
-    // ya sin conexión o nunca se abrió; nada que cerrar.
+/**
+ * Al salir: primero la copia de rutina (como mucho `QUIT_BACKUP_TIMEOUT_MS`),
+ * luego se reanuda la salida. Electron no espera a un handler `async`, así que
+ * se detiene la salida con `preventDefault` y se vuelve a pedir al terminar; en
+ * esa segunda pasada ya no se copia. Si la copia falla o tarda, se sale igual:
+ * una caja que no se deja cerrar es peor que una copia de menos (queda la del
+ * último corte Z). Cerrar con el administrador de tareas no pasa por aquí.
+ */
+app.on('before-quit', (event) => {
+  if (!copiaDeSalidaHecha) {
+    copiaDeSalidaHecha = true;
+    event.preventDefault();
+    routineBackups
+      .runWithTimeout('cierre', QUIT_BACKUP_TIMEOUT_MS)
+      .catch(() => undefined)
+      .finally(() => app.quit());
+    return;
   }
+  getPrismaIfOpen()
+    .then((prisma) => prisma?.$disconnect())
+    .catch(() => {
+      // ya sin conexión o nunca se abrió; nada que cerrar.
+    });
 });
 
 app.on('window-all-closed', () => {
@@ -536,6 +576,7 @@ function registrarIPCHandlers() {
       deviceName: info.hostname,
       appVersion: app.getVersion(),
       platform: `${info.plataforma}-${info.arquitectura}`,
+      lastLocalBackupAt: routineBackups.lastBackupAt(),
     });
   });
 
@@ -552,8 +593,13 @@ function registrarIPCHandlers() {
     cashSessionsDb.getLiveSummary(await getPrisma(), sessionId));
   ipcMain.handle('cashSessions:getCashOnHand', async () =>
     cashSessionsDb.getCashOnHand(await getPrisma()));
-  ipcMain.handle('cashSessions:closeLocal', async (_event, sessionId, input) =>
-    cashSessionsDb.closeLocal(await getPrisma(), sessionId, input));
+  // Tras un corte Z exitoso, copia de rutina de la base. No se espera: el corte
+  // ya quedó guardado y la copia no puede retrasarlo ni hacerlo fallar.
+  ipcMain.handle('cashSessions:closeLocal', async (_event, sessionId, input) => {
+    const closed = await cashSessionsDb.closeLocal(await getPrisma(), sessionId, input);
+    void routineBackups.run('corte-z');
+    return closed;
+  });
   ipcMain.handle('cashSessions:getPendingPush', async (_event, filters) =>
     cashSessionsDb.getPendingPush(await getPrisma(), filters));
   ipcMain.handle('cashSessions:getPendingClosePush', async (_event, filters) =>
@@ -639,6 +685,9 @@ function registrarIPCHandlers() {
   ipcMain.handle('app:cancel-close', () => {
     clearTimeout(cierreTimeout);
     cierreSolicitadoEn = 0;
+    // En macOS ⌘Q pasa por `before-quit` antes de preguntar; si se cancela, el
+    // siguiente intento de salida vuelve a copiar.
+    copiaDeSalidaHecha = false;
   });
 
   ipcMain.handle('cashMovements:add', async (_event, cashSessionId, input) =>

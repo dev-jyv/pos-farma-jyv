@@ -60,6 +60,7 @@ login y muere al primer acceso a la base, y ninguna prueba lo detecta.
 |---|---|
 | [`docs/DOSSIER_TECNICO.md`](docs/DOSSIER_TECNICO.md) | Manual técnico: arquitectura, reglas de dinero, sincronización, Electron, pruebas y deuda |
 | [`docs/INSTALACION_CAJA.md`](docs/INSTALACION_CAJA.md) | Instalar el POS en una caja nueva |
+| [`docs/RESTAURAR_RESPALDO.md`](docs/RESTAURAR_RESPALDO.md) | Copias locales de la base (`Documentos/FarmaJyV/respaldos`) y cómo restaurar una a mano |
 | [`docs/SETUP.md`](docs/SETUP.md) | Preparar una máquina de desarrollo |
 | [`docs/MANUAL_USUARIO.md`](docs/MANUAL_USUARIO.md) | Manual del cajero |
 | [`GOALS.md`](GOALS.md) | Pendientes y bitácora de lo hecho |

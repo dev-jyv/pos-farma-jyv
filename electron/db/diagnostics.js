@@ -143,7 +143,9 @@ async function openCashSessionIdOf(prisma) {
 
 /**
  * Arma el `PosDiagnosticsInput`. `device` lo pone el proceso main (identidad
- * del equipo y versión), que es quien la conoce.
+ * del equipo y versión), que es quien la conoce; también `lastLocalBackupAt`
+ * (ISO de la última copia local de rutina, SPEC 37), porque es main quien sabe
+ * dónde están las copias. Sin él se reporta `null`.
  */
 async function buildSnapshot(prisma, device, now = new Date()) {
   const [
@@ -178,6 +180,7 @@ async function buildSnapshot(prisma, device, now = new Date()) {
     syncLog: log,
     // `undefined` (consulta fallida) desaparece al serializar a JSON.
     ...(openCashSessionId === undefined ? {} : { openCashSessionId }),
+    lastLocalBackupAt: iso(device.lastLocalBackupAt),
   };
 }
 

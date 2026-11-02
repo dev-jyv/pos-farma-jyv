@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { backupDatabase, pruneMigrationBackups, MIGRATION_REASON } = require('./backup');
 
 const MIGRATIONS_DIR = path.join(__dirname, '..', 'prisma', 'migrations');
 
@@ -30,28 +31,23 @@ function backupsDir(databasePath) {
  * hay a dónde volver. Y en la caja no hay quien corra un `sqlite3 .backup` a
  * mano: tiene que pasar solo.
  *
- * Se usa `VACUUM INTO` y no una copia de archivo porque la base está abierta y
- * puede estar en modo WAL: copiar solo el `.sqlite` dejaría fuera el `-wal` y
- * el respaldo podría quedar inconsistente. `VACUUM INTO` escribe un archivo ya
- * consistente. Si el motor no lo soporta, se cae a la copia de archivo, que es
- * mejor que no tener nada.
+ * La copia la hace `backupDatabase` (`backup.js`, `VACUUM INTO`), la misma que
+ * usan las copias de rutina; aquí con `fileCopyFallback`: si el motor no soporta
+ * `VACUUM INTO`, se copia el archivo, que es mejor que no tener nada (nadie más
+ * escribe mientras se migra). Estas copias se quedan en `userData/backups` y no
+ * entran en la rotación de las de rutina.
  */
 async function backupBeforeMigrating(prisma, databasePath) {
   const dir = backupsDir(databasePath);
-  fs.mkdirSync(dir, { recursive: true });
-
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const base = path.basename(databasePath).replace(/\.sqlite$/i, '');
-  const target = path.join(dir, `${base}-${stamp}.sqlite`);
-
-  try {
-    await prisma.$executeRawUnsafe(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
-  } catch (error) {
-    console.warn('[migrate] VACUUM INTO no disponible, se copia el archivo', error);
-    fs.copyFileSync(databasePath, target);
-  }
-
-  pruneOldBackups(dir, base);
+  const { path: target } = await backupDatabase(prisma, {
+    dir,
+    reason: MIGRATION_REASON,
+    databasePath,
+    base,
+    fileCopyFallback: true,
+  });
+  pruneMigrationBackups(dir, { base, keep: MAX_BACKUPS });
   return target;
 }
 
@@ -68,21 +64,6 @@ async function hasUserTables(prisma) {
   } catch {
     // Si no se puede saber, se respalda: equivocarse hacia el respaldo es barato.
     return true;
-  }
-}
-
-/** Deja solo los `MAX_BACKUPS` más recientes; los nombres ordenan por fecha. */
-function pruneOldBackups(dir, base) {
-  const propios = fs
-    .readdirSync(dir)
-    .filter((name) => name.startsWith(`${base}-`) && name.endsWith('.sqlite'))
-    .sort();
-  for (const viejo of propios.slice(0, Math.max(0, propios.length - MAX_BACKUPS))) {
-    try {
-      fs.unlinkSync(path.join(dir, viejo));
-    } catch {
-      // Un respaldo que no se puede borrar no debe impedir la actualización.
-    }
   }
 }
 

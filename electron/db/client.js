@@ -52,4 +52,13 @@ async function healOrphanRemoteVoidsOnce(prisma) {
   }
 }
 
-module.exports = { getPrisma, resolveDatabasePath };
+/**
+ * El cliente solo si ya se abrió (o se está abriendo); `null` si no. Lo usa la
+ * copia al salir: si la app se cierra sin haber tocado la base, no tiene
+ * sentido abrirla —y correr migraciones— solo para copiarla.
+ */
+function getPrismaIfOpen() {
+  return prismaPromise ? prismaPromise.catch(() => null) : Promise.resolve(null);
+}
+
+module.exports = { getPrisma, getPrismaIfOpen, resolveDatabasePath };
