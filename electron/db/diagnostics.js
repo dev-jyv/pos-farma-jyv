@@ -121,7 +121,9 @@ async function recentSyncRunsOf(prisma) {
 
 /**
  * Arma el `PosDiagnosticsInput`. `device` lo pone el proceso main (identidad
- * del equipo y versión), que es quien la conoce.
+ * del equipo y versión), que es quien la conoce; también `lastLocalBackupAt`
+ * (ISO de la última copia local de rutina, SPEC 37), porque es main quien sabe
+ * dónde están las copias. Sin él se reporta `null`.
  */
 async function buildSnapshot(prisma, device, now = new Date()) {
   const [pendingSalesCount, blockedSales, blockedCashSessions, unsyncedProducts, recentSyncRuns, log] =
@@ -145,6 +147,7 @@ async function buildSnapshot(prisma, device, now = new Date()) {
     unsyncedProducts,
     recentSyncRuns,
     syncLog: log,
+    lastLocalBackupAt: iso(device.lastLocalBackupAt),
   };
 }
 

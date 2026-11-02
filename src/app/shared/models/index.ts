@@ -884,6 +884,11 @@ export interface PosDiagnosticsInput {
   }>;
   /** Máx. 200. */
   syncLog: PosSyncLogEntry[];
+  /**
+   * Última copia local de rutina de la base (ISO) en `Documentos/FarmaJyV/respaldos`,
+   * o `null` si no hay ninguna (SPEC 37). Opcional en el backend.
+   */
+  lastLocalBackupAt?: string | null;
 }
 
 export type PosCommandType = 'retrySale' | 'retryCashSession' | 'retryProduct' | 'sendSaleToUnreconciled';
