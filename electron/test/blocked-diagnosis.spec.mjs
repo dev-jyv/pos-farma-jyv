@@ -66,7 +66,9 @@ describe('listBlocked: diagnóstico en vivo de ventas bloqueadas por intentos', 
     for (let ciclo = 0; ciclo < 6; ciclo += 1) {
       await sales.getPendingPush(prisma, { contarIntentos: true });
     }
-    expect(prisma.sale.rows[0].pushError).toMatch(/demasiados intentos/);
+    // Bloqueo por espera: mensaje con el bloqueador concreto y el contador al tope.
+    expect(prisma.sale.rows[0].pushError).toMatch(/^(Espera al|El producto)/);
+    expect(sales.isWaitBlocked(prisma.sale.rows[0])).toBe(true);
   }
 
   async function producto(data) {

@@ -12,6 +12,7 @@ import { StockEntryService } from '../../features/pos/services/stock-entry.servi
 import { environment } from '../../../environments/environment';
 import { AuthService } from '../auth/auth.service';
 import { AutoPushService } from './auto-push.service';
+import { PosDiagnosticsService } from './pos-diagnostics.service';
 import { pushOwnerFilter } from './push-owner';
 import { PROMOTIONS_SYNCED_EVENT, SERVICES_SYNCED_EVENT } from './sync-events';
 
@@ -37,6 +38,15 @@ function formatTime(date: Date): string {
  * servidor.
  */
 const PROMOTIONS_PULL_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * Latido del diagnóstico remoto: con red, la caja reporta **al menos** cada
+ * 15 min aunque no venda ni sincronice. El panel marca en rojo una caja con más
+ * de 2 h sin reportar; sin este latido, una caja sana y sin ventas entre dos
+ * horarios fijos (hasta 14 h) se vería caída. Cuesta una escritura por reporte:
+ * 96 al día por caja, más los de cada sync, por debajo del tope de 300.
+ */
+export const DIAGNOSTICS_HEARTBEAT_MS = 15 * 60 * 1000;
 
 /** Horarios fijos de sync, en hora local del equipo de caja. */
 const FIXED_TIMES: Array<[number, number]> = [
@@ -96,11 +106,14 @@ export class SyncScheduler {
   private readonly cashMovementService = inject(CashMovementService);
   private readonly apiHealth = inject(ApiHealthService);
   private readonly auth = inject(AuthService);
+  private readonly diagnostics = inject(PosDiagnosticsService);
   private readonly apiUrl = environment.apiUrl;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Pull liviano de promociones (ver `PROMOTIONS_PULL_INTERVAL_MS`). */
   private promotionsTimer: ReturnType<typeof setInterval> | null = null;
+  /** Latido del diagnóstico remoto (ver `DIAGNOSTICS_HEARTBEAT_MS`). */
+  private diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
   /**
    * Pull de promociones en vuelo: el horario de cada hora y la autorrecuperación
    * del cobro pueden pedirlo a la vez, y ambos esperan la misma corrida en vez de
@@ -174,9 +187,22 @@ export class SyncScheduler {
     // Se arma junto con el horario fijo y por la misma razón: sin `electronAPI`
     // no hay SQLite donde guardar lo que baje.
     this.promotionsTimer = setInterval(() => void this.pullPromotions(), PROMOTIONS_PULL_INTERVAL_MS);
+    this.diagnosticsTimer = setInterval(() => this.diagnosticsHeartbeat(), DIAGNOSTICS_HEARTBEAT_MS);
   }
 
-  /** Desarma el horario fijo y el pull de promociones de cada hora. */
+  /**
+   * Sin red no se intenta: el reporte fallaría y solo llenaría la bitácora de
+   * avisos. Al volver la red, el siguiente latido (o el siguiente sync) reporta.
+   * `report()` ya se salta sin sesión y no encima dos reportes.
+   */
+  private diagnosticsHeartbeat(): void {
+    if (!navigator.onLine) {
+      return;
+    }
+    void this.diagnostics.report();
+  }
+
+  /** Desarma el horario fijo, el pull de promociones de cada hora y el latido del diagnóstico. */
   stop(): void {
     if (this.timer !== null) {
       clearTimeout(this.timer);
@@ -185,6 +211,10 @@ export class SyncScheduler {
     if (this.promotionsTimer !== null) {
       clearInterval(this.promotionsTimer);
       this.promotionsTimer = null;
+    }
+    if (this.diagnosticsTimer !== null) {
+      clearInterval(this.diagnosticsTimer);
+      this.diagnosticsTimer = null;
     }
   }
 
@@ -232,6 +262,9 @@ export class SyncScheduler {
     // Se avisa aunque falle: `PromoService` relee lo que haya en SQLite, que no
     // cambió, y quien espera la recarga no se queda colgado.
     window.dispatchEvent(new Event(PROMOTIONS_SYNCED_EVENT));
+    // El pull horario es el latido más frecuente de la caja: entre los horarios
+    // fijos hay hasta 14 h, y un comando del admin no debe esperar tanto.
+    void this.diagnostics.report();
     return ok;
   }
 
@@ -249,7 +282,11 @@ export class SyncScheduler {
     // que todavía no descuenta las ventas que aún no subieron.
     void this.pushPending()
       .catch((error: unknown) => console.error('[sync] falló el push programado', error))
-      .finally(() => void this.pullProducts());
+      .finally(() =>
+        // Diagnóstico al terminar **ambos**: la foto debe reflejar lo que este
+        // sync dejó, no lo que había antes de correrlo.
+        void this.pullProducts().finally(() => void this.diagnostics.report()),
+      );
   }
 
   /**
@@ -333,6 +370,8 @@ export class SyncScheduler {
       // Después del push, no en paralelo: ver `runNow`.
       void this.pullProducts();
     }
+    // Sin esperar: el corte no debe quedarse colgado de un reporte.
+    void this.diagnostics.report();
   }
 
   /**
@@ -552,6 +591,9 @@ export class SyncScheduler {
       return outcome;
     } finally {
       this.syncing.set(false);
+      // Best-effort y sin esperar: el modal de sync no debe quedarse abierto
+      // mientras se manda la foto ni mientras corren los comandos remotos.
+      void this.diagnostics.report();
     }
   }
 

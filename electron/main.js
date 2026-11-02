@@ -56,6 +56,9 @@ const cashMovementsDb = require('./db/cash-movements');
 const pharmacyServicesDb = require('./db/pharmacy-services');
 const promotionsDb = require('./db/promotions');
 const invoiceRagDb = require('./db/invoice-rag');
+const syncLogDb = require('./db/sync-log');
+const diagnosticsDb = require('./db/diagnostics');
+const saleBlockers = require('./db/sale-blockers');
 
 app.commandLine.appendSwitch('lang', 'es-MX');
 app.commandLine.appendSwitch('accept-lang', 'es-MX,es;q=0.9');
@@ -212,12 +215,18 @@ app.whenReady().then(() => {
   // lleguen antes de terminar esperan la misma promesa dentro de `getPrisma()`.
   getPrisma()
     .then((prisma) =>
-      // Limpieza best-effort de promociones cerradas hace más de 30 días. Va
-      // encadenada a las migraciones (la tabla puede no existir antes) y nunca
-      // se espera: un fallo aquí no debe retrasar ni tumbar la caja.
-      promotionsDb
-        .purgeStale(prisma, new Date())
-        .catch((error) => console.error('[db] no se pudieron purgar promociones viejas', error)),
+      // Limpieza best-effort de promociones cerradas hace más de 30 días y de la
+      // bitácora de sync de más de 30 días. Va encadenada a las migraciones (las
+      // tablas pueden no existir antes) y nunca se espera: un fallo aquí no debe
+      // retrasar ni tumbar la caja.
+      Promise.all([
+        promotionsDb
+          .purgeStale(prisma, new Date())
+          .catch((error) => console.error('[db] no se pudieron purgar promociones viejas', error)),
+        syncLogDb
+          .purgeOld(prisma, new Date())
+          .catch((error) => console.error('[db] no se pudo purgar la bitácora de sync', error)),
+      ]),
     )
     .catch((error) => console.error('[db] error al migrar', error));
   createWindow();
@@ -390,6 +399,16 @@ function configurarPermisos() {
   session.defaultSession.setPermissionCheckHandler(() => false);
 }
 
+/**
+ * Asienta en la bitácora local un fallo de subida que el renderer acaba de
+ * marcar. Se hace aquí, en el único punto por donde pasan todos los
+ * `markPushFailed`, en vez de repetirlo en cada servicio de Angular. Nunca
+ * lanza: la bitácora es para diagnosticar, no puede romper el marcado.
+ */
+async function bitacoraFallo(prisma, entity, ref, message) {
+  await syncLogDb.appendSafe(prisma, { level: 'error', entity, ref, message: String(message ?? '') });
+}
+
 function registrarIPCHandlers() {
   // Log del renderer (errores de UI, ventas rechazadas, sync). Solo escritura.
   ipcMain.handle('log:write', (_event, level, event, data) => {
@@ -425,8 +444,11 @@ function registrarIPCHandlers() {
     productsDb.listBlockedProducts(await getPrisma()));
   ipcMain.handle('catalog:markStockEntrySynced', async (_event, batchLocalId, remoteProductId) =>
     productsDb.markStockEntrySynced(await getPrisma(), batchLocalId, remoteProductId));
-  ipcMain.handle('catalog:markStockEntryPushFailed', async (_event, batchLocalId, message) =>
-    productsDb.markStockEntryPushFailed(await getPrisma(), batchLocalId, message));
+  ipcMain.handle('catalog:markStockEntryPushFailed', async (_event, batchLocalId, message) => {
+    const prisma = await getPrisma();
+    await productsDb.markStockEntryPushFailed(prisma, batchLocalId, message);
+    await bitacoraFallo(prisma, 'stockEntry', batchLocalId, `Entrada de stock rechazada: ${message}`);
+  });
 
   // Edición de catálogo (`/pos/productos`): alta/edición de producto sin lote.
   ipcMain.handle('catalog:getProductById', async (_event, id) =>
@@ -439,8 +461,13 @@ function registrarIPCHandlers() {
     productsDb.getPendingCatalogPush(await getPrisma()));
   ipcMain.handle('catalog:markCatalogSynced', async (_event, localId, remoteId, pushedVersion) =>
     productsDb.markCatalogSynced(await getPrisma(), localId, remoteId, pushedVersion));
-  ipcMain.handle('catalog:markCatalogPushFailed', async (_event, localId, message) =>
-    productsDb.markCatalogPushFailed(await getPrisma(), localId, message));
+  ipcMain.handle('catalog:markCatalogPushFailed', async (_event, localId, message) => {
+    const prisma = await getPrisma();
+    await productsDb.markCatalogPushFailed(prisma, localId, message);
+    await bitacoraFallo(prisma, 'product', localId, `Alta/edición de producto rechazada: ${message}`);
+  });
+  ipcMain.handle('catalog:retryProductPush', async (_event, localId) =>
+    productsDb.retryProductPush(await getPrisma(), localId));
   ipcMain.handle('catalog:clearCatalogPushError', async (_event, localId) =>
     productsDb.clearCatalogPushError(await getPrisma(), localId));
 
@@ -456,8 +483,15 @@ function registrarIPCHandlers() {
   ipcMain.handle('sales:markUnreconciled', async (_event, localId, reason) =>
     salesDb.markUnreconciled(await getPrisma(), localId, reason),
   );
-  ipcMain.handle('sales:markPushFailed', async (_event, localId, message) =>
-    salesDb.markPushFailed(await getPrisma(), localId, message));
+  ipcMain.handle('sales:markPushFailed', async (_event, localId, message) => {
+    const prisma = await getPrisma();
+    await salesDb.markPushFailed(prisma, localId, message);
+    await bitacoraFallo(prisma, 'sale', localId, `Venta rechazada por el servidor: ${message}`);
+  });
+  ipcMain.handle('sales:diagnose', async (_event, saleId) =>
+    saleBlockers.diagnoseSale(await getPrisma(), saleId));
+  ipcMain.handle('sales:prepareUnreconciled', async (_event, localId) =>
+    salesDb.prepareUnreconciled(await getPrisma(), localId));
   ipcMain.handle('sales:listMovements', async (_event, saleId) =>
     salesDb.listMovements(await getPrisma(), saleId),
   );
@@ -478,7 +512,32 @@ function registrarIPCHandlers() {
 
   // Bitácora de sincronización.
   ipcMain.handle('sync:getStatus', async () => syncRunsDb.getStatus(await getPrisma()));
-  ipcMain.handle('sync:recordRun', async (_event, run) => syncRunsDb.recordRun(await getPrisma(), run));
+  ipcMain.handle('sync:recordRun', async (_event, run) => {
+    const prisma = await getPrisma();
+    const result = await syncRunsDb.recordRun(prisma, run);
+    if (run?.status === 'error') {
+      await syncLogDb.appendSafe(prisma, {
+        level: 'error',
+        entity: 'sync',
+        ref: run.entity ?? null,
+        message: `Sync ${run.direction ?? ''} de ${run.entity ?? '?'} falló: ${run.errorMessage ?? 'sin detalle'}`,
+      });
+    }
+    return result;
+  });
+  ipcMain.handle('syncLog:append', async (_event, entry) => syncLogDb.appendSafe(await getPrisma(), entry));
+  ipcMain.handle('syncLog:list', async (_event, limit) => syncLogDb.listRecent(await getPrisma(), limit));
+  // Foto para `POST /pos/diagnostics`. La identidad del equipo la pone main,
+  // que es quien la conoce: el mismo `id` que `get-device-info` (hostname + MAC).
+  ipcMain.handle('diagnostics:buildSnapshot', async () => {
+    const info = obtenerInfoDispositivo();
+    return diagnosticsDb.buildSnapshot(await getPrisma(), {
+      deviceId: info.id,
+      deviceName: info.hostname,
+      appVersion: app.getVersion(),
+      platform: `${info.plataforma}-${info.arquitectura}`,
+    });
+  });
 
   // Turnos de caja locales.
   ipcMain.handle('cashSessions:listBlocked', async () =>
@@ -503,10 +562,18 @@ function registrarIPCHandlers() {
     cashSessionsDb.markCreateSynced(await getPrisma(), localId, remoteId));
   ipcMain.handle('cashSessions:markCloseSynced', async (_event, localId, values) =>
     cashSessionsDb.markCloseSynced(await getPrisma(), localId, values));
-  ipcMain.handle('cashSessions:markPushFailed', async (_event, localId, message) =>
-    cashSessionsDb.markPushFailed(await getPrisma(), localId, message));
-  ipcMain.handle('cashSessions:markClosePushFailed', async (_event, localId, message) =>
-    cashSessionsDb.markClosePushFailed(await getPrisma(), localId, message));
+  ipcMain.handle('cashSessions:markPushFailed', async (_event, localId, message) => {
+    const prisma = await getPrisma();
+    await cashSessionsDb.markPushFailed(prisma, localId, message);
+    await bitacoraFallo(prisma, 'cashSession', localId, `Apertura de turno rechazada: ${message}`);
+  });
+  ipcMain.handle('cashSessions:markClosePushFailed', async (_event, localId, message) => {
+    const prisma = await getPrisma();
+    await cashSessionsDb.markClosePushFailed(prisma, localId, message);
+    await bitacoraFallo(prisma, 'cashSession', localId, `Cierre de turno rechazado: ${message}`);
+  });
+  ipcMain.handle('cashSessions:retryPush', async (_event, localId) =>
+    cashSessionsDb.retryPush(await getPrisma(), localId));
   ipcMain.handle('cashSessions:clearPushError', async (_event, localId) =>
     cashSessionsDb.clearPushError(await getPrisma(), localId));
   ipcMain.handle('cashSessions:clearClosePushError', async (_event, localId) =>
@@ -597,8 +664,11 @@ function registrarIPCHandlers() {
     cashMovementsDb.getPendingPush(await getPrisma(), filters));
   ipcMain.handle('cashMovements:markSynced', async (_event, localId, remoteId) =>
     cashMovementsDb.markSynced(await getPrisma(), localId, remoteId));
-  ipcMain.handle('cashMovements:markPushFailed', async (_event, localId, message) =>
-    cashMovementsDb.markPushFailed(await getPrisma(), localId, message));
+  ipcMain.handle('cashMovements:markPushFailed', async (_event, localId, message) => {
+    const prisma = await getPrisma();
+    await cashMovementsDb.markPushFailed(prisma, localId, message);
+    await bitacoraFallo(prisma, 'cashMovement', localId, `Movimiento de caja rechazado: ${message}`);
+  });
   ipcMain.handle('cashMovements:clearPushError', async (_event, localId) =>
     cashMovementsDb.clearPushError(await getPrisma(), localId));
 }

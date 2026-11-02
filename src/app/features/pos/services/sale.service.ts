@@ -8,6 +8,7 @@ import {
   defaultIfEmpty,
   defer,
   finalize,
+  firstValueFrom,
   lastValueFrom,
   forkJoin,
   from,
@@ -710,16 +711,7 @@ flushQueueAsync(): Promise<void> {
       return from(this.api().sales.markPushFailed(item.id, error));
     }
 
-    return this.http
-      .post<unknown>(`${this.apiUrl}/sales/unreconciled`, {
-        localId: item.id,
-        localFolio: item.folio,
-        reason: error,
-        total: item.total,
-        occurredAt: item.createdAt.toISOString(),
-        ...(item.cashSessionId ? { cashSessionId: item.cashSessionId } : {}),
-        payload: item.payload,
-      })
+    return this.postUnreconciled$(item, error)
       .pipe(
         // Registrada aparte: sale de la cola para que el badge no mienta, pero
         // el historial la sigue mostrando con su motivo.
@@ -727,6 +719,51 @@ flushQueueAsync(): Promise<void> {
         // Si ni eso se pudo, se marca como bloqueada y el cajero la ve.
         catchError(() => from(this.api().sales.markPushFailed(item.id, error))),
       );
+  }
+
+  /**
+   * `POST /sales/unreconciled`. Compartido por el rechazo automático y por
+   * "Mandar a conciliación" del panel de rechazados (`sendToUnreconciled`).
+   */
+  private postUnreconciled$(
+    item: { id: string; folio: string; total: number; createdAt: Date | string; cashSessionId: string | null },
+    reason: string,
+    payload: unknown = (item as { payload?: unknown }).payload,
+  ): Observable<unknown> {
+    return this.http.post<unknown>(`${this.apiUrl}/sales/unreconciled`, {
+      localId: item.id,
+      localFolio: item.folio,
+      reason,
+      total: item.total,
+      occurredAt: new Date(item.createdAt).toISOString(),
+      ...(item.cashSessionId ? { cashSessionId: item.cashSessionId } : {}),
+      payload,
+    });
+  }
+
+  /**
+   * Manda a conciliación una venta que **no puede** subir por la vía normal: su
+   * turno nunca existió en el servidor (el alta se rechazó de forma permanente)
+   * y la venta no saldría jamás de la caja. El dinero ya se cobró; así al menos
+   * queda registrado en `unreconciledSales` para que el admin lo concilie.
+   *
+   * El payload viaja **sin** el id local del turno (`prepareUnreconciled`): el
+   * servidor no lo conoce. Lanza si la venta no existe o si el servidor la
+   * rechaza; en ese caso la venta se queda como estaba.
+   */
+  async sendToUnreconciled(localId: string, reason: string): Promise<void> {
+    const draft = await this.api().sales.prepareUnreconciled(localId);
+    if (!draft) {
+      throw new Error('La venta ya no existe en esta caja.');
+    }
+    // Un comando remoto puede repetirse si se perdió su resultado: no se manda
+    // dos veces lo que ya quedó registrado.
+    if (draft.unreconciledAt) {
+      return;
+    }
+    await firstValueFrom(this.postUnreconciled$(draft, reason, draft.payload));
+    await this.api().sales.markUnreconciled(localId, reason);
+    this.refreshPending();
   }
 
   /** Rechazos que no se arreglan reintentando el mismo push → unreconciled. */

@@ -341,6 +341,27 @@ export function createFakePrisma() {
   db.invoiceEmbedding = createModel(db, 'invoiceEmbedding', () => ({
     createdAt: new Date('2026-09-26T15:00:00Z'),
   }));
+  // Lotes: el error del alta por "Entrada de stock" vive aquí y los
+  // bloqueadores de venta lo leen para explicar por qué un producto no sube.
+  db.batch = createModel(db, 'batch', () => ({
+    remoteId: null,
+    lotNumber: null,
+    expiryDate: null,
+    pendingPush: false,
+    pushError: null,
+    payloadJson: null,
+    createdAt: new Date('2026-09-05T15:00:00Z'),
+  }));
+  db.syncRun = createModel(db, 'syncRun', () => ({
+    cursor: null,
+    errorMessage: null,
+    startedAt: new Date('2026-09-30T10:30:00Z'),
+    finishedAt: null,
+  }));
+  db.syncLog = createModel(db, 'syncLog', () => ({
+    at: new Date(),
+    ref: null,
+  }));
   db.serviceProvider = createModel(db, 'serviceProvider', () => ({
     license: null,
     defaultCommissionRate: null,
