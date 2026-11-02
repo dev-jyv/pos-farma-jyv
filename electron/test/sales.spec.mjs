@@ -459,7 +459,7 @@ describe('cola de push', () => {
       await getPendingPush(prisma, { contarIntentos: true });
     }
 
-    expect(prisma.sale.rows[0].pushError).toMatch(/demasiados intentos/i);
+    expect(prisma.sale.rows[0].pushError).toMatch(/Espera al turno .*su apertura falló: Turno inválido/);
   });
 
   it('no gasta intentos mientras su producto sigue en la cola del catálogo', async () => {

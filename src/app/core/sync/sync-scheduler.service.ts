@@ -39,6 +39,15 @@ function formatTime(date: Date): string {
  */
 const PROMOTIONS_PULL_INTERVAL_MS = 60 * 60 * 1000;
 
+/**
+ * Latido del diagnóstico remoto: con red, la caja reporta **al menos** cada
+ * 15 min aunque no venda ni sincronice. El panel marca en rojo una caja con más
+ * de 2 h sin reportar; sin este latido, una caja sana y sin ventas entre dos
+ * horarios fijos (hasta 14 h) se vería caída. Cuesta una escritura por reporte:
+ * 96 al día por caja, más los de cada sync, por debajo del tope de 300.
+ */
+export const DIAGNOSTICS_HEARTBEAT_MS = 15 * 60 * 1000;
+
 /** Horarios fijos de sync, en hora local del equipo de caja. */
 const FIXED_TIMES: Array<[number, number]> = [
   [10, 30],
@@ -103,6 +112,8 @@ export class SyncScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Pull liviano de promociones (ver `PROMOTIONS_PULL_INTERVAL_MS`). */
   private promotionsTimer: ReturnType<typeof setInterval> | null = null;
+  /** Latido del diagnóstico remoto (ver `DIAGNOSTICS_HEARTBEAT_MS`). */
+  private diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
   /**
    * Pull de promociones en vuelo: el horario de cada hora y la autorrecuperación
    * del cobro pueden pedirlo a la vez, y ambos esperan la misma corrida en vez de
@@ -176,9 +187,22 @@ export class SyncScheduler {
     // Se arma junto con el horario fijo y por la misma razón: sin `electronAPI`
     // no hay SQLite donde guardar lo que baje.
     this.promotionsTimer = setInterval(() => void this.pullPromotions(), PROMOTIONS_PULL_INTERVAL_MS);
+    this.diagnosticsTimer = setInterval(() => this.diagnosticsHeartbeat(), DIAGNOSTICS_HEARTBEAT_MS);
   }
 
-  /** Desarma el horario fijo y el pull de promociones de cada hora. */
+  /**
+   * Sin red no se intenta: el reporte fallaría y solo llenaría la bitácora de
+   * avisos. Al volver la red, el siguiente latido (o el siguiente sync) reporta.
+   * `report()` ya se salta sin sesión y no encima dos reportes.
+   */
+  private diagnosticsHeartbeat(): void {
+    if (!navigator.onLine) {
+      return;
+    }
+    void this.diagnostics.report();
+  }
+
+  /** Desarma el horario fijo, el pull de promociones de cada hora y el latido del diagnóstico. */
   stop(): void {
     if (this.timer !== null) {
       clearTimeout(this.timer);
@@ -187,6 +211,10 @@ export class SyncScheduler {
     if (this.promotionsTimer !== null) {
       clearInterval(this.promotionsTimer);
       this.promotionsTimer = null;
+    }
+    if (this.diagnosticsTimer !== null) {
+      clearInterval(this.diagnosticsTimer);
+      this.diagnosticsTimer = null;
     }
   }
 

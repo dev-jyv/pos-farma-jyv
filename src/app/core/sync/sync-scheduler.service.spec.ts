@@ -9,7 +9,7 @@ import { CashSessionService } from '../../features/pos/services/cash-session.ser
 import { ProductCatalogService } from '../../features/pos/services/product-catalog.service';
 import { SaleService } from '../../features/pos/services/sale.service';
 import { StockEntryService } from '../../features/pos/services/stock-entry.service';
-import { SyncScheduler } from './sync-scheduler.service';
+import { DIAGNOSTICS_HEARTBEAT_MS, SyncScheduler } from './sync-scheduler.service';
 import { PosDiagnosticsService } from './pos-diagnostics.service';
 import { AuthService } from '../auth/auth.service';
 
@@ -975,8 +975,8 @@ describe('SyncScheduler — pull de promociones cada hora', () => {
 });
 
 /**
- * Diagnóstico remoto: se manda tras cada sync completo y tras el pull horario
- * de promociones, sin esperar ni romper nada.
+ * Diagnóstico remoto: se manda tras cada sync completo, tras el pull horario
+ * de promociones y, con red, al menos cada 15 min; sin esperar ni romper nada.
  */
 describe('SyncScheduler — diagnóstico remoto', () => {
   let scheduler: SyncScheduler;
@@ -1032,5 +1032,44 @@ describe('SyncScheduler — diagnóstico remoto', () => {
   it('tras el pull horario de promociones', async () => {
     await scheduler.pullPromotions();
     expect(report).toHaveBeenCalledTimes(1);
+  });
+
+  it('con red y sin ventas reporta al menos cada 15 minutos', async () => {
+    vi.useFakeTimers();
+    // 11:00 local: el siguiente horario fijo (14:00) queda fuera de la ventana.
+    vi.setSystemTime(new Date(2026, 8, 25, 11, 0, 0));
+    try {
+      scheduler.start();
+      await vi.advanceTimersByTimeAsync(DIAGNOSTICS_HEARTBEAT_MS - 1000);
+      expect(report).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(report).toHaveBeenCalledTimes(1);
+      // 45 min: tres latidos más el pull horario de promociones (también reporta).
+      await vi.advanceTimersByTimeAsync(3 * DIAGNOSTICS_HEARTBEAT_MS);
+      expect(report.mock.calls.length).toBeGreaterThanOrEqual(4);
+
+      scheduler.stop();
+      report.mockClear();
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+      expect(report).not.toHaveBeenCalled();
+    } finally {
+      scheduler.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('sin red el latido no intenta reportar', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 25, 11, 0, 0));
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      scheduler.start();
+      await vi.advanceTimersByTimeAsync(DIAGNOSTICS_HEARTBEAT_MS * 2);
+      expect(report).not.toHaveBeenCalled();
+    } finally {
+      online.mockRestore();
+      scheduler.stop();
+      vi.useRealTimers();
+    }
   });
 });
