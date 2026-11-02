@@ -884,6 +884,12 @@ export interface PosDiagnosticsInput {
   }>;
   /** Máx. 200. */
   syncLog: PosSyncLogEntry[];
+  /**
+   * Turno abierto en este equipo: `remoteId` si ya subió, si no el id local;
+   * `null` sin turno abierto. El backend alerta por silencio solo a cajas con
+   * turno (SPEC 44). Opcional: se omite si la caja no pudo leerlo.
+   */
+  openCashSessionId?: string | null;
 }
 
 export type PosCommandType = 'retrySale' | 'retryCashSession' | 'retryProduct' | 'sendSaleToUnreconciled';
