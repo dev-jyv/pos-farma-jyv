@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { CartLine, CartProductLine, CouponDto, Product } from '../../../shared/models';
+import { CartLine, CartProductLine, CartServiceLine, CouponDto, Product } from '../../../shared/models';
 import { CouponService } from './coupon.service';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -80,6 +80,46 @@ describe('CouponService.apply', () => {
     );
 
     expect(pricing.total).toBe(20);
+  });
+
+  it('cupón de venta: la base es Σ(subtotal − descuentos de línea) e incluye servicios (contrato backend)', () => {
+    const servicio: CartLine = {
+      kind: 'service',
+      service: { id: 'consulta', name: 'Consulta', price: 150 } as CartServiceLine['service'],
+      provider: null,
+      quantity: 1,
+      discountAmount: 10,
+    };
+    // Caja $100 + (2 × $12 − $4 de promo) + (consulta $150 − $10) = 100 + 20 + 140 = 260.
+    const lines: CartLine[] = [
+      line(1, { saleUnit: 'box' }),
+      line(2, { discountAmount: 4, promotion: { id: 'pr', name: '2x$20', discountAmount: 4 } }),
+      servicio,
+    ];
+    const pct = service.apply(
+      lines,
+      coupon({ code: 'VENTA10', scope: 'sale', productIds: [], discount: { type: 'percent', percent: 10 } }),
+      NOW,
+    );
+    expect(pct.saleDiscount).toBe(26);
+
+    const minimo = service.apply(
+      lines,
+      coupon({ code: 'VENTA10', scope: 'sale', productIds: [], minPurchase: 260.01 }),
+      NOW,
+    );
+    expect(minimo.saleDiscount).toBe(0);
+  });
+
+  it('cupón de producto en una caja: pieces = cajas × piezas por caja, tope en el neto', () => {
+    const pricing = service.apply(
+      [line(2, { saleUnit: 'box' })],
+      coupon({ discount: { type: 'amount', amount: 15 } }),
+      NOW,
+    );
+    // 20 piezas × $15 = $300 > neto $200: se topa en el neto de la partida.
+    expect(pricing.total).toBe(200);
+    expect((pricing.lines[0] as CartProductLine).discountAmount).toBe(200);
   });
 
   it('cupón de venta: va como saleDiscount y no toca las líneas', () => {
