@@ -18,7 +18,7 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 - `npm test` / `ng test` — Vitest sobre `src/` (Angular)
 - `npm run test:electron` — Vitest sobre `electron/test/**` (proceso principal: `electron/db/*.js` contra un Prisma falso en memoria; el builder de Angular no mira esa carpeta)
 - `npm run test:all` — ambas suites
-- `npm run check:promo-engine` — compara el sha256 de `src/app/shared/utils/promotions-engine.cases.json` (casos dorados del motor de promociones) con las copias de `../backend-farma-jyv` y `../farma-jyv-admin`; un repo hermano ausente se avisa y no falla. El JSON no se edita en un solo repo: si cambia el motor, se regenera en los tres.
+- `npm run check:promo-engine` — compara el sha256 de los casos dorados con los repos hermanos: `promotions-engine.cases.json` contra `../backend-farma-jyv` y `../farma-jyv-admin`, y `coupons-engine.cases.json` (SPEC 47) contra el backend (el admin solo si trae copia). Un repo hermano ausente se avisa y no falla; uno presente sin la copia obligatoria sí falla. El JSON no se edita en un solo repo: si cambia el motor, se regenera en todos.
 
 ## Arquitectura
 
@@ -35,7 +35,8 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 ### Routing & auth
 
 - `app.routes.ts`: `/login` (bloqueado por `guestGuard` si ya hay sesión) y todo lo demás bajo `Shell` protegido por `authGuard`. Cada feature se carga lazy (`loadChildren`/`loadComponent`).
-- `AuthService.fetchRole()` resuelve el `StaffRole` (`admin` | `cashier`) contra `${apiUrl}/auth/me`. Sin rol válido no hay sesión utilizable.
+- `AuthService.fetchProfile()` resuelve el perfil contra `${apiUrl}/auth/me`: rol (documento de `roles`, slug libre: `admin`, `manager`, `cashier`, `doctor`, `accountant` o uno personalizado) más permisos efectivos. `StaffRole` es `string`, no un enum: la UI pregunta por permiso (`AuthService.can(area, level)`), no por slug, salvo las reglas que el backend ata a un slug (anular = `admin`). `fetchRole()` queda por compatibilidad para los guards. Sin rol válido no hay sesión utilizable.
+- **El contador no entra a la caja (SPEC 45).** `POS_BLOCKED_ROLES` (`shared/models`, hoy solo `accountant`) se revisa en `Login.onSubmit` y en `guestGuard`: cierra sesión con "Tu usuario es de consulta de reportes; entra desde el panel.". Es por slug a propósito (rol de sistema); un rol personalizado sin `pos` sigue entrando como antes y lo frena cada pantalla.
 
 ### API
 
@@ -49,7 +50,24 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 - Si al cobrar una promo del ticket ya cerró (la detecta el checkout, o el backend responde 400 `La promoción "X" no está vigente`), la venta no se registra: `Sale.onPromotionClosed` baja promociones, recalcula y pide volver a cobrar. Excepción: con la tarjeta ya aprobada en la terminal sí se registra.
 - Una venta cuyo turno o producto aún no tiene `remoteId` solo gasta `payloadResolveAttempts` si esa dependencia está **atorada** (rechazada o fuera de su cola); si va en camino, espera sin contar (`dependenciaEnCamino` en `electron/db/sales.js`).
 - Panel "Rechazados al sincronizar" (`shell`): cada registro trae `diagnosis.code` (`electron/db/blocked-diagnosis.js`, sin red) y su texto/acción sale de `core/sync/sync-diagnosis.ts`. "Reintentar" corre `SyncScheduler.flushPendingNow()` (orden completo, sin gastar el cupo manual). Solo para `desconocido` y con red se ofrece la IA: `SyncHelpService` → `POST /assistant/sync-help` del backend (resumen sin cliente ni partidas; nunca propone descartar).
-- `electron/db/promotions.js#purgeStale` borra al arrancar (best-effort, tras migraciones) las promos dadas de baja o terminadas hace más de 30 días.
+- `pullPromotions()` también baja los **cupones** (`GET /coupons/sync`, entidad `coupons`, mismo cursor por `updatedAt`) y emite `COUPONS_SYNCED_EVENT`; el resultado de cupones no cuenta para el `true/false` de promociones (un backend sin la ruta deja un `sync_run` con error y nada más).
+- `electron/db/promotions.js#purgeStale` (y `coupons.js#purgeStale`) borra al arrancar (best-effort, tras migraciones) las promos dadas de baja o terminadas hace más de 30 días.
+
+### Venta por caja completa (SPEC 46)
+
+- `Product.boxQuantity` (2..1000) + `boxPrice` (impuestos incluidos) llegan juntos por el pull o no cuentan (`hasBoxSale`); `boxBarcode` es opcional. `stock` **siempre en piezas**.
+- Carrito: `CartProductLine.saleUnit: 'box'` → `lineKey` `product:<id>:box` (la pieza sigue en `product:<id>`), `quantity` cuenta **cajas**, `lineUnitPrice` = `boxPrice`. Caja y pieza del mismo producto son dos líneas que comparten existencias: `Sale.maxFor`/`commitAdd` validan `cajas × boxQuantity + piezas de la otra línea ≤ stock`. Una caja **nunca** entra a promoción (`PromoService.promotionFor`) ni manda `promotionId`; sí admite manual con el tope del 20 % y cupón de producto.
+- Escanear `boxBarcode` agrega una caja (la búsqueda local lo incluye; el código de pieza y el SKU ganan). `getByBarcode` devuelve `saleUnit: 'box'` en ese caso; `cartProduct()` lo quita antes de meter el producto al carrito.
+- Payload (`/sales/bulk`): `quantity` en cajas, `unitPrice` por caja, `saleUnit: 'box'`. **La partida local (`SaleItem`) guarda piezas en `quantity`**, como el backend, con `saleUnit` JSON `{ type, boxes, piecesPerBox, boxPrice }`: así el descuento de stock, la anulación, `pendingStockDelta` y los reportes siguen contando piezas sin saber de cajas. `sales.js#piecesOf` deriva las piezas de `boxes × piecesPerBox`, no del `quantity` que mande el renderer.
+- Ticket: `boxOf` imprime "N cajas × M pzas" y la columna Cant muestra cajas.
+
+### Cupones (SPEC 47)
+
+- Tabla `Coupon` **solo-pull** (`electron/db/coupons.js`), id = código normalizado (`^[A-Z0-9-]{4,20}$`, mayúsculas, sin espacios). `findByCode` devuelve también inactivos para decir *por qué* no aplica.
+- Motor `shared/utils/coupons.ts` (`computeCouponDiscount`, centavos) copiado del backend; `coupons-engine.cases.json` debe ser **byte a byte** el del backend (`check:promo-engine` lo compara; el admin no lo usa). Producto: `percent × neto` o `monto × piezas` con tope en el neto, nunca en líneas con promoción. Venta: sobre la suma de netos, con mínimo.
+- `CouponService.apply` corre **después** de `PromoService.apply` en `Sale.setCart`: el cupón de producto entra en el `discountAmount` de la línea (`line.coupon`) y la línea pierde el manual (se conserva en `manualDiscounts` y vuelve si se quita el cupón); el de venta queda en `Sale.couponSaleDiscount` → `saleDiscountAmount` del payload, del desglose fiscal y del reparto por rama (`branchTotals`). El 20 % manual no cuenta el cupón.
+- Vigencia con el reloj local; `usedCount ≥ maxUses` solo **avisa** ("puede estar agotado; el servidor lo revisará"): `/sales/bulk` nunca rechaza por el cupón, lo marca para revisión. El cupón se revalida al abrir el cobro (vencido o sin efecto → se quita y se avisa el total nuevo, hay que volver a pulsar F9), tras cada pull de cupones y en `Checkout.confirm` (salvo tarjeta ya aprobada) → `couponExpired`.
+- Se aplica solo en la pantalla de venta (el cobro muestra el chip pero no lo cambia: con el diálogo abierto el total no se mueve). Persiste en el ticket autoguardado y en ventas en espera como `couponCode`, y se vuelve a buscar al recuperarlos. Venta local: `Sale.couponJson` y `SaleItem.couponDiscount`; ticket "Cupón CODIGO −$x".
 
 ### Ventas atoradas: bloqueadores, healing y diagnóstico remoto
 
