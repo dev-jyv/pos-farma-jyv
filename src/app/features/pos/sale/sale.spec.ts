@@ -12,6 +12,7 @@ import { AuthService } from '../../../core/auth/auth.service';
 import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import {
+  CouponDto,
   PharmacyService,
   Product,
   ProductBatch,
@@ -24,6 +25,7 @@ import { CashSessionService } from '../services/cash-session.service';
 import { HeldSaleStorageService } from '../services/held-sale-storage.service';
 import { ProductService } from '../services/product.service';
 import { PromoService } from '../services/promo.service';
+import { CouponService } from '../services/coupon.service';
 import { SaleService } from '../services/sale.service';
 import { TicketPrintService } from '../ticket/ticket-print.service';
 import { Sale } from './sale';
@@ -78,6 +80,10 @@ describe('Sale', () => {
   let canSell: ReturnType<typeof signal<boolean>>;
   let isOpen: ReturnType<typeof signal<boolean>>;
   let servicios: PharmacyService[];
+  /** Resultado de `ProductService.search`; `null` = el producto por defecto. */
+  let searchResults: Product[] | null;
+  /** Cupones de la SQLite simulada, por código normalizado. */
+  let cupones: Record<string, CouponDto>;
   let doctores: ServiceProvider[];
   let saleServiceMock: {
     pendingCount: ReturnType<typeof signal<number>>;
@@ -98,6 +104,8 @@ describe('Sale', () => {
     notifyWarn = vi.fn();
     notifySuccess = vi.fn();
     batches = [batch()];
+    searchResults = null;
+    cupones = {};
     servicios = [servicio()];
     doctores = [{ id: 'dr-1', name: 'Dra. Ruiz' }];
     isAdmin = signal(false);
@@ -139,7 +147,19 @@ describe('Sale', () => {
           provide: NotificationService,
           useValue: { error: notifyError, success: notifySuccess, warn: notifyWarn },
         },
-        { provide: ProductService, useValue: { search: () => of([product()]), invalidate: vi.fn() } },
+        {
+          provide: ProductService,
+          useValue: { search: () => of(searchResults ?? [product()]), invalidate: vi.fn() },
+        },
+        {
+          provide: CouponService,
+          useFactory: () => {
+            const service = new CouponService();
+            service.findByCode = async (code: string) =>
+              cupones[code.replace(/\s+/g, '').toUpperCase()] ?? null;
+            return service;
+          },
+        },
         { provide: BatchService, useValue: { listByProduct: () => of(batches) } },
         { provide: SaleService, useValue: saleServiceMock },
         { provide: SyncScheduler, useValue: syncSchedulerMock },
@@ -1466,6 +1486,321 @@ describe('Sale', () => {
       } finally {
         w.electronAPI = previo;
       }
+    });
+  });
+
+  /** Venta por caja completa (SPEC 46). */
+  describe('venta por caja', () => {
+    const conCaja = (overrides: Partial<Product> = {}) =>
+      product({ stock: 35, salePrice: 12, boxQuantity: 10, boxPrice: 100, boxBarcode: '17501001', ...overrides });
+
+    beforeEach(() => {
+      batches = [batch({ quantity: 35 })];
+    });
+
+    it('escanear el código de la caja agrega una línea por caja', () => {
+      searchResults = [conCaja()];
+      component.onSearchChange('17501001');
+      component.onSearchKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+
+      const [linea] = component.cart();
+      expect(component.keyOf(linea)).toBe('product:p1:box');
+      expect(linea.quantity).toBe(1);
+      expect(component.total()).toBe(100);
+    });
+
+    it('el código de la pieza sigue agregando la pieza', () => {
+      searchResults = [conCaja()];
+      component.onSearchChange('7501001');
+      component.onSearchKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+
+      expect(component.keyOf(component.cart()[0])).toBe('product:p1');
+    });
+
+    it('caja y piezas del mismo producto son dos líneas', () => {
+      component.addToCart(conCaja(), 1, false, 'box');
+      component.addToCart(conCaja(), 3);
+
+      expect(component.cart().map((line) => component.keyOf(line))).toEqual(['product:p1:box', 'product:p1']);
+      expect(component.total()).toBe(136);
+    });
+
+    it('el stock se valida en piezas sobre las dos líneas', () => {
+      component.addToCart(conCaja(), 3, false, 'box'); // 30 piezas
+      component.addToCart(conCaja(), 6); // 30 + 6 > 35
+
+      expect(component.cart()).toHaveLength(1);
+      expect(notifyError).toHaveBeenCalledWith('Sin stock suficiente para agregar otra unidad.');
+      // Con 5 piezas libres no cabe otra caja.
+      expect(component.maxFor(component.cart()[0])).toBe(3);
+    });
+
+    it('sin una caja completa en existencia no deja agregar la caja', () => {
+      component.addToCart(conCaja({ stock: 8 }), 1, false, 'box');
+
+      expect(component.cart()).toHaveLength(0);
+      expect(notifyError).toHaveBeenCalledWith(
+        'No hay una caja completa de Paracetamol: hay 8 pzas · 0 cajas completas.',
+      );
+    });
+
+    it('la caja no entra a la promoción del producto', () => {
+      TestBed.inject(PromoService).setPromotions([
+        {
+          id: 'promo-1',
+          name: '2x1',
+          rule: { type: 'nxm', buy: 2, pay: 1 },
+          productIds: ['p1'],
+          startsAt: new Date(Date.now() - 60_000).toISOString(),
+          endsAt: null,
+          isActive: true,
+        },
+      ]);
+      component.addToCart(conCaja(), 2, false, 'box');
+
+      expect(component.promotionOf(component.cart()[0])).toBeNull();
+      expect(component.total()).toBe(200);
+    });
+
+    it('el descuento manual de la caja respeta el tope del 20 %', () => {
+      component.addToCart(conCaja(), 1, false, 'box');
+      component.updateLineDiscount('product:p1:box', 30);
+
+      expect(component.cart()[0].discountAmount).toBe(0);
+      expect(notifyError).toHaveBeenCalledWith('Descuento mayor a 20% requiere autorización de un administrador.');
+
+      component.updateLineDiscount('product:p1:box', 20);
+      expect(component.cart()[0].discountAmount).toBe(20);
+    });
+
+    it('cambiar la línea de pieza a caja deja las cajas completas que caben', () => {
+      component.addToCart(conCaja(), 25);
+      component.switchLineUnit('product:p1', 'box');
+
+      const [linea] = component.cart();
+      expect(component.keyOf(linea)).toBe('product:p1:box');
+      expect(linea.quantity).toBe(2);
+
+      component.switchLineUnit('product:p1:box', 'piece');
+      expect(component.cart()[0].quantity).toBe(20);
+    });
+
+    it('el resultado de búsqueda ofrece Pieza | Caja (N) y las existencias en cajas', () => {
+      component.results.set([conCaja()]);
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+
+      expect(el.querySelector('[data-testid="search-unit-picker"]')?.textContent).toContain('Caja (10)');
+      expect(el.querySelector('[data-testid="search-box-stock"]')?.textContent?.trim()).toBe(
+        '35 pzas · 3 cajas completas',
+      );
+      (el.querySelector('[data-testid="search-add-box"]') as HTMLButtonElement).click();
+      expect(component.keyOf(component.cart()[0])).toBe('product:p1:box');
+    });
+
+    it('la caja se guarda en el ticket autoguardado', () => {
+      component.addToCart(conCaja(), 1, false, 'box');
+      TestBed.tick();
+
+      const stored = TestBed.inject(CartStorageService).load('u1');
+      expect(stored?.lines[0]).toMatchObject({ saleUnit: 'box', quantity: 1 });
+    });
+  });
+
+  /** Cupones de descuento (SPEC 47). */
+  describe('cupones', () => {
+    function cupon(overrides: Partial<CouponDto> = {}): CouponDto {
+      return {
+        id: 'VENTA20',
+        code: 'VENTA20',
+        name: 'Veinte de descuento',
+        scope: 'sale',
+        productIds: [],
+        discount: { type: 'amount', amount: 20 },
+        minPurchase: null,
+        startsAt: new Date(Date.now() - 86_400_000).toISOString(),
+        endsAt: null,
+        maxUses: null,
+        usedCount: 0,
+        isActive: true,
+        ...overrides,
+      };
+    }
+
+    async function aplicar(code: string): Promise<void> {
+      component.openCouponInput();
+      component.onCouponCodeInput(code);
+      await component.applyCoupon();
+    }
+
+    it('un código que no está en la caja lo dice así', async () => {
+      component.addToCart(product(), 2);
+      await aplicar('nada');
+
+      expect(component.appliedCoupon()).toBeNull();
+      expect(notifyError).toHaveBeenCalledWith('Cupón no encontrado — sincroniza o revisa el código');
+    });
+
+    it('el código se escribe en mayúsculas', () => {
+      component.onCouponCodeInput('venta20');
+      expect(component.couponCode()).toBe('VENTA20');
+    });
+
+    it('cupón de venta: baja el total, va al descuento total y se quita con ×', async () => {
+      cupones['VENTA20'] = cupon();
+      component.addToCart(product(), 2);
+      await aplicar('venta20');
+
+      expect(component.appliedCoupon()?.code).toBe('VENTA20');
+      expect(component.couponSaleDiscount()).toBe(20);
+      expect(component.discountTotal()).toBe(20);
+      expect(component.total()).toBe(80);
+      fixture.detectChanges();
+      expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="coupon-chip"]')?.textContent).toContain(
+        'Cupón VENTA20',
+      );
+
+      component.removeCoupon();
+      expect(component.total()).toBe(100);
+    });
+
+    it('cupón de producto: descuenta la línea, deshabilita el manual y no toca la línea en promoción', async () => {
+      cupones['PARA10'] = cupon({
+        id: 'PARA10',
+        code: 'PARA10',
+        scope: 'product',
+        productIds: ['p1', 'p2'],
+        discount: { type: 'percent', percent: 10 },
+      });
+      TestBed.inject(PromoService).setPromotions([
+        {
+          id: 'promo-2',
+          name: '2x1 ibuprofeno',
+          rule: { type: 'nxm', buy: 2, pay: 1 },
+          productIds: ['p2'],
+          startsAt: new Date(Date.now() - 60_000).toISOString(),
+          endsAt: null,
+          isActive: true,
+        },
+      ]);
+      component.addToCart(product(), 2);
+      component.updateLineDiscount('product:p1', 10);
+      component.addToCart(product({ id: 'p2', name: 'Ibuprofeno' }), 2);
+      await aplicar('PARA10');
+
+      const [para, ibu] = component.cart();
+      expect(component.couponOf(para)).toEqual({ code: 'PARA10', discountAmount: 10 });
+      expect(para.discountAmount).toBe(10);
+      expect(component.couponOf(ibu)).toBeNull();
+      expect(component.couponSkipped(ibu)).toBe(true);
+
+      // El manual no se puede capturar en la línea con cupón.
+      component.updateLineDiscount('product:p1', 5);
+      expect(component.cart()[0].discountAmount).toBe(10);
+
+      // Al quitar el cupón vuelve el manual guardado.
+      component.removeCoupon();
+      expect(component.cart()[0].discountAmount).toBe(10);
+      expect(component.couponOf(component.cart()[0])).toBeNull();
+    });
+
+    it('si parece agotado avisa pero lo aplica: decide el servidor', async () => {
+      cupones['VENTA20'] = cupon({ maxUses: 3, usedCount: 3 });
+      component.addToCart(product(), 2);
+      await aplicar('VENTA20');
+
+      expect(component.appliedCoupon()).not.toBeNull();
+      expect(notifyWarn).toHaveBeenCalledWith('Este cupón puede estar agotado; el servidor lo revisará', 'Cupón VENTA20');
+    });
+
+    it('sin alcanzar el mínimo no se aplica', async () => {
+      cupones['VENTA20'] = cupon({ minPurchase: 500 });
+      component.addToCart(product(), 2);
+      await aplicar('VENTA20');
+
+      expect(component.appliedCoupon()).toBeNull();
+      expect(notifyError).toHaveBeenCalledWith('El cupón VENTA20 pide una compra mínima de $500.00.');
+    });
+
+    it('Esc en el campo del cupón lo cierra sin ofrecer vaciar el ticket', () => {
+      component.addToCart(product(), 1);
+      component.openCouponInput();
+      const confirmSpy = vi.spyOn(window, 'confirm');
+      const event = new KeyboardEvent('keydown', { key: 'Escape' });
+      const stop = vi.spyOn(event, 'stopPropagation');
+
+      component.onCouponKeydown(event);
+
+      expect(stop).toHaveBeenCalled();
+      expect(component.couponInputVisible()).toBe(false);
+      expect(confirmSpy).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
+
+    it('un cupón que vence con el ticket abierto se quita al cobrar y avisa el total nuevo', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(new Date('2026-11-03T10:00:00Z'));
+        cupones['VENTA20'] = cupon({ startsAt: '2026-11-01T00:00:00Z', endsAt: '2026-11-03T10:05:00Z' });
+        component.addToCart(product(), 2);
+        await aplicar('VENTA20');
+        expect(component.total()).toBe(80);
+
+        vi.setSystemTime(new Date('2026-11-03T10:10:00Z'));
+        component.openCheckout();
+
+        expect(component.checkoutVisible()).toBe(false);
+        expect(component.appliedCoupon()).toBeNull();
+        expect(component.total()).toBe(100);
+        expect(notifyWarn).toHaveBeenCalledWith(
+          'El cupón VENTA20 ya venció. Se quitó del ticket. Nuevo total $100.00.',
+          'Cupón retirado',
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('el cobro que encuentra el cupón vencido no registra nada: se quita y se recalcula', async () => {
+      cupones['VENTA20'] = cupon();
+      component.addToCart(product(), 2);
+      await aplicar('VENTA20');
+      component.openCheckout();
+
+      component.onCouponExpired('El cupón VENTA20 ya venció.');
+
+      expect(component.checkoutVisible()).toBe(false);
+      expect(component.appliedCoupon()).toBeNull();
+      expect(component.total()).toBe(100);
+    });
+
+    it('el cupón viaja con el ticket autoguardado y con la venta en pausa', async () => {
+      cupones['VENTA20'] = cupon();
+      component.addToCart(product(), 2);
+      await aplicar('VENTA20');
+      TestBed.tick();
+      expect(TestBed.inject(CartStorageService).load('u1')?.couponCode).toBe('VENTA20');
+
+      component.holdSale();
+      expect(component.appliedCoupon()).toBeNull();
+      expect(component.heldSales()[0].couponCode).toBe('VENTA20');
+
+      component.resumeHeldSale(component.heldSales()[0].id);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(component.appliedCoupon()?.code).toBe('VENTA20');
+      expect(component.total()).toBe(80);
+    });
+
+    it('al completar la venta el ticket nuevo arranca sin cupón', async () => {
+      cupones['VENTA20'] = cupon();
+      component.addToCart(product(), 2);
+      await aplicar('VENTA20');
+
+      component.onSaleCompleted({ id: 'v1', folio: 'V-1', items: [] } as unknown as SaleModel);
+
+      expect(component.appliedCoupon()).toBeNull();
+      expect(component.couponSaleDiscount()).toBe(0);
     });
   });
 });

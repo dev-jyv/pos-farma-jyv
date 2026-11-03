@@ -28,24 +28,34 @@ import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import {
   CartLine,
+  CartLineCoupon,
   CartLinePromotion,
+  CartProductLine,
   CartServiceLine,
+  CouponDto,
   HeldSale,
   PharmacyService,
   ServiceProvider,
   Product,
   ProductBatch,
   Sale as SaleModel,
+  SaleCoupon,
   SaleItem,
+  hasBoxSale,
   isSaleProductItem,
 } from '../../../shared/models';
 import {
+  fullBoxes,
+  isBoxLine,
   isProductLine,
   lineGross,
   lineKey,
   lineMaxQuantity,
   lineName,
+  linePieces,
+  linePiecesPerUnit,
   lineUnitPrice,
+  stockLabel,
 } from '../../../shared/utils/cart-line';
 import { getControlledRule } from '../../../shared/utils/controlled';
 import { roundMoney } from '../../../shared/utils/money';
@@ -56,6 +66,12 @@ import { HeldSaleStorageService } from '../services/held-sale-storage.service';
 import { ProductService } from '../services/product.service';
 import { ServiceCatalogService } from '../services/service-catalog.service';
 import { PromoService, PromotionStepHint } from '../services/promo.service';
+import {
+  COUPON_MAYBE_EXHAUSTED_MESSAGE,
+  COUPON_NOT_FOUND_MESSAGE,
+  CouponIssue,
+  CouponService,
+} from '../services/coupon.service';
 import { SaleService } from '../services/sale.service';
 import { Checkout } from '../checkout/checkout';
 import { CashSessionDialog } from '../cash-session/cash-session-dialog';
@@ -90,6 +106,25 @@ function startOfToday(): Date {
 
 function daysUntil(date: Date): number {
   return Math.ceil((date.getTime() - startOfToday().getTime()) / 86_400_000);
+}
+
+/** Unidad que el cajero elige al agregar o en la línea (SPEC 46). */
+export type SaleUnitChoice = 'piece' | 'box';
+
+/**
+ * Copia del producto para el carrito, sin `saleUnit`: esa marca solo dice que el
+ * código escaneado fue el de la caja, la unidad de la línea vive en la línea.
+ */
+function cartProduct(product: Product): Product {
+  if (product.saleUnit === undefined) {
+    return product;
+  }
+  const { saleUnit: _unidad, ...rest } = product;
+  return rest;
+}
+
+function money(amount: number): string {
+  return amount.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -145,16 +180,39 @@ export class Sale {
   private readonly promoService = inject(PromoService);
   private readonly heldStorage = inject(HeldSaleStorageService);
   private readonly cartStorage = inject(CartStorageService);
+  private readonly couponService = inject(CouponService);
   private readonly search$ = new Subject<string>();
 
   private readonly searchInput = viewChild<ElementRef<HTMLInputElement>>('searchInput');
   private readonly lastQtyInput = viewChild<ElementRef<HTMLInputElement>>('lastQtyInput');
+  private readonly couponInput = viewChild<ElementRef<HTMLInputElement>>('couponInput');
 
   readonly searchTerm = signal('');
   readonly results = signal<Product[]>([]);
   readonly cart = signal<CartLine[]>([]);
   readonly heldSales = signal<HeldSale[]>([]);
   readonly manualDiscounts = signal<Record<string, number>>({});
+
+  /* ── Cupón (SPEC 47) ──────────────────────────────────────────────────── */
+  /** Cupón aplicado al ticket (copia del SQLite local). */
+  readonly appliedCoupon = signal<CouponDto | null>(null);
+  /** Descuento de un cupón de venta; va como `saleDiscountAmount`. */
+  readonly couponSaleDiscount = signal(0);
+  /** Lo que descuenta el cupón en este ticket (producto o venta). */
+  readonly couponTotal = signal(0);
+  /** Por qué el cupón aplicado no descuenta ahora (se quita al cobrar). */
+  readonly couponIssue = signal<CouponIssue | null>(null);
+  readonly couponInputVisible = signal(false);
+  readonly couponCode = signal('');
+  readonly couponBusy = signal(false);
+  /** Resumen que viaja a la venta local y al ticket. */
+  readonly couponSummary = computed<SaleCoupon | null>(() => {
+    const coupon = this.appliedCoupon();
+    if (!coupon || this.couponTotal() <= 0) {
+      return null;
+    }
+    return { code: coupon.code, name: coupon.name, scope: coupon.scope, discountAmount: this.couponTotal() };
+  });
   readonly checkoutVisible = signal(false);
   readonly cashSessionDialogVisible = signal(false);
   /**
@@ -183,8 +241,13 @@ export class Sale {
   readonly subtotal = computed(() =>
     roundMoney(this.cart().reduce((sum, line) => sum + lineUnitPrice(line) * line.quantity, 0)),
   );
-  readonly discountTotal = computed(() =>
+  /** Descuentos de línea: promoción, manual y cupón de producto. */
+  readonly lineDiscountTotal = computed(() =>
     roundMoney(this.cart().reduce((sum, line) => sum + line.discountAmount, 0)),
+  );
+  /** Todos los descuentos, incluido el cupón de venta (`saleDiscountAmount`). */
+  readonly discountTotal = computed(() =>
+    roundMoney(this.lineDiscountTotal() + this.couponSaleDiscount()),
   );
   readonly total = computed(() => Math.max(0, roundMoney(this.subtotal() - this.discountTotal())));
   readonly itemCount = computed(() => this.cart().reduce((sum, line) => sum + line.quantity, 0));
@@ -218,7 +281,6 @@ export class Sale {
   readonly keyOf = lineKey;
   readonly nameOf = lineName;
   readonly unitPriceOf = lineUnitPrice;
-  readonly maxQuantityOf = lineMaxQuantity;
   readonly grossOf = lineGross;
   readonly isProduct = isProductLine;
   /**
@@ -286,7 +348,18 @@ export class Sale {
     effect(() => {
       const lines = this.cart();
       const uid = this.authService.user()?.uid ?? '';
-      this.cartStorage.save(uid, lines, this.manualDiscounts());
+      this.cartStorage.save(uid, lines, this.manualDiscounts(), this.appliedCoupon()?.code ?? null);
+    });
+
+    // Bajó un pull de cupones: se relee el aplicado. Una baja o un cambio de
+    // vigencia que llega con el ticket abierto se nota antes de cobrar. Igual
+    // que con las promociones, nunca con el cobro abierto.
+    effect(() => {
+      this.couponService.version();
+      if (this.checkoutVisible()) {
+        return;
+      }
+      untracked(() => void this.refreshAppliedCoupon());
     });
 
     // El ticket solo se recalculaba al tocarlo: una promo que llegaba con el
@@ -326,6 +399,271 @@ export class Sale {
     return isProductLine(line) ? line.promotion ?? null : null;
   }
 
+  /** Parte del cupón de producto en la línea (SPEC 47). */
+  couponOf(line: CartLine): CartLineCoupon | null {
+    return isProductLine(line) ? line.coupon ?? null : null;
+  }
+
+  /** La línea es de un producto del cupón pero ya trae promoción: no lo recibe. */
+  couponSkipped(line: CartLine): boolean {
+    return this.couponService.skippedForPromotion(line, this.appliedCoupon());
+  }
+
+  /* ── Venta por caja (SPEC 46) ─────────────────────────────────────────── */
+
+  readonly hasBox = hasBoxSale;
+  readonly isBox = isBoxLine;
+  readonly stockLabelOf = stockLabel;
+  readonly piecesPerUnitOf = linePiecesPerUnit;
+
+  /**
+   * Piezas del producto que ya apartan **otras** líneas del ticket (la caja si
+   * se mira la pieza, y al revés). Las dos comparten las mismas existencias.
+   */
+  private piecesInOtherLines(productId: string, exceptKey: string | null): number {
+    return this.cart()
+      .filter((line) => isProductLine(line) && line.product.id === productId && lineKey(line) !== exceptKey)
+      .reduce((sum, line) => sum + linePieces(line), 0);
+  }
+
+  /**
+   * Tope de la línea en su unidad, descontando lo que aparta la otra unidad del
+   * mismo producto. `null` en un servicio.
+   */
+  maxFor(line: CartLine): number | null {
+    const max = lineMaxQuantity(line);
+    if (max === null || !isProductLine(line)) {
+      return max;
+    }
+    const libres = Math.max(0, line.product.stock - this.piecesInOtherLines(line.product.id, lineKey(line)));
+    return Math.floor(libres / linePiecesPerUnit(line));
+  }
+
+  /**
+   * Cambia la unidad de una línea (pieza ↔ caja). Pasar 25 piezas a caja deja
+   * las cajas completas que caben (2 de 10); pasar 2 cajas a pieza deja 20
+   * piezas. Si ya había una línea de la otra unidad, se suman. El descuento
+   * manual no se traslada: era un importe sobre otro precio.
+   */
+  switchLineUnit(key: string, unit: SaleUnitChoice): void {
+    const line = this.cart().find((item) => lineKey(item) === key);
+    if (!line || !isProductLine(line)) {
+      return;
+    }
+    const toBox = unit === 'box';
+    if (toBox === isBoxLine(line) || (toBox && !hasBoxSale(line.product))) {
+      return;
+    }
+    const perBox = line.product.boxQuantity ?? 1;
+    const quantity = toBox ? Math.max(1, Math.floor(line.quantity / perBox)) : line.quantity * perBox;
+    const base: CartProductLine = {
+      kind: 'product',
+      product: line.product,
+      quantity,
+      discountAmount: 0,
+      ...(toBox ? { saleUnit: 'box' as const } : {}),
+    };
+    const targetKey = lineKey(base);
+    const existing = this.cart().find((item) => lineKey(item) === targetKey);
+    const merged = { ...base, quantity: quantity + (existing?.quantity ?? 0) };
+    const others = this.cart()
+      .filter((item) => isProductLine(item) && item.product.id === line.product.id)
+      .filter((item) => lineKey(item) !== key && lineKey(item) !== targetKey)
+      .reduce((sum, item) => sum + linePieces(item), 0);
+    if (linePieces(merged) + others > line.product.stock) {
+      this.sounds.error();
+      this.notifications.error(
+        toBox
+          ? `No hay cajas completas suficientes: hay ${stockLabel(line.product)}.`
+          : 'Cantidad supera el stock disponible.',
+      );
+      return;
+    }
+    this.manualDiscounts.update((map) => {
+      const next = { ...map };
+      delete next[key];
+      return next;
+    });
+    this.setCart(
+      this.cart()
+        .filter((item) => lineKey(item) !== targetKey)
+        .map((item) => (lineKey(item) === key ? merged : item)),
+    );
+    this.recortarDescuentoAlTope(targetKey);
+  }
+
+  /* ── Cupón (SPEC 47) ──────────────────────────────────────────────────── */
+
+  openCouponInput(): void {
+    if (this.appliedCoupon()) {
+      return;
+    }
+    this.couponInputVisible.set(true);
+    queueMicrotask(() => this.couponInput()?.nativeElement.focus());
+  }
+
+  closeCouponInput(): void {
+    this.couponInputVisible.set(false);
+    this.couponCode.set('');
+    queueMicrotask(() => this.searchInput()?.nativeElement.focus());
+  }
+
+  onCouponCodeInput(value: string): void {
+    // Mayúsculas al teclear: el código se guarda normalizado y así lo ve el cajero.
+    this.couponCode.set(value.toUpperCase());
+  }
+
+  onCouponKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      // Sin esto el `Esc` sube al documento y `onEscape` ofrece vaciar el ticket.
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeCouponInput();
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.applyCoupon();
+    }
+  }
+
+  /**
+   * Busca el código en la SQLite, lo valida contra el ticket con el reloj de la
+   * caja y, si descuenta algo, lo aplica. Si la foto local dice que ya se
+   * usaron todos, avisa y aplica igual: el servidor decide (SPEC 47).
+   */
+  async applyCoupon(): Promise<void> {
+    const raw = this.couponCode().trim();
+    if (!raw || this.couponBusy()) {
+      return;
+    }
+    this.couponBusy.set(true);
+    try {
+      const coupon = await this.couponService.findByCode(raw);
+      if (!coupon) {
+        this.sounds.error();
+        this.notifications.error(COUPON_NOT_FOUND_MESSAGE);
+        return;
+      }
+      const prueba = this.couponService.apply(
+        this.promoService.apply(this.cart(), this.manualDiscounts()),
+        coupon,
+      );
+      if (prueba.issue) {
+        this.sounds.error();
+        this.notifications.error(prueba.issue.message);
+        return;
+      }
+      this.appliedCoupon.set(coupon);
+      this.setCart(this.cart());
+      this.couponInputVisible.set(false);
+      this.couponCode.set('');
+      this.sounds.ok();
+      if (this.couponService.maybeExhausted(coupon)) {
+        this.notifications.warn(COUPON_MAYBE_EXHAUSTED_MESSAGE, `Cupón ${coupon.code}`);
+      } else {
+        this.notifications.success(`Cupón ${coupon.code} aplicado: −$${money(this.couponTotal())}.`);
+      }
+      queueMicrotask(() => this.searchInput()?.nativeElement.focus());
+    } finally {
+      this.couponBusy.set(false);
+    }
+  }
+
+  removeCoupon(): void {
+    if (!this.appliedCoupon()) {
+      return;
+    }
+    this.appliedCoupon.set(null);
+    // Las líneas recuperan su descuento manual guardado.
+    this.setCart(this.cart());
+  }
+
+  /**
+   * Quita el cupón porque dejó de valer (venció, se dio de baja o ya no
+   * descuenta nada en este ticket), recalcula y avisa el total nuevo.
+   */
+  private dropCoupon(reason: string): void {
+    this.appliedCoupon.set(null);
+    this.setCart(this.cart());
+    this.notifications.warn(
+      `${reason} Se quitó del ticket. Nuevo total $${money(this.total())}.`,
+      'Cupón retirado',
+    );
+  }
+
+  /**
+   * Antes de cobrar: un cupón que ya no vale con el reloj de la caja (o que ya
+   * no descuenta nada) se quita en vez de mandar una venta que el servidor
+   * marcaría para revisión. Devuelve `false` si lo quitó.
+   */
+  private revalidateCoupon(): boolean {
+    if (!this.appliedCoupon()) {
+      return true;
+    }
+    this.setCart(this.cart());
+    const issue = this.couponIssue();
+    if (issue) {
+      this.dropCoupon(issue.message);
+      return false;
+    }
+    return true;
+  }
+
+  /** Relee de la SQLite el cupón aplicado tras un pull (puede venir dado de baja). */
+  private async refreshAppliedCoupon(): Promise<void> {
+    const applied = this.appliedCoupon();
+    if (!applied) {
+      return;
+    }
+    const fresh = await this.couponService.findByCode(applied.code);
+    if (this.appliedCoupon()?.code !== applied.code) {
+      return;
+    }
+    if (!fresh) {
+      this.dropCoupon(`El cupón ${applied.code} ya no está en la caja.`);
+      return;
+    }
+    this.appliedCoupon.set(fresh);
+    this.setCart(this.cart());
+    const issue = this.couponService.windowIssue(fresh);
+    if (issue) {
+      this.dropCoupon(issue.message);
+    }
+  }
+
+  /**
+   * Vuelve a poner el cupón de un ticket recuperado o de una venta en espera.
+   * Se busca otra vez en la SQLite: entre guardarlo y retomarlo pudo vencer.
+   */
+  private async restoreCoupon(code: string | null | undefined): Promise<void> {
+    if (!code) {
+      return;
+    }
+    const coupon = await this.couponService.findByCode(code);
+    if (!coupon) {
+      this.notifications.warn(`El cupón ${code} ya no está en la caja; el ticket sigue sin él.`, 'Cupón');
+      return;
+    }
+    const issue = this.couponService.windowIssue(coupon);
+    if (issue) {
+      this.notifications.warn(`${issue.message} El ticket sigue sin él.`, 'Cupón');
+      return;
+    }
+    this.appliedCoupon.set(coupon);
+    this.setCart(this.cart());
+  }
+
+  /**
+   * Cobro rechazado porque el cupón venció con el diálogo abierto: no se
+   * registró nada, así que se quita, se recalcula y se pide volver a cobrar.
+   */
+  onCouponExpired(message: string): void {
+    this.checkoutVisible.set(false);
+    this.dropCoupon(message);
+  }
+
   /**
    * "Lleva 1 más" bajo la partida. No se ofrece lo que no hay en existencia: la
    * sugerencia se volvería un error de stock al aceptarla.
@@ -335,7 +673,7 @@ export class Sale {
     if (!hint) {
       return null;
     }
-    const max = lineMaxQuantity(line);
+    const max = this.maxFor(line);
     return max !== null && line.quantity + hint.extraQty > max ? null : hint;
   }
 
@@ -406,8 +744,19 @@ export class Sale {
     if (!window.confirm('¿Vaciar el ticket actual?')) {
       return;
     }
+    this.resetTicket();
+  }
+
+  /** Ticket en blanco: líneas, descuentos manuales y cupón. */
+  private resetTicket(): void {
     this.cart.set([]);
     this.manualDiscounts.set({});
+    this.appliedCoupon.set(null);
+    this.couponSaleDiscount.set(0);
+    this.couponTotal.set(0);
+    this.couponIssue.set(null);
+    this.couponInputVisible.set(false);
+    this.couponCode.set('');
   }
 
   holdSaleFromHotkey(event: Event): void {
@@ -577,6 +926,19 @@ export class Sale {
           return;
         }
       }
+      // Código de la caja (SPEC 46): entra como caja. Va después del de la
+      // pieza y del SKU, que siempre ganan.
+      if (!exacto) {
+        const caja = products.find(
+          (product) => product.boxBarcode?.toLowerCase() === normalized && hasBoxSale(product),
+        );
+        if (caja) {
+          this.addToCart(caja, qty, true, 'box');
+          this.clearSearch();
+          queueMicrotask(() => this.searchInput()?.nativeElement.focus());
+          return;
+        }
+      }
       const scanned = exacto ?? (products.length === 1 ? products[0] : null);
 
       if (!scanned) {
@@ -613,7 +975,11 @@ export class Sale {
     this.search$.next('');
   }
 
-  addToCart(product: Product, qty = 1, fromScanner = false): void {
+  /**
+   * Agrega al ticket. `unit: 'box'` agrega cajas completas (SPEC 46): `qty`
+   * cuenta cajas y el stock se valida en piezas (`cajas × boxQuantity`).
+   */
+  addToCart(product: Product, qty = 1, fromScanner = false, unit: SaleUnitChoice = 'piece'): void {
     if (!this.ensureShiftOpen()) {
       return;
     }
@@ -623,11 +989,30 @@ export class Sale {
       this.openSubstitutes(product, 'Producto sin stock disponible.');
       return;
     }
+    const asBox = unit === 'box' && hasBoxSale(product);
+    if (unit === 'box' && !asBox) {
+      this.sounds.error();
+      this.notifications.error(`${product.name} no se vende por caja.`);
+      return;
+    }
+    if (asBox && fullBoxes(product) < 1) {
+      this.sounds.error();
+      this.notifications.error(
+        `No hay una caja completa de ${product.name}: hay ${stockLabel(product)}.`,
+      );
+      return;
+    }
 
     this.batchService.listByProduct(product.id).subscribe({
-      next: (batches) => this.commitAdd(product, addQty, batches, fromScanner),
-      error: () => this.commitAdd(product, addQty, null, fromScanner),
+      next: (batches) => this.commitAdd(product, addQty, batches, fromScanner, asBox),
+      error: () => this.commitAdd(product, addQty, null, fromScanner, asBox),
     });
+  }
+
+  /** Botón "Caja (N)" del resultado de búsqueda. */
+  addBoxToCart(product: Product, event?: Event): void {
+    event?.stopPropagation();
+    this.addToCart(product, 1, false, 'box');
   }
 
   selectSubstitute(product: Product): void {
@@ -658,12 +1043,17 @@ export class Sale {
     if (!line) {
       return;
     }
-    // Un servicio no tiene existencias que agotar: `lineMaxQuantity` devuelve
-    // `null` y la cantidad no se limita.
-    const max = lineMaxQuantity(line);
+    // Un servicio no tiene existencias que agotar: `maxFor` devuelve `null` y
+    // la cantidad no se limita. Una caja se limita a las cajas completas que
+    // quedan después de lo que aparta la línea por pieza (y al revés).
+    const max = this.maxFor(line);
     if (max !== null && quantity > max) {
       this.sounds.error();
-      this.notifications.error('Cantidad supera el stock disponible.');
+      this.notifications.error(
+        isBoxLine(line)
+          ? `No hay cajas completas suficientes: hay ${stockLabel(line.product)}.`
+          : 'Cantidad supera el stock disponible.',
+      );
       // El campo dispara el cambio con cada tecla: al teclear «20» con 19 en
       // existencia, el «2» entra y el «0» se rechaza. El modelo sigue valiendo 2,
       // así que Angular no reescribe el campo y la pantalla mostraba 20 mientras
@@ -841,7 +1231,8 @@ export class Sale {
       return;
     }
     const line = this.cart().find((item) => lineKey(item) === productId);
-    if (!line) {
+    // Una línea con cupón de producto no lleva manual (SPEC 47): no hay qué recortar.
+    if (!line || this.couponOf(line)) {
       return;
     }
     // El tope es para el descuento **manual** y se mide sobre lo que queda
@@ -866,9 +1257,9 @@ export class Sale {
     if (!line) {
       return;
     }
-    // El campo se deshabilita con promo; esto cubre atajos o un cambio que
-    // llegue por otro camino.
-    if (this.promotionOf(line)) {
+    // El campo se deshabilita con promo o con cupón de producto; esto cubre
+    // atajos o un cambio que llegue por otro camino.
+    if (this.promotionOf(line) || this.couponOf(line)) {
       if (inputEl) {
         inputEl.value = String(line.discountAmount);
       }
@@ -918,14 +1309,14 @@ export class Sale {
       lines: this.cart(),
       heldAt: new Date(),
       manualDiscounts: { ...this.manualDiscounts() },
+      couponCode: this.appliedCoupon()?.code ?? null,
     };
     this.heldSales.update((list) => {
       const next = [...list, held];
       this.persistHeld(next);
       return next;
     });
-    this.cart.set([]);
-    this.manualDiscounts.set({});
+    this.resetTicket();
   }
 
   resumeHeldSale(id: string): void {
@@ -954,6 +1345,7 @@ export class Sale {
       this.recortarDescuentoAlTope(lineKey(line));
     }
     this.refreshStaleProducts();
+    void this.restoreCoupon(held.couponCode);
     this.heldSales.update((list) => {
       const next = list.filter((item) => item.id !== id);
       this.persistHeld(next);
@@ -994,6 +1386,31 @@ export class Sale {
           const name = line.product.name;
           if (current.stock <= 0) {
             cambios.push(`${name}: sin existencias, se quitó del ticket`);
+            continue;
+          }
+          if (isBoxLine(line)) {
+            // Caja (SPEC 46): el producto pudo dejar de venderse por caja, o ya
+            // no alcanzar para una completa.
+            if (!hasBoxSale(current)) {
+              cambios.push(`${name}: ya no se vende por caja, se quitó del ticket`);
+              continue;
+            }
+            if (fullBoxes(current) < 1) {
+              cambios.push(`${name}: no hay una caja completa, se quitó del ticket`);
+              continue;
+            }
+            let boxes = line.quantity;
+            if (boxes > fullBoxes(current)) {
+              boxes = fullBoxes(current);
+              cambios.push(`${name}: solo hay ${stockLabel(current)}`);
+            }
+            if (current.boxPrice !== line.product.boxPrice) {
+              cambios.push(`${name}: la caja ahora cuesta $${(current.boxPrice ?? 0).toFixed(2)}`);
+            }
+            if (current.boxQuantity !== line.product.boxQuantity) {
+              cambios.push(`${name}: la caja ahora trae ${current.boxQuantity} piezas`);
+            }
+            lines.push({ ...line, product: current, quantity: boxes });
             continue;
           }
           let quantity = line.quantity;
@@ -1038,13 +1455,17 @@ export class Sale {
     // Una promo pudo vencer (o empezar) con el ticket abierto: se cobra con la
     // vigencia de este momento.
     this.repriceCart();
+    // Igual con el cupón: si ya no vale, se quita y el cajero ve el total nuevo
+    // antes de cobrar (vuelve a pulsar F9).
+    if (!this.revalidateCoupon()) {
+      return;
+    }
     this.checkoutVisible.set(true);
   }
 
   onSaleCompleted(sale: SaleModel): void {
     this.lastSale.set(sale);
-    this.cart.set([]);
-    this.manualDiscounts.set({});
+    this.resetTicket();
     this.checkoutVisible.set(false);
     this.adjustResultsStock(sale.items, -1);
     this.refreshResultsAfterStockChange(sale);
@@ -1169,7 +1590,9 @@ export class Sale {
     addQty: number,
     batches: ProductBatch[] | null,
     fromScanner: boolean,
+    asBox = false,
   ): void {
+    product = cartProduct(product);
     let sellableQty = product.stock;
     if (batches) {
       const sellable = this.sellableBatches(batches);
@@ -1189,26 +1612,41 @@ export class Sale {
       }
     }
 
-    const existing = this.cart().find(
-      (line) => isProductLine(line) && line.product.id === product.id,
-    );
+    // Pieza y caja del mismo producto son dos líneas (SPEC 46) que comparten
+    // existencias: el tope se mide en piezas sobre las dos.
+    const nueva: CartProductLine = {
+      kind: 'product',
+      product,
+      quantity: addQty,
+      discountAmount: 0,
+      ...(asBox ? { saleUnit: 'box' as const } : {}),
+    };
+    const key = lineKey(nueva);
+    const perUnit = linePiecesPerUnit(nueva);
+    const existing = this.cart().find((line) => lineKey(line) === key);
     const nextQty = (existing?.quantity ?? 0) + addQty;
-    if (nextQty > sellableQty || nextQty > product.stock) {
+    const piezas = nextQty * perUnit + this.piecesInOtherLines(product.id, key);
+    if (piezas > sellableQty || piezas > product.stock) {
       this.sounds.error();
-      this.notifications.error('Sin stock suficiente para agregar otra unidad.');
+      this.notifications.error(
+        asBox
+          ? `Sin stock suficiente para otra caja completa: hay ${stockLabel(product)}.`
+          : 'Sin stock suficiente para agregar otra unidad.',
+      );
       return;
     }
 
+    const yaEnTicket = this.cart().some(
+      (line) => isProductLine(line) && line.product.id === product.id,
+    );
     const nextLines: CartLine[] = existing
-      ? this.cart().map((line) =>
-          isProductLine(line) && line.product.id === product.id
-            ? { ...line, quantity: nextQty }
-            : line,
-        )
-      : [...this.cart(), { kind: 'product', product, quantity: addQty, discountAmount: 0 }];
+      ? this.cart().map((line) => (lineKey(line) === key ? { ...line, quantity: nextQty } : line))
+      : [...this.cart(), nueva];
 
     this.setCart(nextLines);
-    if (!existing) {
+    // El aviso de receta, una vez por producto: la caja del mismo medicamento
+    // no lo repite.
+    if (!yaEnTicket) {
       this.warnIfControlled(product);
     }
     if (fromScanner) {
@@ -1234,8 +1672,21 @@ export class Sale {
     this.notifications.error(`${product.name}: ${rule.label} — requiere receta médica.${extra}`);
   }
 
+  /**
+   * Recalcula el ticket: primero promociones y descuento manual, después el
+   * cupón (que se calcula sobre lo que ya dejaron las promociones y nunca toca
+   * una línea en promoción).
+   */
   private setCart(lines: CartLine[]): void {
-    this.cart.set(this.promoService.apply(lines, this.manualDiscounts()));
+    const coupon = this.appliedCoupon();
+    const pricing = this.couponService.apply(
+      this.promoService.apply(lines, this.manualDiscounts()),
+      coupon,
+    );
+    this.cart.set(pricing.lines);
+    this.couponSaleDiscount.set(pricing.saleDiscount);
+    this.couponTotal.set(pricing.total);
+    this.couponIssue.set(coupon ? pricing.issue : null);
   }
 
   private openSubstitutes(product: Product, message: string): void {
@@ -1272,6 +1723,7 @@ export class Sale {
     this.manualDiscounts.set(stored.manualDiscounts);
     this.setCart(stored.lines);
     this.refreshStaleProducts();
+    void this.restoreCoupon(stored.couponCode);
     this.notifications.success(
       `Se recuperó el ticket en curso (${stored.lines.length} ${stored.lines.length === 1 ? 'partida' : 'partidas'}).`,
     );
