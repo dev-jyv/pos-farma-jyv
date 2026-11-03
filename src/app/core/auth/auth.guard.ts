@@ -5,7 +5,13 @@ import { catchError, from, map, of, switchMap } from 'rxjs';
 
 import { FIREBASE_AUTH } from '../firebase/firebase.providers';
 import { NotificationService } from '../notifications/notification.service';
-import { PermissionArea, PermissionLevel, hasPermission } from '../../shared/models';
+import {
+  POS_BLOCKED_ROLE_MESSAGE,
+  PermissionArea,
+  PermissionLevel,
+  hasPermission,
+  isPosBlockedRole,
+} from '../../shared/models';
 import { AuthService } from './auth.service';
 
 export const authGuard: CanActivateFn = () => {
@@ -21,6 +27,7 @@ export const guestGuard: CanActivateFn = () => {
   const auth = inject(FIREBASE_AUTH);
   const authService = inject(AuthService);
   const router = inject(Router);
+  const notifications = inject(NotificationService);
 
   return from(auth.authStateReady()).pipe(
     switchMap(() => {
@@ -30,6 +37,11 @@ export const guestGuard: CanActivateFn = () => {
       return authService.fetchRole().pipe(
         switchMap((role) => {
           if (!role) {
+            return from(signOut(auth)).pipe(map(() => true as const));
+          }
+          if (isPosBlockedRole(role)) {
+            // SPEC 45: una sesión persistida del contador no abre la caja.
+            notifications.error(POS_BLOCKED_ROLE_MESSAGE);
             return from(signOut(auth)).pipe(map(() => true as const));
           }
           return of(router.createUrlTree(['/pos']));

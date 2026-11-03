@@ -12,6 +12,22 @@ export function parseStaffRole(value: unknown): StaffRole | null {
 }
 
 /**
+ * Roles que existen en el backend pero no operan la caja (SPEC 45). El contador
+ * (`accountant`) solo consulta y descarga reportes desde el panel: aunque su rol
+ * no traiga `pos:write`, dejarlo entrar lo ponía frente a una caja que no puede
+ * usar. Se bloquea por slug porque es un rol de sistema, no por permisos: un rol
+ * personalizado sin `pos` sigue entrando como hoy (lo frena cada pantalla).
+ */
+export const POS_BLOCKED_ROLES: readonly StaffRole[] = ['accountant'];
+
+export const POS_BLOCKED_ROLE_MESSAGE =
+  'Tu usuario es de consulta de reportes; entra desde el panel.';
+
+export function isPosBlockedRole(role: StaffRole | null | undefined): boolean {
+  return !!role && POS_BLOCKED_ROLES.includes(role);
+}
+
+/**
  * Áreas y niveles de permiso del backend (`functions/src/constants/permissions.ts`).
  * El rol ya no es un enum: es un documento de `roles` con su lista de permisos, así
  * que la UI debe preguntar por permiso y no por slug.
