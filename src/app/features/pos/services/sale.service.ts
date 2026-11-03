@@ -28,6 +28,7 @@ import {
   PaymentMethod,
   Sale,
   SaleBilling,
+  SaleCoupon,
   SaleItem,
   SalePrescription,
 } from '../../../shared/models';
@@ -38,18 +39,22 @@ import {
 import { LocalSaleInput, PendingSale, SaleMovement } from '../../../core/electron/window.d';
 import {
   commissionTotalOf,
+  isBoxLine,
   isProductLine,
   isServiceLine,
   lineCommission,
   lineCommissionRate,
   lineGross,
+  linePieces,
+  linePiecesPerUnit,
   lineTaxable,
   lineUnitPrice,
   pharmacyTotalOf,
   servicesTotalOf,
   splitCash,
 } from '../../../shared/utils/cart-line';
-import { previewTaxSummary } from '../../../shared/utils/taxes';
+import { previewTaxSummary, prorateDiscount } from '../../../shared/utils/taxes';
+import { fromCents, toCents } from '../../../shared/utils/money';
 import { resolveTender } from '../../../shared/utils/tender';
 import { environment } from '../../../../environments/environment';
 import { pushOwnerFilter } from '../../../core/sync/push-owner';
@@ -82,6 +87,12 @@ export interface CreateSalePayload {
         unitPrice: number;
         /** Promoción aplicada; el backend recalcula su monto con la regla guardada. */
         promotionId?: string;
+        /**
+         * Venta por caja completa (SPEC 46): `quantity` cuenta **cajas** y
+         * `unitPrice` es el precio de la caja; el servidor lo convierte a piezas.
+         * Nunca va junto con `promotionId`.
+         */
+        saleUnit?: 'box';
       }
     | {
         kind: 'service';
@@ -93,7 +104,14 @@ export interface CreateSalePayload {
         providerId: string | null;
       }
   >;
+  /** Descuento a nivel venta. Hoy solo lo usa un cupón de alcance de venta. */
   saleDiscountAmount: number;
+  /**
+   * Cupón aplicado (SPEC 47). Uno de producto ya va dentro del `discountAmount`
+   * de sus líneas; uno de venta, en `saleDiscountAmount`. El servidor recalcula
+   * y, en `/sales/bulk`, nunca rechaza la venta por el cupón.
+   */
+  couponCode?: string;
   paymentMethod: PaymentMethod;
   amountReceived: number | null;
   cardPaymentReference: string | null;
@@ -184,6 +202,19 @@ function toSaleItems(cart: CartLine[]): SaleItem[] {
       // Id LOCAL: es la copia que vive en SQLite y la que ve el ticket.
       return {
         ...comun,
+        // Caja (SPEC 46): la partida local guarda **piezas**, igual que el
+        // backend, y la caja aparte; el payload sí manda cajas.
+        ...(isBoxLine(line)
+          ? {
+              quantity: linePieces(line),
+              saleUnit: {
+                type: 'box' as const,
+                boxes: line.quantity,
+                piecesPerBox: linePiecesPerUnit(line),
+                boxPrice: lineUnitPrice(line),
+              },
+            }
+          : {}),
         kind: 'product' as const,
         productId: line.product.id,
         productName: line.product.name,
@@ -194,6 +225,7 @@ function toSaleItems(cart: CartLine[]): SaleItem[] {
               promotionDiscount: line.promotion.discountAmount,
             }
           : {}),
+        ...(line.coupon ? { couponDiscount: line.coupon.discountAmount } : {}),
       };
     }
     return {
@@ -208,6 +240,31 @@ function toSaleItems(cart: CartLine[]): SaleItem[] {
       commissionAmount: lineCommission(line),
     };
   });
+}
+
+/**
+ * Totales por rama después del descuento de venta, prorrateado por partida con
+ * `prorateDiscount` (centavo exacto: farmacia + servicios = total cobrado).
+ */
+function branchTotals(
+  cart: CartLine[],
+  saleDiscountAmount: number,
+): { pharmacyTotal: number; servicesTotal: number } {
+  if (!(saleDiscountAmount > 0)) {
+    return { pharmacyTotal: pharmacyTotalOf(cart), servicesTotal: servicesTotalOf(cart) };
+  }
+  const shares = prorateDiscount(cart.map(lineGross), saleDiscountAmount);
+  let pharmacy = 0;
+  let services = 0;
+  cart.forEach((line, index) => {
+    const net = toCents(lineGross(line)) - toCents(shares[index]);
+    if (isServiceLine(line)) {
+      services += net;
+    } else {
+      pharmacy += net;
+    }
+  });
+  return { pharmacyTotal: fromCents(pharmacy), servicesTotal: fromCents(services) };
 }
 
 /** Solo para el `void()` de una venta ya sincronizada (`POST /sales/:id/void` sigue siendo online). */
@@ -325,6 +382,8 @@ export class SaleService {
        * reintento del mismo cobro; sin ella se genera una nueva (cobro nuevo).
        */
       idempotencyKey?: string;
+      /** Código del cupón aplicado (SPEC 47). */
+      couponCode?: string | null;
     } = {},
   ): CreateSalePayload {
     return {
@@ -346,8 +405,11 @@ export class SaleService {
               // servidor la tarifaba de nuevo con el precio nuevo.
               unitPrice: lineUnitPrice(line),
               // Solo el id: el monto lo calcula el servidor con la regla, y el
-              // tope del 20 % allá excluye la parte de la promo.
-              ...(line.promotion ? { promotionId: line.promotion.id } : {}),
+              // tope del 20 % allá excluye la parte de la promo. Una caja nunca
+              // lleva promoción (el backend responde 400).
+              ...(line.promotion && !isBoxLine(line) ? { promotionId: line.promotion.id } : {}),
+              // Caja: cantidad en cajas y precio de la caja (SPEC 46).
+              ...(isBoxLine(line) ? { saleUnit: 'box' as const } : {}),
             }
           : {
               // El catálogo de servicios es solo-pull: su `id` ya es el remoto,
@@ -365,6 +427,9 @@ export class SaleService {
             },
       ),
       saleDiscountAmount,
+      // Solo si hay cupón: un payload sin él queda idéntico al de antes (la
+      // huella de idempotencia del backend suma el código solo cuando existe).
+      ...(extras.couponCode ? { couponCode: extras.couponCode } : {}),
       paymentMethod,
       amountReceived,
       cardPaymentReference,
@@ -409,7 +474,12 @@ export class SaleService {
     return this.list(params);
   }
 
-  create(payload: CreateSalePayload, cart: CartLine[], totals: SaleTotals): Observable<Sale> {
+  create(
+    payload: CreateSalePayload,
+    cart: CartLine[],
+    totals: SaleTotals,
+    coupon: SaleCoupon | null = null,
+  ): Observable<Sale> {
     const tender = resolveTender({
       paymentMethod: payload.paymentMethod,
       total: totals.total,
@@ -452,10 +522,14 @@ export class SaleService {
       // Denormalizados por rama: el corte proyecta la venta y nunca recorre sus
       // partidas, así que el bloque de servicios tiene que poder calcularse sin
       // abrirlas. El backend los recalcula de forma autoritativa al sincronizar.
-      pharmacyTotal: pharmacyTotalOf(cart),
-      servicesTotal: servicesTotalOf(cart),
+      //
+      // Un cupón de venta (SPEC 47) se reparte entre farmacia y servicios con el
+      // mismo prorrateo del desglose fiscal: si no, las dos ramas sumarían más
+      // que el total cobrado y el corte no cuadraría.
+      ...branchTotals(cart, payload.saleDiscountAmount),
       commissionTotal: commissionTotalOf(cart),
-      ...splitCash(tender.cashAmount ?? 0, servicesTotalOf(cart)),
+      ...splitCash(tender.cashAmount ?? 0, branchTotals(cart, payload.saleDiscountAmount).servicesTotal),
+      ...(coupon ? { coupon } : {}),
       payload,
     };
 

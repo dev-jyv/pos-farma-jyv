@@ -47,10 +47,29 @@ export class SaleTicket {
     return { name: item.promotionName, amount: item.promotionDiscount };
   }
 
-  /** Lo que queda del descuento de la partida fuera de la promo. */
+  /** Lo que queda del descuento de la partida fuera de la promo y del cupón. */
   manualDiscountOf(item: SaleItem): number {
     const promo = isSaleProductItem(item) ? (item.promotionDiscount ?? 0) : 0;
-    return Math.round((item.discountAmount - promo) * 100) / 100;
+    const cupon = isSaleProductItem(item) ? (item.couponDiscount ?? 0) : 0;
+    return Math.round((item.discountAmount - promo - cupon) * 100) / 100;
+  }
+
+  /** Parte de un cupón de producto en la partida (SPEC 47). */
+  couponDiscountOf(item: SaleItem): number {
+    return isSaleProductItem(item) ? (item.couponDiscount ?? 0) : 0;
+  }
+
+  /**
+   * Venta por caja (SPEC 46): "2 cajas × 10 pzas". La partida guarda piezas en
+   * `quantity`, así que sin esto el ticket diría "20" junto a un importe de
+   * dos cajas.
+   */
+  boxOf(item: SaleItem): { label: string; boxes: number } | null {
+    if (!isSaleProductItem(item) || !item.saleUnit) {
+      return null;
+    }
+    const { boxes, piecesPerBox } = item.saleUnit;
+    return { boxes, label: `${boxes} ${boxes === 1 ? 'caja' : 'cajas'} × ${piecesPerBox} pzas` };
   }
 
   readonly sale = input.required<Sale>();

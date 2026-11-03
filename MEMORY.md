@@ -13,7 +13,7 @@
 - Shell: `src/app/core/layout/`
 - Routes: `src/app/app.routes.ts` — `/login` (`guestGuard`) + resto bajo `Shell` (`authGuard`)
 - Features: `src/app/features/{dashboard, pos}` — `pos` tiene `cash-session`, `checkout`, `sale`, `services`
-- `AuthService.fetchRole()` → `${apiUrl}/auth/me` (`admin` | `cashier`)
+- `AuthService.fetchProfile()` → `${apiUrl}/auth/me` (rol = slug libre + permisos; `accountant` bloqueado en el POS, SPEC 45)
 
 ## Conventions
 

@@ -113,6 +113,26 @@ describe('auth guards', () => {
       expect(signOutMock).toHaveBeenCalled();
     });
 
+    it('una sesión persistida del contador se cierra con aviso y deja el login (SPEC 45)', async () => {
+      currentUser = { uid: 'u1' };
+      fetchRole = () => of('accountant');
+
+      await expect(runGuard(guestGuard)).resolves.toBe(true);
+      expect(signOutMock).toHaveBeenCalled();
+      expect(notifyError).toHaveBeenCalledWith(
+        'Tu usuario es de consulta de reportes; entra desde el panel.',
+      );
+    });
+
+    it('con sesión de admin o gerente sigue mandando al POS sin cerrar sesión', async () => {
+      currentUser = { uid: 'u1' };
+      fetchRole = () => of('manager');
+
+      await expect(runGuard(guestGuard)).resolves.toEqual(urlTree('/pos'));
+      expect(signOutMock).not.toHaveBeenCalled();
+      expect(notifyError).not.toHaveBeenCalled();
+    });
+
     it('si /auth/me falla también cierra sesión en vez de dejar al usuario atorado', async () => {
       currentUser = { uid: 'u1' };
       fetchRole = () => throwError(() => new Error('500'));

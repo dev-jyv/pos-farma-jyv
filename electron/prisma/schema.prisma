@@ -35,7 +35,14 @@ model Product {
   /// Array de ids de proveedor codificado como JSON (SQLite no tiene tipo array).
   suppliersJson        String?
   /// Foto de stock total al último sync/venta local; no es tiempo real entre cajas.
+  /// Siempre en **piezas**, también cuando el producto se vende por caja.
   totalStock           Float    @default(0)
+  /// Venta por caja completa (SPEC 46): piezas por caja (2..1000) y precio de la
+  /// caja con impuestos incluidos. Van juntos: sin los dos, no se vende por caja.
+  boxQuantity          Int?
+  boxPrice             Float?
+  /// Código de barras de la caja; escanearlo agrega una línea por caja.
+  boxBarcode           String?
   /// Reservado para el push embebido de `POST /stock-entries` (alta/edición
   /// de producto junto con un lote). No lo toca el módulo de edición de
   /// catálogo — usa `pendingCatalogPush` aparte para no pisarse: un producto
@@ -55,6 +62,7 @@ model Product {
 
   @@index([sku])
   @@index([barcode])
+  @@index([boxBarcode])
   @@index([pendingPush])
   @@index([pendingCatalogPush])
 }
@@ -142,6 +150,9 @@ model Sale {
   pharmacyCashAmount     Float?
   servicesCashAmount     Float?
   commissionTotal        Float          @default(0)
+  /// Cupón aplicado (SPEC 47): `{ code, name, scope, discountAmount }` (JSON).
+  /// El backend recalcula el monto; esto es lo que se imprimió en el ticket.
+  couponJson             String?
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
   items                  SaleItem[]
@@ -213,6 +224,13 @@ model SaleItem {
   promotionName     String?
   /// Parte de `discountAmount` que aportó la promoción.
   promotionDiscount Float?
+  /// Venta por caja (SPEC 46): `{ type: 'box', boxes, piecesPerBox, boxPrice }`
+  /// (JSON). Con caja, `quantity` guarda **piezas** —como el backend— para que el
+  /// stock, la anulación y los reportes sigan contando piezas sin saber de cajas;
+  /// `unitPrice` es el precio de la caja y `subtotal = boxes × boxPrice`.
+  saleUnit          String?
+  /// Parte de `discountAmount` que aportó un cupón de producto (SPEC 47).
+  couponDiscount    Float?
 
   @@index([saleId])
   @@index([serviceId])
@@ -384,6 +402,34 @@ model Promotion {
   productIdsJson String
   startsAt       DateTime
   endsAt         DateTime?
+  isActive       Boolean   @default(true)
+  deactivatedAt  DateTime?
+  updatedAt      DateTime
+
+  @@index([isActive])
+}
+
+/// Cupones de descuento (SPEC 47). **Solo-pull** como las promociones: los
+/// administra el panel y llegan por `GET /coupons/sync`. El `id` es el código
+/// normalizado (mayúsculas), igual que el id del documento en Firestore. El
+/// descuento y los productos son inmutables allá: aquí se guardan como JSON.
+/// `usedCount` es una foto del último pull: entre cajas offline puede quedarse
+/// corto, por eso la caja solo avisa y el servidor decide.
+model Coupon {
+  id             String    @id
+  code           String
+  name           String
+  /// 'product' | 'sale'
+  scope          String
+  /// Ids **remotos** de producto (JSON array); vacío en alcance de venta.
+  productIdsJson String
+  /// `{ type: 'percent', percent } | { type: 'amount', amount }` (JSON, pesos).
+  discountJson   String
+  minPurchase    Float?
+  startsAt       DateTime
+  endsAt         DateTime?
+  maxUses        Int?
+  usedCount      Int       @default(0)
   isActive       Boolean   @default(true)
   deactivatedAt  DateTime?
   updatedAt      DateTime

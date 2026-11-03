@@ -14,7 +14,7 @@ import { AuthService } from '../auth/auth.service';
 import { AutoPushService } from './auto-push.service';
 import { PosDiagnosticsService } from './pos-diagnostics.service';
 import { pushOwnerFilter } from './push-owner';
-import { PROMOTIONS_SYNCED_EVENT, SERVICES_SYNCED_EVENT } from './sync-events';
+import { COUPONS_SYNCED_EVENT, PROMOTIONS_SYNCED_EVENT, SERVICES_SYNCED_EVENT } from './sync-events';
 
 /**
  * Cuánto espera el cajero entre dos sincronizaciones manuales. El admin no pasa
@@ -262,6 +262,9 @@ export class SyncScheduler {
     // Se avisa aunque falle: `PromoService` relee lo que haya en SQLite, que no
     // cambió, y quien espera la recarga no se queda colgado.
     window.dispatchEvent(new Event(PROMOTIONS_SYNCED_EVENT));
+    // Cupones (SPEC 47): mismo latido horario y mismo pull incremental. Su
+    // resultado no cuenta para `ok`: quien espera aquí espera a las promociones.
+    await this.pullCoupons();
     // El pull horario es el latido más frecuente de la caja: entre los horarios
     // fijos hay hasta 14 h, y un comando del admin no debe esperar tanto.
     void this.diagnostics.report();
@@ -786,6 +789,24 @@ export class SyncScheduler {
       window.electronAPI?.promotions?.upsertMany(items),
     );
     window.dispatchEvent(new Event(PROMOTIONS_SYNCED_EVENT));
+    await this.pullCoupons();
+  }
+
+  /**
+   * Pull incremental de cupones (`GET /coupons/sync?updatedSince`, incluye los
+   * dados de baja). Va con las promociones —cada hora y en el sync completo—
+   * porque son el mismo tipo de dato: reglas de precio que el admin cambia sin
+   * reinstalar la caja. Sin almacén (versión vieja del main) no hace nada.
+   */
+  private async pullCoupons(): Promise<boolean> {
+    if (!window.electronAPI?.coupons) {
+      return false;
+    }
+    const ok = await this.pullCatalog('coupons', 'coupons', (items) =>
+      window.electronAPI?.coupons?.upsertMany(items),
+    );
+    window.dispatchEvent(new Event(COUPONS_SYNCED_EVENT));
+    return ok;
   }
 
   private async pullCatalog(

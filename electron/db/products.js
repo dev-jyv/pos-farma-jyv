@@ -24,6 +24,23 @@ function toProductDto(row) {
     unit: row.unit ?? undefined,
     minStock: row.minStock,
     isActive: row.isActive,
+    // Venta por caja (SPEC 46). Solo se exponen si están los dos: una caja sin
+    // precio (o sin piezas) no se puede cobrar.
+    ...boxFieldsOf(row),
+  };
+}
+
+/** Piezas por caja válidas: entero 2..1000, igual que la validación del backend. */
+function isValidBoxQuantity(value) {
+  return Number.isInteger(value) && value >= 2 && value <= 1000;
+}
+
+function boxFieldsOf(row) {
+  const ok = isValidBoxQuantity(row.boxQuantity) && typeof row.boxPrice === 'number' && row.boxPrice > 0;
+  return {
+    boxQuantity: ok ? row.boxQuantity : null,
+    boxPrice: ok ? row.boxPrice : null,
+    boxBarcode: row.boxBarcode ?? null,
   };
 }
 
@@ -75,6 +92,7 @@ async function search(prisma, term) {
           { name: { contains: normalized } },
           { sku: { contains: normalized } },
           { barcode: { contains: normalized } },
+          { boxBarcode: { contains: normalized } },
           { activeIngredient: { contains: normalized } },
         ],
       }
@@ -102,7 +120,20 @@ async function getByBarcode(prisma, code) {
   const row = await prisma.product.findFirst({
     where: { isActive: true, OR: [{ barcode: normalized }, { sku: normalized }] },
   });
-  return row ? toProductDto(row) : null;
+  if (row) {
+    return toProductDto(row);
+  }
+  // El código de la caja (SPEC 46) va después: el de la pieza y el SKU siempre
+  // ganan. Solo cuenta si el producto de verdad se vende por caja; si no, el
+  // escaneo diría "caja" de algo que no se puede cobrar así.
+  const box = await prisma.product.findFirst({
+    where: { isActive: true, boxBarcode: normalized },
+  });
+  if (!box) {
+    return null;
+  }
+  const dto = toProductDto(box);
+  return dto.boxQuantity ? { ...dto, saleUnit: 'box' } : dto;
 }
 
 /**
@@ -228,6 +259,11 @@ async function upsertMany(prisma, remoteProducts) {
       controlledGroup: remote.controlledGroup ?? null,
       requiresPrescription: Boolean(remote.requiresPrescription),
       isActive: remote.isActive !== false,
+      // Venta por caja (SPEC 46). Un backend anterior no los manda: quedan en
+      // null y el producto se vende solo por pieza, como siempre.
+      boxQuantity: isValidBoxQuantity(remote.boxQuantity) ? remote.boxQuantity : null,
+      boxPrice: typeof remote.boxPrice === 'number' && remote.boxPrice > 0 ? remote.boxPrice : null,
+      boxBarcode: typeof remote.boxBarcode === 'string' && remote.boxBarcode.trim() ? remote.boxBarcode.trim() : null,
       // `suppliers` no se escribe: nada en la caja lo lee (`toProductDto` no lo
       // expone) y serializarlo por producto en cada pull era peso muerto. Por eso
       // `GET /products/sync` tampoco lo manda.

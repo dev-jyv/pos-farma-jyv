@@ -4,6 +4,7 @@ import {
   CashMovementType,
   CashSession,
   CashSessionSummary,
+  CouponDto,
   ExpenseCategory,
   InvoiceRagData,
   InvoiceRagDocument,
@@ -81,6 +82,8 @@ export interface LocalSaleInput {
   pharmacyCashAmount?: number;
   servicesCashAmount?: number;
   commissionTotal?: number;
+  /** Cupón que se imprimió en el ticket (SPEC 47). */
+  coupon?: Sale['coupon'];
   /** Cuerpo crudo que se reenvía sin cambios a `POST /sales` al sincronizar. */
   payload: unknown;
 }
@@ -463,6 +466,14 @@ declare global {
       promotions: {
         listActive: () => Promise<PromotionDto[]>;
         upsertMany: (promotions: unknown[]) => Promise<{ count: number }>;
+      };
+      /**
+       * Cupones **solo-pull** (SPEC 47). `findByCode` normaliza el código y
+       * devuelve también los inactivos: la pantalla dice por qué no aplica.
+       */
+      coupons: {
+        findByCode: (code: string) => Promise<CouponDto | null>;
+        upsertMany: (coupons: unknown[]) => Promise<{ count: number }>;
       };
       /** Archivos en `userData/invoice-rag/`; el renderer manda bytes, nunca rutas. */
       invoiceRag: {

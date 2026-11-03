@@ -38,7 +38,7 @@ import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { environment } from '../../../../environments/environment';
 import { getApiErrorMessage } from '../../../core/api/api.utils';
 import { NotificationService } from '../../../core/notifications/notification.service';
-import { CartLine, Customer, PaymentMethod, Sale } from '../../../shared/models';
+import { CartLine, CouponDto, Customer, PaymentMethod, Sale, SaleCoupon } from '../../../shared/models';
 import {
   CONTROLLED_GROUP_RULES,
   ControlledGroupRule,
@@ -69,6 +69,7 @@ import {
 } from '../services/mercado-pago.service';
 import { SaleService, newIdempotencyKey } from '../services/sale.service';
 import { PromoService, closedPromotionFromError } from '../services/promo.service';
+import { CouponService } from '../services/coupon.service';
 import { roundMoney } from '../../../shared/utils/money';
 import { resolveTender } from '../../../shared/utils/tender';
 
@@ -132,6 +133,7 @@ export class Checkout {
   private readonly notifications = inject(NotificationService);
   private readonly cashDrawer = inject(CashDrawerService);
   private readonly promoService = inject(PromoService);
+  private readonly couponService = inject(CouponService);
   /**
    * `takeUntilDestroyed()` sin argumento exige contexto de inyección, y el sondeo
    * de la terminal arranca dentro de un `subscribe` (ya fuera de él): sin este
@@ -153,6 +155,15 @@ export class Checkout {
   readonly discountTotal = input(0);
   readonly total = input(0);
   readonly cashSessionId = input('');
+  /**
+   * Cupón aplicado en la venta (SPEC 47) y su resumen para el ticket. Se
+   * aplica y se quita en la pantalla de venta, no aquí: con el cobro abierto el
+   * total no cambia (el cambio y la order de la terminal ya van calculados).
+   */
+  readonly coupon = input<CouponDto | null>(null);
+  readonly couponSummary = input<SaleCoupon | null>(null);
+  /** Descuento del cupón de venta → `saleDiscountAmount` (0 sin cupón de venta). */
+  readonly saleDiscountAmount = input(0);
 
   readonly closed = output<void>();
   readonly completed = output<Sale>();
@@ -162,6 +173,12 @@ export class Checkout {
    * recalcula el ticket y pide volver a cobrar.
    */
   readonly promotionClosed = output<string>();
+  /**
+   * El cupón dejó de ser válido con el cobro abierto (venció o se dio de baja;
+   * mensaje para el cajero). La venta **no** se registró: la pantalla quita el
+   * cupón, recalcula y pide volver a cobrar, igual que con una promo cerrada.
+   */
+  readonly couponExpired = output<string>();
 
   readonly paymentMethods: { labelKey: string; value: PaymentMethod; icon: string }[] = [
     { labelKey: 'payment.cash', value: 'cash', icon: 'pi pi-wallet' },
@@ -289,6 +306,8 @@ export class Checkout {
     // esa utilidad.
     previewTaxSummary(
       this.cart().map((line) => ({ product: lineTaxable(line), grossAmount: lineGross(line) })),
+      // El cupón de venta se prorratea antes del desglose, como en el backend.
+      this.saleDiscountAmount(),
     ),
   );
 
@@ -824,12 +843,22 @@ export class Checkout {
         this.promotionClosed.emit(closed);
         return;
       }
+      // Lo mismo con el cupón: vencido o dado de baja con el reloj de la caja,
+      // se quita antes de registrar. Con la tarjeta aprobada sí se registra: el
+      // servidor lo acepta y lo marca para revisión.
+      const coupon = this.coupon();
+      const issue = coupon ? this.couponService.windowIssue(coupon) : null;
+      if (issue) {
+        this.couponExpired.emit(issue.message);
+        return;
+      }
     }
     this.submitting.set(true);
     const customer = this.selectedCustomer();
     const payload = this.saleService.buildPayload(
       this.cart(),
-      0,
+      // Solo un cupón de venta llena el descuento a nivel venta (SPEC 47).
+      this.saleDiscountAmount(),
       this.paymentMethod(),
       this.paymentMethod() === 'card' ? null : this.amountReceived(),
       this.cardOrder()?.id ?? null,
@@ -862,6 +891,7 @@ export class Checkout {
           this.paymentMethod() === 'mixed' && !this.terminalEnabled
             ? this.cardAmount()
             : undefined,
+        couponCode: this.coupon()?.code ?? null,
       },
     );
     this.saleService
@@ -871,7 +901,7 @@ export class Checkout {
         total: this.total(),
         cashDue: this.cashDue(),
         cardAmount: this.cardAmount(),
-      })
+      }, this.couponSummary())
       .subscribe({
         next: (sale) => {
           this.submitting.set(false);

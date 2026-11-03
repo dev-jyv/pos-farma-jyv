@@ -9,7 +9,7 @@ import {
   PromotionDto,
   PromotionRule,
 } from '../../../shared/models';
-import { isProductLine, lineKey, lineUnitPrice } from '../../../shared/utils/cart-line';
+import { isBoxLine, isProductLine, lineKey, lineUnitPrice } from '../../../shared/utils/cart-line';
 import {
   isSupportedRule,
   pickBestPromotion,
@@ -169,7 +169,12 @@ export class PromoService {
    * Pura: no toca el carrito. Devuelve `null` si no hay mejora (o no hay promo).
    */
   nextStepHint(line: CartLine): PromotionStepHint | null {
-    if (!isProductLine(line) || !Number.isInteger(line.quantity) || line.quantity < 1) {
+    if (
+      !isProductLine(line) ||
+      isBoxLine(line) ||
+      !Number.isInteger(line.quantity) ||
+      line.quantity < 1
+    ) {
       return null;
     }
     const candidates = this.candidates(line).filter((promotion) => isSupportedRule(promotion.rule));
@@ -209,8 +214,9 @@ export class PromoService {
 
   private promotionFor(line: CartLine): CartLinePromotion | null {
     // Las promociones son del catálogo de farmacia: una consulta médica nunca
-    // entra a un 2x1.
-    if (!isProductLine(line)) {
+    // entra a un 2x1. Una caja completa tampoco (SPEC 46): su precio ya es el
+    // de mayoreo, y el backend rechaza `promotionId` en una línea por caja.
+    if (!isProductLine(line) || isBoxLine(line)) {
       return null;
     }
     const best = pickBestPromotion(this.candidates(line), lineUnitPrice(line), line.quantity);
