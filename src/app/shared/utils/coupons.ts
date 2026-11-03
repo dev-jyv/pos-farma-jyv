@@ -40,32 +40,61 @@ export interface CouponEngineResult {
   totalCents: number;
 }
 
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+/** Monto de la regla sobre `baseCents`, nunca negativo ni mayor que la base. */
+function applyDiscount(discount: CouponEngineDiscount, baseCents: number, units: number): number {
+  if (baseCents <= 0) {
+    return 0;
+  }
+  let cents = 0;
+  if (discount.type === 'percent' && isFiniteNumber(discount.percent) && discount.percent > 0) {
+    cents = Math.round((baseCents * discount.percent) / 100);
+  } else if (
+    discount.type === 'amount' &&
+    isFiniteNumber(discount.amountCents) &&
+    discount.amountCents > 0
+  ) {
+    cents = Math.round(discount.amountCents * units);
+  }
+  return Math.max(0, Math.min(cents, baseCents));
+}
+
+/**
+ * Una forma que este motor no conoce (alcance o tipo de descuento nuevo, campos
+ * faltantes) da **cero**, no truena: el backend se actualiza antes que las cajas.
+ */
 export function computeCouponDiscount(
   coupon: CouponEngineCoupon,
   lines: CouponEngineLine[],
 ): CouponEngineResult {
+  const zero: CouponEngineResult = { lines: lines.map(() => 0), saleCents: 0, totalCents: 0 };
+  const discount = coupon?.discount;
+  if (!discount || (discount.type !== 'percent' && discount.type !== 'amount')) {
+    return zero;
+  }
+
   if (coupon.scope === 'product') {
-    const lineCents = lines.map((line) => {
-      if (!coupon.productIds.includes(line.productId) || line.hasPromotion) {
-        return 0;
-      }
-      return coupon.discount.type === 'percent'
-        ? Math.round((line.netCents * coupon.discount.percent) / 100)
-        : Math.min(coupon.discount.amountCents * line.pieces, line.netCents);
-    });
+    const eligible = new Set(Array.isArray(coupon.productIds) ? coupon.productIds : []);
+    const lineCents = lines.map((line) =>
+      eligible.has(line.productId) && !line.hasPromotion
+        ? applyDiscount(discount, line.netCents, line.pieces)
+        : 0,
+    );
     return { lines: lineCents, saleCents: 0, totalCents: sum(lineCents) };
   }
 
-  const zeros = lines.map(() => 0);
-  const base = sum(lines.map((line) => line.netCents));
-  if (coupon.minPurchaseCents != null && base < coupon.minPurchaseCents) {
-    return { lines: zeros, saleCents: 0, totalCents: 0 };
+  if (coupon.scope === 'sale') {
+    const base = sum(lines.map((line) => line.netCents));
+    if (coupon.minPurchaseCents != null && base < coupon.minPurchaseCents) {
+      return zero;
+    }
+    const saleCents = applyDiscount(discount, base, 1);
+    return { lines: lines.map(() => 0), saleCents, totalCents: saleCents };
   }
-  const saleCents =
-    coupon.discount.type === 'percent'
-      ? Math.round((base * coupon.discount.percent) / 100)
-      : Math.min(coupon.discount.amountCents, base);
-  return { lines: zeros, saleCents, totalCents: saleCents };
+
+  return zero;
 }
 
 function sum(values: number[]): number {
