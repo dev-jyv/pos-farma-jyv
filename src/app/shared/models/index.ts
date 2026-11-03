@@ -211,6 +211,33 @@ export interface Product {
   minStock?: number;
   /** Solo lo llena/usa el módulo de edición de catálogo (`/pos/productos`). */
   isActive?: boolean;
+  /**
+   * Venta por caja completa (SPEC 46). `boxQuantity` (piezas por caja, 2..1000)
+   * y `boxPrice` (precio de la caja, impuestos incluidos) llegan juntos o no
+   * llegan: sin los dos el producto solo se vende por pieza. `stock` sigue en
+   * piezas.
+   */
+  boxQuantity?: number | null;
+  boxPrice?: number | null;
+  boxBarcode?: string | null;
+  /**
+   * Solo en la respuesta de `getByBarcode`: el código escaneado era el de la
+   * caja. No se persiste en el carrito como dato del producto.
+   */
+  saleUnit?: SaleUnit;
+}
+
+/** Unidad de una partida. Ausente = pieza; `'box'` = caja completa (SPEC 46). */
+export type SaleUnit = 'box';
+
+/** `true` si el producto se puede vender por caja completa. */
+export function hasBoxSale(product: Pick<Product, 'boxQuantity' | 'boxPrice'>): boolean {
+  return (
+    Number.isInteger(product.boxQuantity) &&
+    (product.boxQuantity ?? 0) >= 2 &&
+    typeof product.boxPrice === 'number' &&
+    product.boxPrice > 0
+  );
 }
 
 /**
@@ -353,6 +380,54 @@ export interface CartProductLine {
   discountAmount: number;
   /** Promoción aplicada; la recalcula `PromoService` en cada cambio del carrito. */
   promotion?: CartLinePromotion | null;
+  /**
+   * `'box'`: la línea se cobra por caja completa. `quantity` cuenta **cajas** y
+   * el precio es `product.boxPrice`. Ausente = pieza. Una caja nunca entra a
+   * promoción (SPEC 46).
+   */
+  saleUnit?: SaleUnit;
+  /**
+   * Parte de `discountAmount` que aporta un cupón de **producto** (SPEC 47). La
+   * recalcula `CouponService` en cada cambio del carrito; una línea con cupón no
+   * lleva descuento manual.
+   */
+  coupon?: CartLineCoupon | null;
+}
+
+export interface CartLineCoupon {
+  code: string;
+  discountAmount: number;
+}
+
+/**
+ * Cupón tal como lo devuelve el SQLite local (`electron/db/coupons.js`), espejo
+ * de `GET /coupons/sync`. `id` es el código normalizado.
+ */
+export interface CouponDto {
+  id: string;
+  code: string;
+  name: string;
+  scope: 'product' | 'sale';
+  /** Ids **remotos** de producto; vacío en alcance de venta. */
+  productIds: string[];
+  /** En alcance de producto, `amount` es por pieza. Pesos. */
+  discount: { type: 'percent'; percent: number } | { type: 'amount'; amount: number };
+  minPurchase: number | null;
+  startsAt: string;
+  endsAt: string | null;
+  maxUses: number | null;
+  usedCount: number;
+  isActive: boolean;
+  deactivatedAt?: string | null;
+}
+
+/** Cupón impreso en el ticket y guardado con la venta local. */
+export interface SaleCoupon {
+  code: string;
+  name: string;
+  scope: 'product' | 'sale';
+  /** Descuento total del cupón en la venta (suma de líneas o el de venta). */
+  discountAmount: number;
 }
 
 export interface CartLinePromotion {
@@ -446,6 +521,21 @@ export interface SaleProductItem extends SaleItemCommon {
   promotionId?: string;
   promotionName?: string;
   promotionDiscount?: number;
+  /**
+   * Venta por caja (SPEC 46). Con caja, `quantity` está en **piezas** (igual que
+   * en el backend), `unitPrice` es el precio de la caja y `subtotal` es
+   * `boxes × boxPrice`.
+   */
+  saleUnit?: SaleItemBoxUnit;
+  /** Parte de `discountAmount` que aportó un cupón de producto (SPEC 47). */
+  couponDiscount?: number;
+}
+
+export interface SaleItemBoxUnit {
+  type: 'box';
+  boxes: number;
+  piecesPerBox: number;
+  boxPrice: number;
 }
 
 export interface SaleServiceItem extends SaleItemCommon {
@@ -516,6 +606,8 @@ export interface Sale {
   controlledGroups: ControlledGroup[];
   billing: SaleBilling | null;
   invoiceStatus: 'pending' | null;
+  /** Cupón aplicado (SPEC 47); ausente o `null` en ventas sin cupón. */
+  coupon?: SaleCoupon | null;
   voidedAt: Date | null;
   voidedBy?: string | null;
   /**
@@ -592,6 +684,8 @@ export interface HeldSale {
    * ventas pausadas antes de este campo.
    */
   manualDiscounts?: Record<string, number>;
+  /** Código del cupón aplicado al pausar (SPEC 47); se revalida al retomar. */
+  couponCode?: string | null;
 }
 
 export interface CashMethodTotals {
