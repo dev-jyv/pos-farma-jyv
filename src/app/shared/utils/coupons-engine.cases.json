@@ -1,0 +1,629 @@
+{
+ "cases": [
+  {
+   "name": "producto 10 % sobre una línea elegible",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p1"
+    ],
+    "discount": {
+     "type": "percent",
+     "percent": 10
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 2,
+     "netCents": 20000,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     2000
+    ],
+    "saleCents": 0,
+    "totalCents": 2000
+   }
+  },
+  {
+   "name": "producto 10 % solo descuenta las líneas de sus productos",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p1"
+    ],
+    "discount": {
+     "type": "percent",
+     "percent": 10
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 1,
+     "netCents": 10000,
+     "hasPromotion": false
+    },
+    {
+     "productId": "p2",
+     "pieces": 1,
+     "netCents": 5000,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     1000,
+     0
+    ],
+    "saleCents": 0,
+    "totalCents": 1000
+   }
+  },
+  {
+   "name": "producto: la línea en promoción no recibe cupón, la caja del mismo producto sí",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p1"
+    ],
+    "discount": {
+     "type": "percent",
+     "percent": 10
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 2,
+     "netCents": 6000,
+     "hasPromotion": true
+    },
+    {
+     "productId": "p1",
+     "pieces": 10,
+     "netCents": 45000,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     0,
+     4500
+    ],
+    "saleCents": 0,
+    "totalCents": 4500
+   }
+  },
+  {
+   "name": "producto monto por pieza",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p1"
+    ],
+    "discount": {
+     "type": "amount",
+     "amountCents": 500
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 3,
+     "netCents": 3600,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     1500
+    ],
+    "saleCents": 0,
+    "totalCents": 1500
+   }
+  },
+  {
+   "name": "producto monto por pieza con tope en el neto de la línea",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p1"
+    ],
+    "discount": {
+     "type": "amount",
+     "amountCents": 1500
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 2,
+     "netCents": 2400,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     2400
+    ],
+    "saleCents": 0,
+    "totalCents": 2400
+   }
+  },
+  {
+   "name": "producto monto por pieza en una línea por caja (2 cajas de 10)",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p1"
+    ],
+    "discount": {
+     "type": "amount",
+     "amountCents": 200
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 20,
+     "netCents": 20000,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     4000
+    ],
+    "saleCents": 0,
+    "totalCents": 4000
+   }
+  },
+  {
+   "name": "producto porcentaje redondea al centavo",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p1"
+    ],
+    "discount": {
+     "type": "percent",
+     "percent": 15
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 1,
+     "netCents": 3333,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     500
+    ],
+    "saleCents": 0,
+    "totalCents": 500
+   }
+  },
+  {
+   "name": "producto porcentaje: medio centavo redondea hacia arriba",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p1"
+    ],
+    "discount": {
+     "type": "percent",
+     "percent": 10
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 1,
+     "netCents": 1005,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     101
+    ],
+    "saleCents": 0,
+    "totalCents": 101
+   }
+  },
+  {
+   "name": "producto: todas las líneas elegibles tienen promoción, sin efecto",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p1",
+     "p2"
+    ],
+    "discount": {
+     "type": "percent",
+     "percent": 20
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 2,
+     "netCents": 6000,
+     "hasPromotion": true
+    },
+    {
+     "productId": "p2",
+     "pieces": 3,
+     "netCents": 9000,
+     "hasPromotion": true
+    }
+   ],
+   "expected": {
+    "lines": [
+     0,
+     0
+    ],
+    "saleCents": 0,
+    "totalCents": 0
+   }
+  },
+  {
+   "name": "producto: ningún producto del ticket está en el cupón",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p9"
+    ],
+    "discount": {
+     "type": "amount",
+     "amountCents": 1000
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 1,
+     "netCents": 10000,
+     "hasPromotion": false
+    },
+    {
+     "productId": "p2",
+     "pieces": 1,
+     "netCents": 5000,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     0,
+     0
+    ],
+    "saleCents": 0,
+    "totalCents": 0
+   }
+  },
+  {
+   "name": "producto: varios productos elegibles suman",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p1",
+     "p2"
+    ],
+    "discount": {
+     "type": "amount",
+     "amountCents": 300
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 2,
+     "netCents": 10000,
+     "hasPromotion": false
+    },
+    {
+     "productId": "p2",
+     "pieces": 1,
+     "netCents": 200,
+     "hasPromotion": false
+    },
+    {
+     "productId": "p3",
+     "pieces": 5,
+     "netCents": 5000,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     600,
+     200,
+     0
+    ],
+    "saleCents": 0,
+    "totalCents": 800
+   }
+  },
+  {
+   "name": "producto sin líneas",
+   "coupon": {
+    "scope": "product",
+    "productIds": [
+     "p1"
+    ],
+    "discount": {
+     "type": "percent",
+     "percent": 10
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [],
+   "expected": {
+    "lines": [],
+    "saleCents": 0,
+    "totalCents": 0
+   }
+  },
+  {
+   "name": "venta 10 % sobre el neto de todas las líneas",
+   "coupon": {
+    "scope": "sale",
+    "productIds": [],
+    "discount": {
+     "type": "percent",
+     "percent": 10
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 1,
+     "netCents": 30000,
+     "hasPromotion": false
+    },
+    {
+     "productId": "p2",
+     "pieces": 1,
+     "netCents": 15000,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     0,
+     0
+    ],
+    "saleCents": 4500,
+    "totalCents": 4500
+   }
+  },
+  {
+   "name": "venta monto con mínimo alcanzado",
+   "coupon": {
+    "scope": "sale",
+    "productIds": [],
+    "discount": {
+     "type": "amount",
+     "amountCents": 5000
+    },
+    "minPurchaseCents": 20000
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 1,
+     "netCents": 30000,
+     "hasPromotion": false
+    },
+    {
+     "productId": "p2",
+     "pieces": 1,
+     "netCents": 15000,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     0,
+     0
+    ],
+    "saleCents": 5000,
+    "totalCents": 5000
+   }
+  },
+  {
+   "name": "venta con mínimo no alcanzado no descuenta",
+   "coupon": {
+    "scope": "sale",
+    "productIds": [],
+    "discount": {
+     "type": "percent",
+     "percent": 10
+    },
+    "minPurchaseCents": 50000
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 1,
+     "netCents": 30000,
+     "hasPromotion": false
+    },
+    {
+     "productId": "p2",
+     "pieces": 1,
+     "netCents": 15000,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     0,
+     0
+    ],
+    "saleCents": 0,
+    "totalCents": 0
+   }
+  },
+  {
+   "name": "venta con mínimo exacto sí descuenta",
+   "coupon": {
+    "scope": "sale",
+    "productIds": [],
+    "discount": {
+     "type": "percent",
+     "percent": 10
+    },
+    "minPurchaseCents": 45000
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 1,
+     "netCents": 30000,
+     "hasPromotion": false
+    },
+    {
+     "productId": "p2",
+     "pieces": 1,
+     "netCents": 15000,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     0,
+     0
+    ],
+    "saleCents": 4500,
+    "totalCents": 4500
+   }
+  },
+  {
+   "name": "venta monto con tope en el neto",
+   "coupon": {
+    "scope": "sale",
+    "productIds": [],
+    "discount": {
+     "type": "amount",
+     "amountCents": 10000
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 1,
+     "netCents": 7550,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     0
+    ],
+    "saleCents": 7550,
+    "totalCents": 7550
+   }
+  },
+  {
+   "name": "venta porcentaje redondea al centavo",
+   "coupon": {
+    "scope": "sale",
+    "productIds": [],
+    "discount": {
+     "type": "percent",
+     "percent": 7
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 3,
+     "netCents": 12345,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     0
+    ],
+    "saleCents": 864,
+    "totalCents": 864
+   }
+  },
+  {
+   "name": "venta: las líneas en promoción cuentan en la base",
+   "coupon": {
+    "scope": "sale",
+    "productIds": [],
+    "discount": {
+     "type": "percent",
+     "percent": 10
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [
+    {
+     "productId": "p1",
+     "pieces": 2,
+     "netCents": 6000,
+     "hasPromotion": true
+    },
+    {
+     "productId": "p2",
+     "pieces": 1,
+     "netCents": 4000,
+     "hasPromotion": false
+    }
+   ],
+   "expected": {
+    "lines": [
+     0,
+     0
+    ],
+    "saleCents": 1000,
+    "totalCents": 1000
+   }
+  },
+  {
+   "name": "venta sin líneas",
+   "coupon": {
+    "scope": "sale",
+    "productIds": [],
+    "discount": {
+     "type": "amount",
+     "amountCents": 5000
+    },
+    "minPurchaseCents": null
+   },
+   "lines": [],
+   "expected": {
+    "lines": [],
+    "saleCents": 0,
+    "totalCents": 0
+   }
+  }
+ ]
+}

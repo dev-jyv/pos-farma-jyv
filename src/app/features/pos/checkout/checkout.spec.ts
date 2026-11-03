@@ -472,4 +472,69 @@ describe('Checkout', () => {
       expect(avisos).toEqual([]);
     });
   });
+
+  /** Cupones (SPEC 47): el cobro manda el código y el descuento de venta. */
+  describe('cupón', () => {
+    const cupon = {
+      id: 'VENTA20',
+      code: 'VENTA20',
+      name: 'Veinte',
+      scope: 'sale' as const,
+      productIds: [],
+      discount: { type: 'amount' as const, amount: 20 },
+      minPurchase: null,
+      startsAt: new Date(Date.now() - 86_400_000).toISOString(),
+      endsAt: null,
+      maxUses: null,
+      usedCount: 0,
+      isActive: true,
+    };
+
+    function montar(endsAt: string | null = null): void {
+      fixture.componentRef.setInput('coupon', { ...cupon, endsAt });
+      fixture.componentRef.setInput('couponSummary', { code: 'VENTA20', name: 'Veinte', scope: 'sale', discountAmount: 20 });
+      fixture.componentRef.setInput('saleDiscountAmount', 20);
+      fixture.componentRef.setInput('discountTotal', 20);
+      fixture.componentRef.setInput('total', 80);
+      component.amountReceived.set(80);
+    }
+
+    it('manda saleDiscountAmount, couponCode y el resumen para el ticket', () => {
+      const saleService = TestBed.inject(SaleService);
+      const build = vi.spyOn(saleService, 'buildPayload');
+      const create = vi.spyOn(saleService, 'create');
+      montar();
+
+      component.confirm();
+
+      expect(build.mock.calls[0][1]).toBe(20);
+      expect(build.mock.calls[0][6]).toMatchObject({ couponCode: 'VENTA20' });
+      expect(create.mock.calls[0][3]).toEqual({ code: 'VENTA20', name: 'Veinte', scope: 'sale', discountAmount: 20 });
+    });
+
+    it('el desglose fiscal del cobro ya descuenta el cupón de venta', () => {
+      montar();
+      expect(component.taxSummary().total).toBe(80);
+    });
+
+    it('si el cupón venció con el cobro abierto, no registra y avisa a la venta', () => {
+      const create = vi.spyOn(TestBed.inject(SaleService), 'create');
+      const avisos: string[] = [];
+      component.couponExpired.subscribe((message) => avisos.push(message));
+      montar(new Date(Date.now() - 1000).toISOString());
+
+      component.confirm();
+
+      expect(avisos).toEqual(['El cupón VENTA20 ya venció.']);
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('muestra el cupón en el resumen del cobro', () => {
+      montar();
+      fixture.detectChanges();
+      expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="checkout-coupon"]')?.textContent).toContain(
+        'Cupón VENTA20',
+      );
+    });
+  });
 });

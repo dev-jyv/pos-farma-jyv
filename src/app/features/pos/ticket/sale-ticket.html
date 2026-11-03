@@ -53,11 +53,17 @@
     <tbody>
       @for (item of sale().items; track trackItem($index, item)) {
         <tr>
-          <td>{{ item.quantity }}</td>
+          <td>{{ boxOf(item)?.boxes ?? item.quantity }}</td>
           <td>
             {{ item.productName }}
+            @if (boxOf(item); as caja) {
+              <span class="disc" data-testid="ticket-box">{{ caja.label }}</span>
+            }
             @if (promoOf(item); as promo) {
               <span class="disc">Promo {{ promo.name }} -{{ promo.amount | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+            }
+            @if (couponDiscountOf(item) > 0) {
+              <span class="disc">Cupón {{ sale().coupon?.code ?? '' }} -{{ couponDiscountOf(item) | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
             }
             @if (manualDiscountOf(item) > 0) {
               <span class="disc">Desc. {{ manualDiscountOf(item) | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
@@ -78,6 +84,12 @@
       <div class="row">
         <span>Descuentos</span>
         <span>-{{ sale().discountTotal | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
+      </div>
+    }
+    @if (sale().coupon; as cupon) {
+      <div class="row" data-testid="ticket-coupon">
+        <span>&nbsp;&nbsp;Cupón {{ cupon.code }}</span>
+        <span>-{{ cupon.discountAmount | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
       </div>
     }
     @if (sale().taxSummary; as taxes) {

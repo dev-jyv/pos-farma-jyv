@@ -8,6 +8,7 @@ import { firstValueFrom } from 'rxjs';
 import { AuthService } from '../auth.service';
 import { NotificationService } from '../../notifications/notification.service';
 import { SyncScheduler } from '../../sync/sync-scheduler.service';
+import { POS_BLOCKED_ROLE_MESSAGE, isPosBlockedRole } from '../../../shared/models';
 import { environment } from '../../../../environments/environment';
 
 @Component({
@@ -89,6 +90,12 @@ export class Login {
       if (!role) {
         await this.authService.logout();
         this.notifications.error(this.translate.instant('auth.login.error'));
+        return;
+      }
+      if (isPosBlockedRole(role)) {
+        // SPEC 45: el contador tiene cuenta válida, pero su lugar es el panel.
+        await this.authService.logout();
+        this.notifications.error(POS_BLOCKED_ROLE_MESSAGE);
         return;
       }
       // Sync solo aquí: un inicio de sesión explícito. No en cada apertura de la

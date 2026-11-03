@@ -33,6 +33,26 @@ describe('CartStorageService', () => {
     expect(stored?.savedAt).toBeInstanceOf(Date);
   });
 
+  it('persiste la caja de una línea y el cupón aplicado (SPEC 46, 47)', () => {
+    const caja: CartLine = {
+      kind: 'product',
+      product: { id: 'p1', sku: 'SKU1', name: 'Producto', salePrice: 12, stock: 30, boxQuantity: 10, boxPrice: 100 } as Product,
+      quantity: 2,
+      discountAmount: 0,
+      saleUnit: 'box',
+    };
+    service.save(UID, [line(), caja], {}, 'VENTA50');
+
+    const stored = service.load(UID);
+    expect(stored?.lines[1]).toMatchObject({ saleUnit: 'box', quantity: 2 });
+    expect(stored?.couponCode).toBe('VENTA50');
+  });
+
+  it('un ticket guardado antes de los cupones se lee sin cupón', () => {
+    service.save(UID, [line()], {});
+    expect(service.load(UID)?.couponCode).toBeNull();
+  });
+
   it('aísla el ticket por cajero: dos turnos en el mismo equipo no se mezclan', () => {
     service.save(UID, [line()], {});
     expect(service.load('otro-cajero')).toBeNull();

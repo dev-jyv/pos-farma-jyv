@@ -13,6 +13,8 @@ interface HeldSaleDto {
    */
   lines: unknown[];
   manualDiscounts?: Record<string, number>;
+  /** Cupón aplicado al pausar (SPEC 47). */
+  couponCode?: string | null;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -42,6 +44,7 @@ export class HeldSaleStorageService {
           .map((line) => normalizeStoredLine(line))
           .filter((line): line is CartLine => line !== null),
         ...(item.manualDiscounts ? { manualDiscounts: item.manualDiscounts } : {}),
+        ...(item.couponCode ? { couponCode: item.couponCode } : {}),
       }));
     } catch {
       // Un `removeItem` que también lanza volvería a propagar desde el catch.
@@ -64,6 +67,7 @@ export class HeldSaleStorageService {
       heldAt: item.heldAt.toISOString(),
       lines: item.lines,
       ...(item.manualDiscounts ? { manualDiscounts: item.manualDiscounts } : {}),
+      ...(item.couponCode ? { couponCode: item.couponCode } : {}),
     }));
     // Misma razón que en `CartStorageService.save`: la cuota llena o el
     // almacenamiento bloqueado no pueden tumbar la venta en curso.

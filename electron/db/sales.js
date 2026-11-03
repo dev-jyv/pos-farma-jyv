@@ -26,6 +26,41 @@ function productItemsOf(items) {
   return (items ?? []).filter((item) => (item.kind ?? 'product') === 'product');
 }
 
+/**
+ * Venta por caja (SPEC 46): `{ type: 'box', boxes, piecesPerBox, boxPrice }` o
+ * `null`. Acepta el objeto (lo manda el renderer) o el JSON guardado.
+ */
+function parseSaleUnit(value) {
+  let unit = value;
+  if (typeof value === 'string') {
+    try {
+      unit = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!unit || unit.type !== 'box') {
+    return null;
+  }
+  const boxes = Number(unit.boxes);
+  const piecesPerBox = Number(unit.piecesPerBox);
+  if (!Number.isInteger(boxes) || boxes < 1 || !Number.isInteger(piecesPerBox) || piecesPerBox < 2) {
+    return null;
+  }
+  return { type: 'box', boxes, piecesPerBox, boxPrice: Number(unit.boxPrice) };
+}
+
+/**
+ * Piezas que mueve la partida. Con caja se derivan de `boxes × piecesPerBox`
+ * y no del `quantity` que mande el renderer: el stock local se cuenta en piezas
+ * (como el FEFO del servidor) y una partida por caja jamás puede descontar
+ * "2" cuando se llevó 2 cajas de 10.
+ */
+function piecesOf(item) {
+  const unit = parseSaleUnit(item.saleUnit);
+  return unit ? unit.boxes * unit.piecesPerBox : item.quantity;
+}
+
 function toSaleDto(row) {
   return {
     id: row.id,
@@ -56,6 +91,8 @@ function toSaleDto(row) {
       promotionId: item.promotionId ?? undefined,
       promotionName: item.promotionName ?? undefined,
       promotionDiscount: item.promotionDiscount ?? undefined,
+      saleUnit: parseSaleUnit(item.saleUnit) ?? undefined,
+      couponDiscount: item.couponDiscount ?? undefined,
     })),
     subtotal: row.subtotal,
     discountTotal: row.discountTotal,
@@ -81,12 +118,26 @@ function toSaleDto(row) {
     pharmacyCashAmount: row.pharmacyCashAmount ?? null,
     servicesCashAmount: row.servicesCashAmount ?? null,
     commissionTotal: row.commissionTotal ?? 0,
+    coupon: parseCoupon(row.couponJson),
     unreconciledAt: row.unreconciledAt ?? null,
     unreconciledReason: row.unreconciledReason ?? null,
     voidedAt: row.voidedAt,
     voidedBy: row.voidedBy ?? null,
     createdAt: row.createdAt,
   };
+}
+
+/** Cupón impreso en el ticket (`{ code, name, scope, discountAmount }`), o `null`. */
+function parseCoupon(json) {
+  if (!json) {
+    return null;
+  }
+  try {
+    const coupon = JSON.parse(json);
+    return coupon && typeof coupon.code === 'string' ? coupon : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -162,6 +213,7 @@ async function createLocalTx(prisma, sale) {
       pharmacyCashAmount: sale.pharmacyCashAmount ?? sale.cashAmount ?? 0,
       servicesCashAmount: sale.servicesCashAmount ?? 0,
       commissionTotal: sale.commissionTotal ?? 0,
+      couponJson: sale.coupon ? JSON.stringify(sale.coupon) : null,
       pendingPush: true,
       // Primer renglón de la bitácora: quién cobró y cuándo. El estado vive en la
       // venta; la historia, aquí.
@@ -186,7 +238,8 @@ async function createLocalTx(prisma, sale) {
           productName: item.productName,
           unitPrice: item.unitPrice,
           discountAmount: item.discountAmount,
-          quantity: item.quantity,
+          // Piezas, también en una partida por caja (ver `piecesOf`).
+          quantity: piecesOf(item),
           subtotal: item.subtotal,
           saleDiscountShare: item.saleDiscountShare ?? null,
           netAmount: item.netAmount ?? null,
@@ -194,6 +247,8 @@ async function createLocalTx(prisma, sale) {
           promotionId: item.promotionId ?? null,
           promotionName: item.promotionName ?? null,
           promotionDiscount: item.promotionDiscount ?? null,
+          saleUnit: parseSaleUnit(item.saleUnit) ? JSON.stringify(parseSaleUnit(item.saleUnit)) : null,
+          couponDiscount: item.couponDiscount ?? null,
         })),
       },
     },
@@ -219,7 +274,7 @@ async function createLocalTx(prisma, sale) {
   for (const item of productItems) {
     await prisma.product.updateMany({
       where: { id: item.productId },
-      data: { totalStock: { decrement: item.quantity } },
+      data: { totalStock: { decrement: piecesOf(item) } },
     });
   }
 

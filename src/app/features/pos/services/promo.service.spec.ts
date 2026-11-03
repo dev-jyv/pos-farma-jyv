@@ -107,6 +107,22 @@ describe('PromoService', () => {
     expect(result.discountAmount).toBe(35);
   });
 
+  it('una línea por caja nunca entra a promoción, aunque el producto la tenga (SPEC 46)', () => {
+    const caja: CartProductLine = {
+      ...line(1, { boxQuantity: 10, boxPrice: 300 }),
+      saleUnit: 'box',
+    };
+    const pieza = line(2, { boxQuantity: 10, boxPrice: 300 });
+
+    const [conCaja, conPieza] = service.apply([caja, pieza], { 'product:local-1:box': 20 }) as CartProductLine[];
+
+    expect(conCaja.promotion).toBeNull();
+    // La caja sí admite el manual: no es promoción.
+    expect(conCaja.discountAmount).toBe(20);
+    expect(conPieza.promotion?.id).toBe('promo-1');
+    expect(service.nextStepHint(caja)).toBeNull();
+  });
+
   it('los servicios nunca entran a una promoción', () => {
     const servicio = {
       kind: 'service',

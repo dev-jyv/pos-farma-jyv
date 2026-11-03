@@ -327,6 +327,15 @@ export function createFakePrisma() {
     isActive: true,
     updatedAt: new Date('2026-09-24T10:00:00Z'),
   }));
+  db.coupon = createModel(db, 'coupon', () => ({
+    minPurchase: null,
+    endsAt: null,
+    maxUses: null,
+    usedCount: 0,
+    deactivatedAt: null,
+    isActive: true,
+    updatedAt: new Date('2026-11-03T10:00:00Z'),
+  }));
   db.invoiceDocument = createModel(db, 'invoiceDocument', () => ({
     status: 'uploaded',
     documentType: null,

@@ -11,3 +11,10 @@ export const PROMOTIONS_SYNCED_EVENT = 'farmajyv:promotions-synced';
  * llega después de abrir la venta no se ve hasta reiniciar la caja.
  */
 export const SERVICES_SYNCED_EVENT = 'farmajyv:services-synced';
+
+/**
+ * Evento que emite el sync al terminar de bajar cupones (SPEC 47). La pantalla
+ * de venta relee el cupón aplicado: una baja que llega con el ticket abierto
+ * se quita antes de cobrar.
+ */
+export const COUPONS_SYNCED_EVENT = 'farmajyv:coupons-synced';

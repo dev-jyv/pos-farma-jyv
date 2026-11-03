@@ -86,6 +86,32 @@ describe('Login', () => {
     expect(notifyError).toHaveBeenCalled();
   });
 
+  it('el contador no entra a la caja: cierra sesión y lo manda al panel (SPEC 45)', async () => {
+    fetchRole = () => of('accountant');
+    component.form.setValue({ email: 'contador@farmajyv.mx', password: 'secreto' });
+
+    await component.onSubmit();
+
+    expect(logout).toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(notifyError).toHaveBeenCalledWith(
+      'Tu usuario es de consulta de reportes; entra desde el panel.',
+    );
+  });
+
+  it.each(['admin', 'manager', 'cashier', 'doctor', 'rol-personalizado'])(
+    'el bloqueo es solo para el contador: %s entra igual que antes',
+    async (role) => {
+      fetchRole = () => of(role);
+      component.form.setValue({ email: 'caja@farmajyv.mx', password: 'secreto' });
+
+      await component.onSubmit();
+
+      expect(logout).not.toHaveBeenCalled();
+      expect(navigate).toHaveBeenCalledWith(['/pos']);
+    },
+  );
+
   it('un doble clic no dispara dos logins', async () => {
     let resolveLogin!: () => void;
     login = vi.fn(() => new Promise<void>((resolve) => (resolveLogin = resolve)));

@@ -16,6 +16,8 @@ export interface StoredCart {
   lines: CartLine[];
   /** Descuentos capturados a mano por producto (los de promo se recalculan). */
   manualDiscounts: Record<string, number>;
+  /** Código del cupón aplicado (SPEC 47); se revalida al recuperar el ticket. */
+  couponCode: string | null;
   savedAt: Date;
 }
 
@@ -27,6 +29,8 @@ interface StoredCartDto {
    */
   lines: unknown[];
   manualDiscounts: Record<string, number>;
+  /** Ausente en tickets guardados antes de los cupones. */
+  couponCode?: string | null;
   savedAt: string;
 }
 
@@ -58,6 +62,7 @@ export class CartStorageService {
       return {
         lines,
         manualDiscounts: parsed.manualDiscounts ?? {},
+        couponCode: typeof parsed.couponCode === 'string' && parsed.couponCode ? parsed.couponCode : null,
         savedAt: new Date(parsed.savedAt),
       };
     } catch {
@@ -66,7 +71,12 @@ export class CartStorageService {
     }
   }
 
-  save(uid: string, lines: CartLine[], manualDiscounts: Record<string, number>): void {
+  save(
+    uid: string,
+    lines: CartLine[],
+    manualDiscounts: Record<string, number>,
+    couponCode: string | null = null,
+  ): void {
     if (!uid) {
       return;
     }
@@ -77,6 +87,7 @@ export class CartStorageService {
     const payload: StoredCartDto = {
       lines,
       manualDiscounts,
+      ...(couponCode ? { couponCode } : {}),
       savedAt: new Date().toISOString(),
     };
     /**

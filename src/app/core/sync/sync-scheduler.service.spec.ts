@@ -865,6 +865,54 @@ describe('SyncScheduler — pull de promociones cada hora', () => {
     expect(avisos).toHaveBeenCalledTimes(1);
   });
 
+  it('en el mismo latido baja los cupones, los guarda y avisa a la venta (SPEC 47)', async () => {
+    const upsertCoupons = vi.fn().mockResolvedValue({ count: 1 });
+    (window.electronAPI as unknown as { coupons: unknown }).coupons = {
+      findByCode: vi.fn(),
+      upsertMany: upsertCoupons,
+    };
+    const avisos = vi.fn();
+    window.addEventListener('farmajyv:coupons-synced', avisos);
+
+    const promesa = scheduler.pullPromotions();
+    await flush();
+    http.expectOne((r) => r.url.endsWith('/promotions/sync')).flush({ data: [] });
+    await flush();
+    const req = http.expectOne((r) => r.url.endsWith('/coupons/sync'));
+    req.flush({
+      data: [{ id: 'VENTA50', code: 'VENTA50', updatedAt: '2026-11-03T10:00:00.000Z' }],
+      meta: { serverTime: '2026-11-03T10:00:01.000Z' },
+    });
+
+    await expect(promesa).resolves.toBe(true);
+    window.removeEventListener('farmajyv:coupons-synced', avisos);
+
+    http.verify();
+    expect(upsertCoupons).toHaveBeenCalledWith([expect.objectContaining({ id: 'VENTA50' })]);
+    expect(recordRun).toHaveBeenCalledWith(
+      expect.objectContaining({ entity: 'coupons', status: 'ok', cursor: '2026-11-03T10:00:00.000Z' }),
+    );
+    expect(avisos).toHaveBeenCalledTimes(1);
+  });
+
+  it('si el backend aún no tiene cupones, las promociones igual quedan al día', async () => {
+    (window.electronAPI as unknown as { coupons: unknown }).coupons = {
+      findByCode: vi.fn(),
+      upsertMany: vi.fn(),
+    };
+
+    const promesa = scheduler.pullPromotions();
+    await flush();
+    http.expectOne((r) => r.url.endsWith('/promotions/sync')).flush({ data: [] });
+    await flush();
+    http
+      .expectOne((r) => r.url.endsWith('/coupons/sync'))
+      .flush({ error: { message: 'no existe' } }, { status: 404, statusText: 'Not Found' });
+
+    await expect(promesa).resolves.toBe(true);
+    expect(recordRun).toHaveBeenCalledWith(expect.objectContaining({ entity: 'coupons', status: 'error' }));
+  });
+
   it('sin sesión no pide nada', async () => {
     usuario = null;
     await expect(scheduler.pullPromotions()).resolves.toBe(false);
