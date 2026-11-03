@@ -132,6 +132,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listActive: () => ipcRenderer.invoke('promotions:listActive'),
     upsertMany: (promotions) => ipcRenderer.invoke('promotions:upsertMany', promotions),
   },
+  coupons: {
+    findByCode: (code) => ipcRenderer.invoke('coupons:findByCode', code),
+    upsertMany: (coupons) => ipcRenderer.invoke('coupons:upsertMany', coupons),
+  },
   invoiceRag: {
     register: (input) => ipcRenderer.invoke('invoiceRag:register', input),
     readFile: (id) => ipcRenderer.invoke('invoiceRag:readFile', id),

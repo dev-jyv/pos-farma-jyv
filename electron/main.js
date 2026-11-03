@@ -56,6 +56,7 @@ const cashSessionsDb = require('./db/cash-sessions');
 const cashMovementsDb = require('./db/cash-movements');
 const pharmacyServicesDb = require('./db/pharmacy-services');
 const promotionsDb = require('./db/promotions');
+const couponsDb = require('./db/coupons');
 const invoiceRagDb = require('./db/invoice-rag');
 const syncLogDb = require('./db/sync-log');
 const diagnosticsDb = require('./db/diagnostics');
@@ -171,7 +172,7 @@ function cerrarVentana() {
 }
 
 /** Canales de lectura pura: no se loguean (son miles por turno y no cambian nada). */
-const CANALES_SILENCIOSOS = /^(catalog:(search|getByBarcode|getByIds|getBatchesByProduct|getProductById)|sales:(list|listMovements)|cashSessions:(getLiveSummary|getCashOnHand|listLocal|getOpenLocal.*)|promotions:listActive|pharmacyServices:list.*|sync:getStatus|.*:(getPending\w*|getNeeding\w*|listBlocked\w*))$/;
+const CANALES_SILENCIOSOS = /^(catalog:(search|getByBarcode|getByIds|getBatchesByProduct|getProductById)|sales:(list|listMovements)|cashSessions:(getLiveSummary|getCashOnHand|listLocal|getOpenLocal.*)|promotions:listActive|coupons:findByCode|pharmacyServices:list.*|sync:getStatus|.*:(getPending\w*|getNeeding\w*|listBlocked\w*))$/;
 
 let log = { info() {}, warn() {}, error() {}, prune() {} };
 
@@ -247,6 +248,9 @@ app.whenReady().then(() => {
         promotionsDb
           .purgeStale(prisma, new Date())
           .catch((error) => console.error('[db] no se pudieron purgar promociones viejas', error)),
+        couponsDb
+          .purgeStale(prisma, new Date())
+          .catch((error) => console.error('[db] no se pudieron purgar cupones viejos', error)),
         syncLogDb
           .purgeOld(prisma, new Date())
           .catch((error) => console.error('[db] no se pudo purgar la bitácora de sync', error)),
@@ -644,6 +648,10 @@ function registrarIPCHandlers() {
     promotionsDb.listActive(await getPrisma(), new Date()));
   ipcMain.handle('promotions:upsertMany', async (_event, promotions) =>
     promotionsDb.upsertMany(await getPrisma(), promotions));
+  ipcMain.handle('coupons:findByCode', async (_event, code) =>
+    couponsDb.findByCode(await getPrisma(), code));
+  ipcMain.handle('coupons:upsertMany', async (_event, coupons) =>
+    couponsDb.upsertMany(await getPrisma(), coupons));
 
   const invoiceRagDir = path.join(app.getPath('userData'), 'invoice-rag');
   ipcMain.handle('invoiceRag:register', async (_event, input) =>
