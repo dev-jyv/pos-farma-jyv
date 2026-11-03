@@ -130,6 +130,20 @@ preparar a mano.
 lo que no se haya sincronizado se pierde. Antes de retirar una caja de
 servicio, entra, pulsa **Sincronizar** y confirma que no queden pendientes.
 
+**La caja guarda copias de su base** en `Documentos/FarmaJyV/respaldos`: una
+tras cada corte Z y otra al salir de la app, las 7 más recientes. Sirven si se
+borra el perfil de la app; **no** si falla el disco (están en el mismo). Cómo
+volver a una: [`RESTAURAR_RESPALDO.md`](RESTAURAR_RESPALDO.md). Al instalar,
+revisa dos cosas:
+
+- Que el usuario del cajero pueda escribir en su carpeta Documentos (una
+  política del equipo que lo impida deja la caja sin copias; el fallo se ve en el
+  panel, en Cajas).
+- Si Documentos se sincroniza con **OneDrive** (Windows, "Copia de seguridad de
+  carpetas") o **iCloud Drive** (macOS, "Escritorio y Documentos"): las copias
+  llevan ventas, clientes y recetas y subirían a esa nube personal. Desactiva la
+  sincronización de Documentos en ese equipo o deja fuera la carpeta `FarmaJyV`.
+
 **Cerrar sesión y cerrar la app avisan** si queda algo sin subir, e intentan
 subirlo antes de salir. Aun así, la costumbre de sincronizar al terminar el
 turno es la que evita sustos.

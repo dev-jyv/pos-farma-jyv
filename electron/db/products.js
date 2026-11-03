@@ -573,6 +573,32 @@ async function markCatalogPushFailed(prisma, localId, message) {
   await prisma.product.update({ where: { id: localId }, data: { catalogPushError: message } });
 }
 
+/**
+ * "Arreglar" de un producto que bloquea ventas: limpia **todos** sus errores de
+ * subida para que su cola lo vuelva a intentar en el siguiente push. El alta
+ * puede venir del catálogo (`catalogPushError`) o de una entrada de stock (el
+ * error vive en el lote), y desde el panel no hay forma de saber cuál de las
+ * dos falló, así que se reintentan ambas.
+ *
+ * Devuelve `false` si el producto no existe en local (un comando remoto puede
+ * apuntar a un id que esta caja no tiene).
+ */
+async function retryProductPush(prisma, localId) {
+  const product = await prisma.product.findUnique({ where: { id: localId } });
+  if (!product) {
+    return false;
+  }
+  await prisma.product.update({
+    where: { id: localId },
+    data: { pushError: null, catalogPushError: null },
+  });
+  await prisma.batch.updateMany({
+    where: { productId: localId, pendingPush: true, pushError: { not: null } },
+    data: { pushError: null },
+  });
+  return true;
+}
+
 async function clearCatalogPushError(prisma, localId) {
   await prisma.product.update({ where: { id: localId }, data: { catalogPushError: null } });
 }
@@ -595,6 +621,7 @@ async function listBlockedProducts(prisma) {
 }
 
 module.exports = {
+  retryProductPush,
   search,
   getByBarcode,
   getByIds,

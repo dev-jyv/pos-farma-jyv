@@ -321,8 +321,44 @@
                 (onClick)="askAi(record)"
               />
             }
+            @if (record.blockers?.length) {
+              <!-- Qué la detiene, uno por renglón: el mensaje resume, esto dice
+                   exactamente qué turno o producto hay que destrabar. -->
+              <ul class="mt-1.5 space-y-0.5" data-testid="blocked-blockers">
+                @for (blocker of record.blockers; track blocker.kind + blocker.localId) {
+                  <li class="flex items-start gap-1.5 text-xs text-(--pos-ink-soft)">
+                    <i
+                      [class]="blocker.kind === 'cashSession' ? 'pi pi-clock' : 'pi pi-box'"
+                      class="mt-0.5 text-[10px]"
+                      aria-hidden="true"
+                    ></i>
+                    <span>
+                      <span class="font-medium text-(--pos-ink)">{{ blocker.label }}</span>
+                      @if (blocker.missingLocally) {
+                        · no existe en esta caja
+                      } @else if (blocker.error) {
+                        · {{ blocker.error }}
+                      } @else {
+                        · aún no sube al servidor
+                      }
+                    </span>
+                  </li>
+                }
+              </ul>
+            }
           </div>
           <div class="flex shrink-0 flex-col gap-1">
+            @if (canRepairBlocked(record)) {
+              <p-button
+                label="Arreglar"
+                icon="pi pi-wrench"
+                size="small"
+                severity="success"
+                [loading]="repairingId() === record.id"
+                [disabled]="repairingId() !== null"
+                (onClick)="repairBlocked(record)"
+              />
+            }
             <p-button
               label="Reintentar"
               icon="pi pi-refresh"
@@ -330,9 +366,20 @@
               [severity]="recomendado === 'reintentar' ? 'primary' : 'secondary'"
               [outlined]="recomendado !== 'reintentar'"
               [loading]="retryingBlockedId() === record.id"
-              [disabled]="retryingBlockedId() !== null"
+              [disabled]="retryingBlockedId() !== null || repairingId() !== null"
               (onClick)="retryBlocked(record)"
             />
+            @if (canSendBlockedToUnreconciled(record)) {
+              <p-button
+                label="Mandar a conciliación"
+                icon="pi pi-send"
+                size="small"
+                severity="warn"
+                [outlined]="true"
+                [disabled]="repairingId() !== null"
+                (onClick)="sendBlockedToUnreconciled(record)"
+              />
+            }
             @if (canFixBlocked(record)) {
               <p-button
                 label="Corregir"

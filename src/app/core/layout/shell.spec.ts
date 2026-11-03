@@ -13,6 +13,8 @@ import { ApiHealthService } from '../health/api-health.service';
 import { AuthService } from '../auth/auth.service';
 import { NotificationService } from '../notifications/notification.service';
 import { BlockedSyncService } from '../sync/blocked-sync.service';
+import { SyncRepairService } from '../sync/sync-repair.service';
+import { BlockedSyncRecord } from '../electron/window.d';
 import { SyncScheduler } from '../sync/sync-scheduler.service';
 import { SyncHelpService } from '../sync/sync-help.service';
 import { NAV_ITEMS } from './nav.config';
@@ -46,6 +48,10 @@ describe('Shell', () => {
   };
   /** Handler que el shell registró para la X de la ventana. */
   let cerrarSolicitado: (() => void) | null;
+  let rechazados: ReturnType<typeof signal<BlockedSyncRecord[]>>;
+  let fixSale: ReturnType<typeof vi.fn>;
+  let sendSaleToUnreconciled: ReturnType<typeof vi.fn>;
+  let notifications: { success: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
 
   async function build(): Promise<void> {
     TestBed.resetTestingModule();
@@ -87,7 +93,8 @@ describe('Shell', () => {
             flushPendingNow,
           },
         },
-        { provide: NotificationService, useValue: { success: vi.fn(), error: vi.fn() } },
+        { provide: NotificationService, useValue: notifications },
+        { provide: SyncRepairService, useValue: { fixSale, sendSaleToUnreconciled } },
         {
           provide: CashSessionService,
           useValue: { current: () => turnoAbierto, isOpen: () => turnoAbierto !== null },
@@ -99,12 +106,14 @@ describe('Shell', () => {
           provide: BlockedSyncService,
           useValue: {
             count: signal(0),
-            records: signal([]),
+            records: rechazados,
             refresh: vi.fn().mockResolvedValue(undefined),
             retry: vi.fn(),
             discard: vi.fn(),
             canFix: () => false,
             canDiscard: () => false,
+            canRepair: (record: BlockedSyncRecord) => (record.blockers?.length ?? 0) > 0,
+            canSendToUnreconciled: (_record: BlockedSyncRecord, fixFailed: boolean) => fixFailed,
           },
         },
       ],
@@ -137,7 +146,74 @@ describe('Shell', () => {
     syncNow = vi.fn().mockResolvedValue({ ok: true, pulled: 0 });
     confirmSpy = vi.fn().mockReturnValue(true);
     window.confirm = confirmSpy as unknown as typeof window.confirm;
+    rechazados = signal<BlockedSyncRecord[]>([]);
+    fixSale = vi.fn();
+    sendSaleToUnreconciled = vi.fn();
+    notifications = { success: vi.fn(), error: vi.fn(), warn: vi.fn() };
     await build();
+  });
+
+  /**
+   * Panel de rechazados: cada venta dice qué la detiene, "Arreglar" reintenta
+   * el bloqueador y, si falla con un turno rechazado, se ofrece conciliación.
+   */
+  describe('rechazados al sincronizar', () => {
+    const venta: BlockedSyncRecord = {
+      kind: 'sale',
+      id: 'sale-1',
+      label: 'PENDIENTE-1',
+      detail: '$100.00',
+      occurredAt: '2026-09-25T13:05:00Z',
+      reason: 'Espera al turno de ana del 25/09 13:02 (su apertura falló: Turno remoto ya abierto).',
+      blockers: [
+        {
+          kind: 'cashSession',
+          localId: 'cs-1',
+          remoteId: null,
+          label: 'Turno de ana del 25/09 13:02',
+          error: 'Turno remoto ya abierto',
+          missingLocally: false,
+        },
+      ],
+    };
+
+    // Sin `detectChanges`: la plantilla completa del shell necesita el router
+    // real (routerLink, router-outlet). Se prueba lo que decide qué botones
+    // salen, que es lo que la plantilla consulta.
+    it('ofrece Arreglar en una venta con bloqueadores, y aún no conciliación', () => {
+      expect(component.canRepairBlocked(venta)).toBe(true);
+      expect(component.canRepairBlocked({ ...venta, blockers: [] })).toBe(false);
+      expect(component.canSendBlockedToUnreconciled(venta)).toBe(false);
+    });
+
+    it('Arreglar exitoso notifica y no ofrece conciliación', async () => {
+      fixSale.mockResolvedValue({ ok: true, message: 'Venta reenviada al servidor.' });
+
+      await component.repairBlocked(venta);
+
+      expect(fixSale).toHaveBeenCalledWith('sale-1');
+      expect(notifications.success).toHaveBeenCalledWith('PENDIENTE-1: Venta reenviada al servidor.');
+      expect(component.canSendBlockedToUnreconciled(venta)).toBe(false);
+    });
+
+    it('tras un Arreglar fallido ofrece Mandar a conciliación, con confirmación', async () => {
+      fixSale.mockResolvedValue({ ok: false, message: 'Turno remoto ya abierto' });
+      sendSaleToUnreconciled.mockResolvedValue({ ok: true, message: 'Venta registrada en conciliación.' });
+
+      await component.repairBlocked(venta);
+
+      expect(notifications.warn).toHaveBeenCalledWith('Turno remoto ya abierto', 'No se pudo arreglar PENDIENTE-1');
+      expect(component.canSendBlockedToUnreconciled(venta)).toBe(true);
+      expect(component.repairingId()).toBeNull();
+
+      confirmSpy.mockReturnValueOnce(false);
+      await component.sendBlockedToUnreconciled(venta);
+      expect(sendSaleToUnreconciled).not.toHaveBeenCalled();
+
+      await component.sendBlockedToUnreconciled(venta);
+      expect(sendSaleToUnreconciled).toHaveBeenCalledWith('sale-1');
+      expect(notifications.success).toHaveBeenCalledWith('PENDIENTE-1: Venta registrada en conciliación.');
+    });
   });
 
   it('con todos los permisos muestra el menú completo', () => {

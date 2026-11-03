@@ -56,6 +56,32 @@ export class BlockedSyncService {
   }
 
   /**
+   * "Arreglar" solo tiene sentido en una venta que espera a algo **local** (su
+   * turno o un producto sin `remoteId`). Un rechazo del servidor sin
+   * bloqueadores se resuelve con "Reintentar" tras corregir la causa.
+   */
+  canRepair(record: BlockedSyncRecord): boolean {
+    return record.kind === 'sale' && (record.blockers?.length ?? 0) > 0;
+  }
+
+  /**
+   * "Mandar a conciliación" es el último recurso, para cuando "Arreglar" ya
+   * falló y el bloqueador no tiene arreglo desde la caja: un turno cuya alta el
+   * servidor rechazó (tiene error y nunca tendrá `remoteId`) o un producto que
+   * ni existe en local. Así el dinero cobrado queda registrado en el servidor.
+   */
+  canSendToUnreconciled(record: BlockedSyncRecord, fixFailed: boolean): boolean {
+    if (!fixFailed || record.kind !== 'sale') {
+      return false;
+    }
+    return (record.blockers ?? []).some(
+      (blocker) =>
+        (blocker.kind === 'cashSession' && blocker.error !== null && blocker.remoteId === null) ||
+        blocker.missingLocally,
+    );
+  }
+
+  /**
    * Un turno no se borra: sus gastos y ventas cuelgan de él y quedarían
    * huérfanos. Para ese caso la salida es corregir la causa y reintentar.
    */

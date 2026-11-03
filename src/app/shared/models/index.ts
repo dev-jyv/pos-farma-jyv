@@ -810,3 +810,111 @@ export interface InvoiceRagSearchHit {
   document: InvoiceRagDocument;
   score: number;
 }
+
+/*
+ * Diagnóstico remoto de la caja (`POST /pos/diagnostics` y
+ * `POST /pos/commands/:id/result`). **Contrato compartido con el backend**: los
+ * nombres y formas no se cambian de un solo lado.
+ */
+
+/** Lo que detiene a una venta en la caja: su turno o un producto sin `remoteId`. */
+export interface PosBlocker {
+  kind: 'cashSession' | 'product';
+  localId: string;
+  remoteId: string | null;
+  /** "Turno de <cajero> del <fecha>" o el nombre del producto. */
+  label: string;
+  /** Por qué no sube (el `pushError` del turno o del producto), si se sabe. */
+  error: string | null;
+  /** El producto ni siquiera existe en la tabla local. */
+  missingLocally: boolean;
+}
+
+export interface PosBlockedSale {
+  localId: string;
+  folio: string;
+  total: number;
+  createdAt: string;
+  cashSessionId: string | null;
+  pushError: string;
+  waitingFor: 'turno' | 'catalogo' | 'servidor' | null;
+  blockers: PosBlocker[];
+}
+
+export interface PosSyncLogEntry {
+  at: string;
+  level: 'info' | 'warn' | 'error';
+  entity: string;
+  message: string;
+  ref: string | null;
+}
+
+export interface PosDiagnosticsInput {
+  deviceId: string;
+  deviceName: string;
+  appVersion: string;
+  platform: string;
+  generatedAt: string;
+  pendingSalesCount: number;
+  /** Máx. 200. */
+  blockedSales: PosBlockedSale[];
+  /** Máx. 100. */
+  blockedCashSessions: Array<{
+    localId: string;
+    remoteId: string | null;
+    openedAt: string;
+    openedByLabel: string | null;
+    pushError: string | null;
+    closePushError: string | null;
+  }>;
+  /** Máx. 200. */
+  unsyncedProducts: Array<{
+    localId: string;
+    name: string;
+    pushError: string | null;
+    catalogPushError: string | null;
+  }>;
+  /** Máx. 50. */
+  recentSyncRuns: Array<{
+    entity: string;
+    direction: string;
+    status: string;
+    errorMessage: string | null;
+    startedAt: string;
+  }>;
+  /** Máx. 200. */
+  syncLog: PosSyncLogEntry[];
+  /**
+   * Turno abierto en este equipo: `remoteId` si ya subió, si no el id local;
+   * `null` sin turno abierto. El backend alerta por silencio solo a cajas con
+   * turno (SPEC 44). Opcional: se omite si la caja no pudo leerlo.
+   */
+  openCashSessionId?: string | null;
+  /**
+   * Última copia local de rutina de la base (ISO) en `Documentos/FarmaJyV/respaldos`,
+   * o `null` si no hay ninguna (SPEC 37). Opcional en el backend.
+   */
+  lastLocalBackupAt?: string | null;
+}
+
+export type PosCommandType = 'retrySale' | 'retryCashSession' | 'retryProduct' | 'sendSaleToUnreconciled';
+
+export interface PosCommand {
+  id: string;
+  deviceId: string;
+  type: PosCommandType;
+  targetLocalId: string;
+  note: string | null;
+  status: 'pending' | 'done' | 'failed';
+  createdBy: string;
+  createdAt: string;
+  completedAt: string | null;
+  result: string | null;
+}
+
+/** Body de `POST /pos/commands/:id/result`; el backend valida `deviceId` contra el comando. */
+export interface PosCommandResult {
+  status: 'done' | 'failed';
+  message?: string;
+  deviceId: string;
+}

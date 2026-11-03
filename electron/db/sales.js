@@ -6,15 +6,15 @@ const { codeFromReason } = require('./blocked-diagnosis');
  */
 const MAX_RESOLVE_ATTEMPTS = 6;
 
+const { blockersForPayload, describeBlockers, looksLikeLocalId, looksLikeRemoteId } = require('./sale-blockers');
+const syncLog = require('./sync-log');
+
 /**
- * `pushError` que pone la propia caja al agotar `MAX_RESOLVE_ATTEMPTS`. Es un
- * bloqueo **local** (el servidor nunca vio la venta): `listBlocked` lo reconoce
- * por este texto para diagnosticar qué dependencia sigue sin subir.
+ * Texto del bloqueo por espera **anterior** a los mensajes específicos. Las
+ * cajas en producción tienen ventas con este texto: el healing lo reconoce para
+ * reescribirlo con el bloqueador concreto o desbloquearlas.
  */
-const BLOQUEO_POR_INTENTOS =
-  'Esta venta espera a que su turno o alguno de sus productos ' +
-  'sincronice, y ya lleva demasiados intentos. Revísala: ' +
-  'reintenta cuando el catálogo esté al día o descártala.';
+const LEGACY_WAIT_MESSAGE = 'espera a que su turno o alguno de sus productos';
 
 /**
  * Partidas que mueven inventario. **La regla de "los servicios no tocan stock"
@@ -399,10 +399,24 @@ async function buildRemoteIdMap(prisma, ids) {
     where: { OR: [{ id: { in: ids } }, { remoteId: { in: ids } }] },
     select: { id: true, remoteId: true },
   });
+  const known = new Set();
   for (const product of products) {
+    known.add(product.id);
     if (product.remoteId) {
+      known.add(product.remoteId);
       remoteByAnyId.set(product.id, product.remoteId);
       remoteByAnyId.set(product.remoteId, product.remoteId);
+    }
+  }
+  // Producto que **no existe** en la tabla local pero cuyo id tiene forma de id
+  // de Firestore: el payload ya viaja con el remoto (`remoteId ?? id` al cobrar)
+  // y la fila local se perdió (base restaurada, catálogo purgado). Antes la venta
+  // esperaba para siempre a una fila que nunca iba a aparecer; ahora se manda tal
+  // cual, igual que `resolvePayloadCashSession` con el turno sin fila local. Un
+  // id local (uuid) nunca tiene esa forma, así que no hay ambigüedad.
+  for (const id of ids) {
+    if (!known.has(id) && looksLikeRemoteId(id)) {
+      remoteByAnyId.set(id, id);
     }
   }
   return remoteByAnyId;
@@ -429,6 +443,7 @@ async function prepararCola(prisma, rows) {
 async function listBlocked(prisma, { ownerUid } = {}) {
   const rows = await prisma.sale.findMany({
     where: { pushError: { not: null }, ...(ownerUid ? { cashierId: ownerUid } : {}) },
+    include: { items: true },
     orderBy: { createdAt: 'asc' },
   });
   const registros = [];
@@ -440,10 +455,15 @@ async function listBlocked(prisma, { ownerUid } = {}) {
       detail: `$${Number(row.total ?? 0).toFixed(2)}`,
       occurredAt: row.createdAt,
       reason: row.pushError,
-      diagnosis:
-        row.pushError === BLOQUEO_POR_INTENTOS
-          ? await diagnoseDependency(prisma, row)
-          : { code: codeFromReason(row.pushError) },
+      // Bloqueo por espera (contador al tope o texto viejo): se diagnostica en
+      // vivo qué dependencia falta; un rechazo del servidor, por su texto.
+      diagnosis: isWaitBlocked(row)
+        ? await diagnoseDependency(prisma, row)
+        : { code: codeFromReason(row.pushError) },
+      // Qué la detiene (turno/productos sin identidad remota). El panel los
+      // muestra y decide si ofrece "Arreglar". Vacío en rechazos del servidor
+      // que no dependen de nada local (stock, llave reciclada…).
+      blockers: await blockersOfRow(prisma, row),
     });
   }
   return registros;
@@ -498,6 +518,74 @@ function etiquetaTurno(session) {
     : '';
   const quien = session.openedByLabel ?? '';
   return ['Turno', quien && `de ${quien}`, cuando && `abierto el ${cuando}`].filter(Boolean).join(' ');
+}
+
+/** Bloqueadores de una fila de venta ya leída; nunca lanza (es para la UI). */
+async function blockersOfRow(prisma, row) {
+  try {
+    return await blockersForPayload(prisma, JSON.parse(row.payloadJson), row.items ?? []);
+  } catch {
+    return [];
+  }
+}
+
+/** Bloqueada por esperar a su turno/productos (no por un rechazo del servidor). */
+function isWaitBlocked(row) {
+  if (!row.pushError) {
+    return false;
+  }
+  // Solo `getPendingPush` lleva el contador al tope, y lo devuelve a 0 en cuanto
+  // el payload resuelve o alguien reintenta: un rechazo del servidor nunca deja
+  // el contador ahí. El texto viejo cubre las ventas bloqueadas antes de esto.
+  return (
+    (row.payloadResolveAttempts ?? 0) >= MAX_RESOLVE_ATTEMPTS ||
+    String(row.pushError).toLowerCase().includes(LEGACY_WAIT_MESSAGE)
+  );
+}
+
+/**
+ * Autocorrección de las ventas bloqueadas por espera.
+ *
+ * - Si sus bloqueadores ya se resolvieron (el turno o el producto subió después,
+ *   o el producto faltante resultó tener id remoto), vuelven a la cola con el
+ *   cupo de intentos repuesto. Antes se quedaban en el panel de rechazados
+ *   aunque ya no hubiera nada que esperar, hasta que alguien pulsara
+ *   "Reintentar".
+ * - Si siguen bloqueadas pero con el mensaje genérico de antes, se reescribe con
+ *   el bloqueador concreto: así las cajas que ya tenían ventas atoradas en
+ *   producción pasan a decir **qué** las detiene sin intervención.
+ */
+async function healResolvedWaitBlocks(prisma) {
+  const filas = await prisma.sale.findMany({
+    where: { pendingPush: true, pushError: { not: null } },
+    include: { items: true },
+  });
+  for (const fila of filas) {
+    if (!isWaitBlocked(fila)) {
+      continue;
+    }
+    const blockers = await blockersOfRow(prisma, fila);
+    if (!blockers.length) {
+      await prisma.sale.update({
+        where: { id: fila.id },
+        data: { pushError: null, payloadResolveAttempts: 0 },
+      });
+      await syncLog.appendSafe(prisma, {
+        level: 'info',
+        entity: 'sale',
+        ref: fila.id,
+        message: `Venta ${fila.folio} desbloqueada: su turno y sus productos ya sincronizaron.`,
+      });
+      continue;
+    }
+    const message = describeBlockers(blockers);
+    if (message !== fila.pushError) {
+      await prisma.sale.update({
+        where: { id: fila.id },
+        data: { pushError: message, payloadResolveAttempts: Math.max(fila.payloadResolveAttempts ?? 0, MAX_RESOLVE_ATTEMPTS) },
+      });
+    }
+  }
 }
 
 /**
@@ -581,9 +669,15 @@ async function dependenciaEnCamino(prisma, payload, conProductos, remoteByAnyId,
 async function healClosedShiftBlocks(prisma) {
   const bloqueadas = await prisma.sale.findMany({
     where: { pendingPush: true, pushError: { not: null } },
-    select: { id: true, pushError: true },
+    select: { id: true, pushError: true, payloadResolveAttempts: true },
   });
   for (const fila of bloqueadas) {
+    // Un bloqueo por espera puede citar el error del turno ("…su apertura
+    // falló: el turno de caja ya está cerrado"): no es un rechazo de la venta y
+    // limpiarlo aquí solo la haría rebotar contra el mismo bloqueo cada ciclo.
+    if (isWaitBlocked(fila)) {
+      continue;
+    }
     const msg = String(fila.pushError).toLowerCase();
     if (!(msg.includes('turno') && msg.includes('cerrado'))) {
       continue;
@@ -611,6 +705,7 @@ async function healClosedShiftBlocks(prisma) {
  */
 async function getPendingPush(prisma, { ownerUid, contarIntentos = false } = {}) {
   await healClosedShiftBlocks(prisma);
+  await healResolvedWaitBlocks(prisma);
   const rows = await prisma.sale.findMany({
     // Una venta anulada que nunca llegó a existir en el servidor va por otro
     // camino (`getPendingVoided`: se crea y se anula, para que quede el rastro
@@ -656,16 +751,33 @@ async function getPendingPush(prisma, { ownerUid, contarIntentos = false } = {})
         continue;
       }
       const attempts = (row.payloadResolveAttempts ?? 0) + 1;
-      await prisma.sale.update({
-        where: { id: row.id },
-        data:
-          attempts >= MAX_RESOLVE_ATTEMPTS
-            ? {
-                payloadResolveAttempts: attempts,
-                pushError: BLOQUEO_POR_INTENTOS,
-              }
-            : { payloadResolveAttempts: attempts },
-      });
+      const blockers = await blockersForPayload(prisma, payloads[indice], row.items ?? []);
+      // Un producto con id **local** (uuid) que ya no está en la tabla no va a
+      // aparecer nunca: solo esta caja lo conocía. Esperar seis ciclos solo
+      // retrasaba el aviso dos días; se bloquea en el acto con el motivo.
+      const unrecoverable = blockers.some(
+        (blocker) => blocker.missingLocally && looksLikeLocalId(blocker.localId),
+      );
+      if (attempts >= MAX_RESOLVE_ATTEMPTS || unrecoverable) {
+        const message = describeBlockers(blockers);
+        await prisma.sale.update({
+          where: { id: row.id },
+          data: {
+            // Al tope aunque se bloquee antes: es la marca con la que el healing
+            // reconoce un bloqueo por espera (ver `isWaitBlocked`).
+            payloadResolveAttempts: Math.max(attempts, MAX_RESOLVE_ATTEMPTS),
+            pushError: message,
+          },
+        });
+        await syncLog.appendSafe(prisma, {
+          level: 'warn',
+          entity: 'sale',
+          ref: row.id,
+          message: `Venta ${row.folio} bloqueada: ${message}`,
+        });
+      } else {
+        await prisma.sale.update({ where: { id: row.id }, data: { payloadResolveAttempts: attempts } });
+      }
       continue;
     }
     if (contarIntentos && row.payloadResolveAttempts) {
@@ -715,6 +827,45 @@ async function getPendingVoided(prisma, { ownerUid } = {}) {
     });
   }
   return pending;
+}
+
+/**
+ * Lo necesario para mandar una venta a `POST /sales/unreconciled` cuando su
+ * payload **no** puede resolverse: el turno nunca subió (su alta la rechazó el
+ * servidor de forma permanente) y la venta no saldría jamás de la caja.
+ *
+ * Los productos se traducen a su id remoto donde se pueda y el resto viaja
+ * como está (el backend guarda el payload íntegro para conciliarlo a mano). El
+ * turno solo se manda si ya tiene `remoteId`; si no, se **omite**: un id local
+ * no le dice nada al servidor, y el dinero tiene que quedar registrado igual.
+ */
+async function prepareUnreconciled(prisma, localId) {
+  const row = await prisma.sale.findUnique({ where: { id: localId }, include: { items: true } });
+  if (!row) {
+    return null;
+  }
+  const payload = JSON.parse(row.payloadJson);
+  const ids = idsDePartidas(payload?.items ?? []);
+  const remoteByAnyId = await buildRemoteIdMap(prisma, ids);
+  const items = (payload?.items ?? []).map((item) =>
+    (item.kind ?? 'product') === 'product' && remoteByAnyId.has(item.productId)
+      ? { ...item, productId: remoteByAnyId.get(item.productId) }
+      : item,
+  );
+
+  let cashSessionId = null;
+  if (payload?.cashSessionId) {
+    const session = await prisma.cashSession.findUnique({ where: { id: payload.cashSessionId } });
+    // Sin fila local el id ya es remoto (misma regla que `resolvePayloadCashSession`).
+    cashSessionId = session ? session.remoteId ?? null : payload.cashSessionId;
+  }
+  const sinTurno = { ...(payload ?? {}), items };
+  delete sinTurno.cashSessionId;
+  return {
+    ...toSaleDto(row),
+    cashSessionId,
+    payload: cashSessionId ? { ...sinTurno, cashSessionId } : sinTurno,
+  };
 }
 
 async function markSynced(prisma, localId, remoteId, remoteFolio) {
@@ -883,6 +1034,10 @@ module.exports = {
   getPendingPush,
   listBlocked,
   getPendingVoided,
+  prepareUnreconciled,
+  healResolvedWaitBlocks,
+  isWaitBlocked,
+  MAX_RESOLVE_ATTEMPTS,
   markSynced,
   markPushFailed,
   markUnreconciled,

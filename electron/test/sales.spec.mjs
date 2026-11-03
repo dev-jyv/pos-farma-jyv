@@ -374,7 +374,9 @@ describe('cola de push', () => {
       await getPendingPush(prisma, { contarIntentos: true });
     }
 
-    expect(prisma.sale.rows[0].pushError).toMatch(/espera a que su turno o alguno de sus productos sincronice/i);
+    // El mensaje nombra al bloqueador concreto, ya no "su turno o alguno de sus
+    // productos": sin eso nadie sabía qué arreglar.
+    expect(prisma.sale.rows[0].pushError).toMatch(/^Espera al producto Producto p-1 \(alta local sin subir/);
     expect(prisma.sale.rows[0].payloadResolveAttempts).toBe(6);
   });
 
@@ -457,7 +459,7 @@ describe('cola de push', () => {
       await getPendingPush(prisma, { contarIntentos: true });
     }
 
-    expect(prisma.sale.rows[0].pushError).toMatch(/demasiados intentos/i);
+    expect(prisma.sale.rows[0].pushError).toMatch(/Espera al turno .*su apertura falló: Turno inválido/);
   });
 
   it('no gasta intentos mientras su producto sigue en la cola del catálogo', async () => {

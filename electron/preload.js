@@ -51,6 +51,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     markCatalogPushFailed: (localId, message) =>
       ipcRenderer.invoke('catalog:markCatalogPushFailed', localId, message),
     clearCatalogPushError: (localId) => ipcRenderer.invoke('catalog:clearCatalogPushError', localId),
+    retryProductPush: (localId) => ipcRenderer.invoke('catalog:retryProductPush', localId),
   },
 
   sales: {
@@ -64,6 +65,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     markUnreconciled: (localId, reason) =>
       ipcRenderer.invoke('sales:markUnreconciled', localId, reason),
     markPushFailed: (localId, message) => ipcRenderer.invoke('sales:markPushFailed', localId, message),
+    diagnose: (saleId) => ipcRenderer.invoke('sales:diagnose', saleId),
+    prepareUnreconciled: (localId) => ipcRenderer.invoke('sales:prepareUnreconciled', localId),
     voidLocal: (localId, voidedBy, voidedByLabel, reason) =>
       ipcRenderer.invoke('sales:voidLocal', localId, voidedBy, voidedByLabel, reason),
     listMovements: (saleId) => ipcRenderer.invoke('sales:listMovements', saleId),
@@ -77,6 +80,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sync: {
     getStatus: () => ipcRenderer.invoke('sync:getStatus'),
     recordRun: (run) => ipcRenderer.invoke('sync:recordRun', run),
+  },
+
+  /** Bitácora local de sincronización (`SyncLog`). */
+  syncLog: {
+    append: (entry) => ipcRenderer.invoke('syncLog:append', entry),
+    list: (limit) => ipcRenderer.invoke('syncLog:list', limit),
+  },
+
+  /** Foto de salud del sync para `POST /pos/diagnostics`. */
+  diagnostics: {
+    buildSnapshot: () => ipcRenderer.invoke('diagnostics:buildSnapshot'),
   },
 
   cashSessions: {
@@ -100,6 +114,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     markClosePushFailed: (localId, message) =>
       ipcRenderer.invoke('cashSessions:markClosePushFailed', localId, message),
     clearPushError: (localId) => ipcRenderer.invoke('cashSessions:clearPushError', localId),
+    retryPush: (localId) => ipcRenderer.invoke('cashSessions:retryPush', localId),
     clearClosePushError: (localId) => ipcRenderer.invoke('cashSessions:clearClosePushError', localId),
     listLocal: (filters) => ipcRenderer.invoke('cashSessions:listLocal', filters),
     updateAdjustmentStatus: (localId, values) =>
