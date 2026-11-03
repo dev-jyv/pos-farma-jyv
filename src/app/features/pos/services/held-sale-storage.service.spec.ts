@@ -30,6 +30,27 @@ describe('HeldSaleStorageService', () => {
     service = new HeldSaleStorageService();
   });
 
+  it('una venta en espera conserva la caja de sus líneas y su cupón (SPEC 46, 47)', () => {
+    const held: HeldSale = {
+      ...heldSale(),
+      couponCode: 'AMOX10',
+      lines: [
+        {
+          kind: 'product' as const,
+          product: { id: 'p1', sku: 'SKU1', name: 'Producto', salePrice: 12, stock: 30, boxQuantity: 10, boxPrice: 100 } as Product,
+          quantity: 1,
+          discountAmount: 0,
+          saleUnit: 'box',
+        },
+      ],
+    };
+    service.save(UID, [held]);
+
+    const [restored] = service.load(UID);
+    expect(restored.couponCode).toBe('AMOX10');
+    expect(restored.lines[0]).toMatchObject({ saleUnit: 'box', quantity: 1 });
+  });
+
   it('guarda y recupera las ventas en espera con su fecha', () => {
     service.save(UID, [heldSale()]);
 

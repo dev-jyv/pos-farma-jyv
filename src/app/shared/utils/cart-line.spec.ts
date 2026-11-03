@@ -10,6 +10,7 @@ import {
 } from '../models';
 import {
   commissionTotalOf,
+  isBoxLine,
   isProductLine,
   isServiceLine,
   lineCommission,
@@ -18,11 +19,14 @@ import {
   lineMaxQuantity,
   lineName,
   lineNeedsProvider,
+  linePieces,
   lineTaxable,
+  lineUnitPrice,
   normalizeStoredLine,
   pharmacyTotalOf,
   servicesTotalOf,
   splitCash,
+  stockLabel,
 } from './cart-line';
 
 function producto(overrides: Partial<Product> = {}): Product {
@@ -271,5 +275,57 @@ describe('rehidratar una línea guardada', () => {
 
   it('el descuento ausente se lee como cero', () => {
     expect(normalizeStoredLine({ product: producto(), quantity: 1 })).toMatchObject({ discountAmount: 0 });
+  });
+});
+
+/** Venta por caja completa (SPEC 46). */
+describe('pieza y caja del mismo producto', () => {
+  const conCaja = (overrides: Partial<Product> = {}) =>
+    producto({ stock: 35, salePrice: 12, boxQuantity: 10, boxPrice: 100, boxBarcode: 'CAJA-1', ...overrides });
+
+  it('la pieza conserva su clave de siempre y la caja tiene la suya', () => {
+    const pieza = lineaProducto({ product: conCaja() });
+    const caja = lineaProducto({ product: conCaja(), saleUnit: 'box' });
+
+    expect(lineKey(pieza)).toBe('product:p1');
+    expect(lineKey(caja)).toBe('product:p1:box');
+    expect(isBoxLine(caja)).toBe(true);
+    expect(isBoxLine(pieza)).toBe(false);
+  });
+
+  it('la caja cuesta boxPrice por unidad y la cantidad cuenta cajas', () => {
+    const caja = lineaProducto({ product: conCaja(), saleUnit: 'box', quantity: 2 });
+
+    expect(lineUnitPrice(caja)).toBe(100);
+    expect(lineGross(caja)).toBe(200);
+    expect(linePieces(caja)).toBe(20);
+  });
+
+  it('el tope de una caja son las cajas completas en existencia', () => {
+    expect(lineMaxQuantity(lineaProducto({ product: conCaja(), saleUnit: 'box' }))).toBe(3);
+    expect(lineMaxQuantity(lineaProducto({ product: conCaja() }))).toBe(35);
+  });
+
+  it('las existencias se muestran en piezas y cajas completas', () => {
+    expect(stockLabel(conCaja())).toBe('35 pzas · 3 cajas completas');
+    expect(stockLabel(conCaja({ stock: 12 }))).toBe('12 pzas · 1 caja completa');
+    expect(stockLabel(producto({ stock: 1 }))).toBe('1 pza');
+  });
+
+  it('una caja guardada vuelve como caja', () => {
+    const linea = normalizeStoredLine({ kind: 'product', product: conCaja(), quantity: 1, saleUnit: 'box' });
+
+    expect(linea).toMatchObject({ saleUnit: 'box', quantity: 1 });
+  });
+
+  it('una caja guardada de un producto que ya no trae caja se descarta, no se cobra como pieza', () => {
+    const linea = normalizeStoredLine({
+      kind: 'product',
+      product: conCaja({ boxQuantity: null, boxPrice: null }),
+      quantity: 1,
+      saleUnit: 'box',
+    });
+
+    expect(linea).toBeNull();
   });
 });

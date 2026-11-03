@@ -4,6 +4,7 @@ import {
   CartServiceLine,
   PharmacyService,
   Product,
+  hasBoxSale,
 } from '../models';
 
 /**
@@ -33,9 +34,46 @@ export function isServiceLine(line: CartLine): line is CartServiceLine {
  * una con cantidad 2. Cambiar el doctor de una línea, por tanto, la reemplaza.
  */
 export function lineKey(line: CartLine): string {
-  return isProductLine(line)
-    ? `product:${line.product.id}`
-    : `service:${line.service.id}:${line.provider?.id ?? '-'}`;
+  if (isProductLine(line)) {
+    // La caja es otra partida del mismo producto (SPEC 46): una caja y piezas
+    // sueltas conviven en el ticket con precio, cantidad y descuento propios.
+    return isBoxLine(line) ? `product:${line.product.id}:box` : `product:${line.product.id}`;
+  }
+  return `service:${line.service.id}:${line.provider?.id ?? '-'}`;
+}
+
+/** `true` si la línea se cobra por caja completa (y el producto aún la admite). */
+export function isBoxLine(line: CartLine): line is CartProductLine & { saleUnit: 'box' } {
+  return isProductLine(line) && line.saleUnit === 'box';
+}
+
+/** Piezas por caja de la línea; 1 si es por pieza o un servicio. */
+export function linePiecesPerUnit(line: CartLine): number {
+  return isBoxLine(line) ? (line.product.boxQuantity ?? 1) : 1;
+}
+
+/**
+ * Piezas que mueve la línea: lo que se descuenta del stock. Una caja de 10 son
+ * 10; un servicio, 0 (no tiene existencias).
+ */
+export function linePieces(line: CartLine): number {
+  return isProductLine(line) ? line.quantity * linePiecesPerUnit(line) : 0;
+}
+
+/** Cajas completas que caben en `pieces` (para "35 pzas · 3 cajas completas"). */
+export function fullBoxes(product: Pick<Product, 'stock' | 'boxQuantity'>): number {
+  const perBox = product.boxQuantity ?? 0;
+  return perBox >= 2 ? Math.floor(Math.max(0, product.stock) / perBox) : 0;
+}
+
+/** Existencias en piezas y, si se vende por caja, en cajas completas. */
+export function stockLabel(product: Product): string {
+  const piezas = `${product.stock} ${product.stock === 1 ? 'pza' : 'pzas'}`;
+  if (!hasBoxSale(product)) {
+    return piezas;
+  }
+  const cajas = fullBoxes(product);
+  return `${piezas} · ${cajas} ${cajas === 1 ? 'caja completa' : 'cajas completas'}`;
 }
 
 export function lineName(line: CartLine): string {
@@ -47,16 +85,25 @@ export function lineSubtitle(line: CartLine): string {
   return isProductLine(line) ? (line.product.activeIngredient ?? '') : line.service.code;
 }
 
+/** Precio de la unidad de la línea: pieza, caja (`boxPrice`) o servicio. */
 export function lineUnitPrice(line: CartLine): number {
+  if (isBoxLine(line)) {
+    return line.product.boxPrice ?? 0;
+  }
   return isProductLine(line) ? line.product.salePrice : line.service.price;
 }
 
 /**
- * Tope de cantidad. `null` en un servicio: no hay existencias que agotar, así
- * que el botón "+" nunca se deshabilita.
+ * Tope de cantidad **de la línea sola**, en su unidad (piezas o cajas
+ * completas). `null` en un servicio: no hay existencias que agotar, así que el
+ * botón "+" nunca se deshabilita. Si el mismo producto va también en otra línea
+ * (caja y piezas), la pantalla descuenta lo que esa otra ya aparta.
  */
 export function lineMaxQuantity(line: CartLine): number | null {
-  return isProductLine(line) ? line.product.stock : null;
+  if (!isProductLine(line)) {
+    return null;
+  }
+  return isBoxLine(line) ? fullBoxes(line.product) : line.product.stock;
 }
 
 /** Importe cobrado por la línea, impuestos incluidos. */
@@ -169,6 +216,7 @@ export function normalizeStoredLine(raw: unknown): CartLine | null {
     provider?: CartServiceLine['provider'];
     quantity?: unknown;
     discountAmount?: unknown;
+    saleUnit?: unknown;
   };
   const quantity = Number(line.quantity);
   const discountAmount = Number(line.discountAmount ?? 0);
@@ -182,7 +230,18 @@ export function normalizeStoredLine(raw: unknown): CartLine | null {
       : null;
   }
   // Sin `kind` o con `kind: 'product'`: línea de producto.
-  return line.product ? { kind: 'product', product: line.product, quantity, discountAmount } : null;
+  if (!line.product) {
+    return null;
+  }
+  // Una caja guardada solo vuelve como caja si el producto la sigue trayendo;
+  // si no, se descarta la línea en vez de cobrarla como piezas a otro precio
+  // (`refreshStaleProducts` avisa si el catálogo cambió después).
+  if (line.saleUnit === 'box') {
+    return hasBoxSale(line.product)
+      ? { kind: 'product', product: line.product, quantity, discountAmount, saleUnit: 'box' }
+      : null;
+  }
+  return { kind: 'product', product: line.product, quantity, discountAmount };
 }
 
 function round(amount: number): number {

@@ -190,6 +190,54 @@ describe('SaleService', () => {
       ]);
     });
 
+    it('una caja manda cantidad en cajas, precio de la caja y saleUnit; nunca promotionId (SPEC 46)', () => {
+      const conCaja: CartLine[] = [
+        {
+          kind: 'product',
+          product: product({ boxQuantity: 10, boxPrice: 450 }),
+          quantity: 2,
+          discountAmount: 0,
+          saleUnit: 'box',
+          // Aunque llegara una promo pegada, una caja no la lleva.
+          promotion: { id: 'promo-1', name: 'X', discountAmount: 0 },
+        },
+        { kind: 'product', product: product({ boxQuantity: 10, boxPrice: 450 }), quantity: 3, discountAmount: 0 },
+      ];
+      const payload = service.buildPayload(conCaja, 0, 'cash', 1100, null, 's1');
+      expect(payload.items).toEqual([
+        { kind: 'product', productId: 'p1', quantity: 2, discountAmount: 0, unitPrice: 450, saleUnit: 'box' },
+        { kind: 'product', productId: 'p1', quantity: 3, discountAmount: 0, unitPrice: 50 },
+      ]);
+    });
+
+    it('cupón de producto: su parte va en el discountAmount de la línea y el código en couponCode (SPEC 47)', () => {
+      const conCupon: CartLine[] = [
+        {
+          kind: 'product',
+          product: product(),
+          quantity: 2,
+          discountAmount: 10,
+          coupon: { code: 'PARA10', discountAmount: 10 },
+        },
+      ];
+      const payload = service.buildPayload(conCupon, 0, 'cash', 90, null, 's1', { couponCode: 'PARA10' });
+      expect(payload.items[0]).toEqual({ kind: 'product', productId: 'p1', quantity: 2, discountAmount: 10, unitPrice: 50 });
+      expect(payload.couponCode).toBe('PARA10');
+      expect(payload.saleDiscountAmount).toBe(0);
+    });
+
+    it('cupón de venta: va como saleDiscountAmount, sin tocar las líneas', () => {
+      const payload = service.buildPayload(cart(), 25, 'cash', 75, null, 's1', { couponCode: 'VENTA25' });
+      expect(payload.saleDiscountAmount).toBe(25);
+      expect(payload.couponCode).toBe('VENTA25');
+      expect(payload.items[0].discountAmount).toBe(0);
+    });
+
+    it('sin cupón el payload no lleva couponCode (la huella queda igual que antes)', () => {
+      const payload = service.buildPayload(cart(), 0, 'cash', 100, null, 's1', { couponCode: null });
+      expect('couponCode' in payload).toBe(false);
+    });
+
     it('lleva la hora local del cobro para validar la promo al sincronizar', () => {
       const antes = Date.now();
       const payload = service.buildPayload(cart(), 0, 'cash', 100, null, 's1');
@@ -254,6 +302,52 @@ describe('SaleService', () => {
       expect(input.change).toBe(50);
       expect(sale?.id).toBe('local-1');
       http.expectNone(SALES_URL);
+    });
+
+    it('una caja se guarda en local con piezas, la caja aparte y el cupón del ticket', async () => {
+      const conCaja: CartLine[] = [
+        {
+          kind: 'product',
+          product: product({ boxQuantity: 10, boxPrice: 450 }),
+          quantity: 2,
+          discountAmount: 90,
+          saleUnit: 'box',
+          coupon: { code: 'CAJA10', discountAmount: 90 },
+        },
+      ];
+      const payload = service.buildPayload(conCaja, 0, 'cash', 810, null, 's1', { couponCode: 'CAJA10' });
+      service
+        .create(payload, conCaja, totals({ subtotal: 900, discountTotal: 90, total: 810, cashDue: 810 }), {
+          code: 'CAJA10',
+          name: 'Caja 10 %',
+          scope: 'product',
+          discountAmount: 90,
+        })
+        .subscribe();
+      await Promise.resolve();
+
+      const input = sales.createLocal.mock.calls[0][0];
+      expect(input.items[0]).toMatchObject({
+        quantity: 20,
+        unitPrice: 450,
+        subtotal: 900,
+        discountAmount: 90,
+        couponDiscount: 90,
+        saleUnit: { type: 'box', boxes: 2, piecesPerBox: 10, boxPrice: 450 },
+      });
+      expect(input.coupon).toEqual({ code: 'CAJA10', name: 'Caja 10 %', scope: 'product', discountAmount: 90 });
+      expect(input.payload.items[0]).toMatchObject({ quantity: 2, saleUnit: 'box' });
+    });
+
+    it('un cupón de venta entra al desglose fiscal y a los totales por rama', async () => {
+      const payload = service.buildPayload(cart(), 20, 'cash', 80, null, 's1', { couponCode: 'VENTA20' });
+      service.create(payload, cart(), totals({ discountTotal: 20, total: 80, cashDue: 80 })).subscribe();
+      await Promise.resolve();
+
+      const input = sales.createLocal.mock.calls[0][0];
+      expect(input.taxSummary.total).toBe(80);
+      expect(input.pharmacyTotal).toBe(80);
+      expect(input.servicesTotal).toBe(0);
     });
 
     it('en pago mixto no descuenta como cambio lo que cubrió la tarjeta', async () => {
