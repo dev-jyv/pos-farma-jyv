@@ -1477,3 +1477,76 @@ describe('salud del sync en SQLite real', () => {
     expect(pendiente.payload.items[0].productId).toBe('Ab3dE6gH9jK2mN5pQ8sT');
   });
 });
+
+/**
+ * El servidor no admite dos productos con el mismo nombre. Un alta local con el
+ * nombre de otro producto nunca subía: quedaba rechazada para siempre con "Ya
+ * existe un producto con ese nombre" (caso CEFALVER). Se frena al capturarla.
+ */
+describe('alta de producto con nombre repetido', () => {
+  const nuevo = (overrides = {}) => ({
+    name: 'Cefalver',
+    sku: 'CEF-NUEVO',
+    barcode: '7501234567890',
+    categoryId: 'cat-1',
+    unit: 'pieza',
+    salePrice: 80,
+    minStock: 0,
+    hasIva: false,
+    hasIvaZero: false,
+    hasIeps: false,
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    await prisma.product.create({
+      data: { id: 'p-cef', remoteId: 'fs-cef', sku: 'CEF-001', name: 'CEFALVER', salePrice: 80 },
+    });
+  });
+
+  it('una entrada con producto nuevo de nombre repetido no escribe nada y propone otro nombre', async () => {
+    await expect(
+      productos.recordStockEntry(prisma, {
+        product: nuevo({ name: '  cefalver ' }),
+        lotNumber: 'L-1',
+        expiryDate: '2027-06-30',
+        quantity: 5,
+        invoiceId: 'inv-1',
+      }),
+    ).rejects.toThrow('Ya existe "CEFALVER" con otro SKU (CEF-001). Usa otro nombre, por ejemplo "cefalver 7501234567890".');
+
+    expect(await prisma.product.count()).toBe(1);
+    expect(await prisma.batch.count()).toBe(0);
+  });
+
+  it('con el nombre propuesto sí se da de alta', async () => {
+    const entrada = await productos.recordStockEntry(prisma, {
+      product: nuevo({ name: 'CEFALVER 7501234567890' }),
+      lotNumber: 'L-1',
+      expiryDate: '2027-06-30',
+      quantity: 5,
+      invoiceId: 'inv-1',
+    });
+
+    expect(entrada.product.name).toBe('CEFALVER 7501234567890');
+    expect(entrada.stock).toBe(5);
+  });
+
+  it('cuenta también los productos inactivos, como el servidor', async () => {
+    await prisma.product.update({ where: { id: 'p-cef' }, data: { isActive: false } });
+
+    await expect(productos.createCatalogProduct(prisma, nuevo())).rejects.toThrow('Ya existe "CEFALVER"');
+  });
+
+  it('el mismo SKU pide seleccionar el producto en vez de darlo de alta', async () => {
+    await expect(productos.createCatalogProduct(prisma, nuevo({ sku: 'cef-001' }))).rejects.toThrow(
+      'búscalo y selecciónalo',
+    );
+  });
+
+  it('findByName ignora mayúsculas y espacios, y deja fuera al producto que se edita', async () => {
+    expect((await productos.findByName(prisma, ' cefalver')).map((p) => p.sku)).toEqual(['CEF-001']);
+    expect(await productos.findByName(prisma, 'CEFALVER', 'fs-cef')).toEqual([]);
+    expect(await productos.findByName(prisma, 'CEFALVER 500')).toEqual([]);
+  });
+});

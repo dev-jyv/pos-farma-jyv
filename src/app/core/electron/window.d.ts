@@ -291,6 +291,8 @@ declare global {
       openCashDrawer: (printerName: string) => Promise<boolean>;
       catalog: {
         search: (term: string) => Promise<Product[]>;
+        /** Productos (activos o no) con el mismo nombre; el servidor no admite repetidos. */
+        findByName: (name: string, excludeId?: string | null) => Promise<Product[]>;
         getByBarcode: (code: string) => Promise<Product | null>;
         getByIds: (ids: string[]) => Promise<Product[]>;
         /** Local-first de `POST /stock-entries`; acepta el mismo `CreateStockEntryPayload`. */

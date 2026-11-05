@@ -58,6 +58,9 @@ describe('StockEntryScreen', () => {
   let createCalls: CreateStockEntryPayload[];
   let createEntry: (payload: CreateStockEntryPayload) => Observable<unknown>;
   let searchResults: Product[];
+  /** Lo que devuelve el catálogo local al buscar por nombre exacto. */
+  let nameMatches: Product[];
+  let findByName: ReturnType<typeof vi.fn>;
   let notifyError: ReturnType<typeof vi.fn>;
   let notifySuccess: ReturnType<typeof vi.fn>;
 
@@ -80,7 +83,10 @@ describe('StockEntryScreen', () => {
           },
         },
         { provide: CategoryService, useValue: { options: () => of(categories) } },
-        { provide: ProductService, useValue: { search: () => of(searchResults) } },
+        {
+          provide: ProductService,
+          useValue: { search: () => of(searchResults), findByName },
+        },
       ],
     });
 
@@ -102,6 +108,8 @@ describe('StockEntryScreen', () => {
     notifyError = vi.fn();
     notifySuccess = vi.fn();
     searchResults = [product()];
+    nameMatches = [];
+    findByName = vi.fn(() => of(nameMatches));
     listInvoices = () => of([invoice()]);
     createCalls = [];
     createEntry = () => of({ product: product({ stock: 36 }), stock: 36 });
@@ -366,6 +374,93 @@ describe('StockEntryScreen', () => {
       expect(notifyError).toHaveBeenCalledWith('El SKU ya existe');
       expect(component.lotNumber()).toBe('L-2026-08');
       expect(component.submitting()).toBe(false);
+    });
+  });
+
+  /**
+   * El servidor no admite dos productos con el mismo nombre. Un alta repetida se
+   * guardaba en la caja, nunca subía y quedaba rechazada para siempre con "Ya
+   * existe un producto con ese nombre" (caso CEFALVER).
+   */
+  describe('nombre repetido', () => {
+    /** Lo que tarda la revisión del nombre (debounce) más un margen. */
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
+
+    function fillNewProduct(name: string): void {
+      component.selectedInvoiceId.set('inv-1');
+      component.startNewProduct();
+      component.onNameChange(name);
+      component.sku.set('CEF-NUEVO');
+      component.barcode.set('7501234567890');
+      component.categoryId.set('cat-1');
+      component.salePrice.set(80);
+      component.lotNumber.set('L-1');
+      component.expiryDate.set(tomorrow);
+      component.quantity.set(5);
+    }
+
+    it('con otro SKU bloquea el alta y propone el nombre con el código de barras', async () => {
+      nameMatches = [product({ id: 'p9', name: 'CEFALVER', sku: 'CEF-001' })];
+      fillNewProduct('CEFALVER');
+      await settle();
+
+      expect(component.canSubmit()).toBe(false);
+      expect(component.nameConflictMessage()).toBe(
+        'Ya existe "CEFALVER" con otro SKU (CEF-001). Usa otro nombre, por ejemplo "CEFALVER 7501234567890".',
+      );
+      component.submit();
+      expect(createCalls).toHaveLength(0);
+    });
+
+    it('usar el nombre propuesto lo vuelve a revisar y libera el guardado', async () => {
+      nameMatches = [product({ id: 'p9', name: 'CEFALVER', sku: 'CEF-001' })];
+      fillNewProduct('CEFALVER');
+      await settle();
+
+      nameMatches = [];
+      component.useSuggestedName();
+      await settle();
+
+      expect(component.name()).toBe('CEFALVER 7501234567890');
+      expect(findByName).toHaveBeenLastCalledWith('CEFALVER 7501234567890', null);
+      expect(component.canSubmit()).toBe(true);
+    });
+
+    it('sin código de barras propone el nombre con el SKU', async () => {
+      nameMatches = [product({ id: 'p9', name: 'CEFALVER', sku: 'CEF-001' })];
+      fillNewProduct('CEFALVER');
+      component.barcode.set('');
+      await settle();
+
+      expect(component.suggestedName()).toBe('CEFALVER CEF-NUEVO');
+    });
+
+    it('con el mismo SKU pide seleccionarlo en vez de darlo de alta', async () => {
+      nameMatches = [product({ id: 'p9', name: 'CEFALVER', sku: 'CEF-NUEVO' })];
+      fillNewProduct('CEFALVER');
+      await settle();
+
+      expect(component.nameConflictMessage()).toContain('búscalo y selecciónalo');
+      expect(component.canSubmit()).toBe(false);
+    });
+
+    it('un producto existente sin renombrar no se revisa', async () => {
+      fillValidEntry();
+      component.onNameChange('Paracetamol 500mg');
+      await settle();
+
+      expect(findByName).not.toHaveBeenCalled();
+      expect(component.canSubmit()).toBe(true);
+    });
+
+    it('renombrar un existente al nombre de otro también se bloquea', async () => {
+      nameMatches = [product({ id: 'p9', name: 'CEFALVER', sku: 'CEF-001' })];
+      fillValidEntry();
+      component.onNameChange('CEFALVER');
+      await settle();
+
+      expect(findByName).toHaveBeenLastCalledWith('CEFALVER', 'p1');
+      expect(component.canSubmit()).toBe(false);
     });
   });
 });

@@ -172,7 +172,7 @@ function cerrarVentana() {
 }
 
 /** Canales de lectura pura: no se loguean (son miles por turno y no cambian nada). */
-const CANALES_SILENCIOSOS = /^(catalog:(search|getByBarcode|getByIds|getBatchesByProduct|getProductById)|sales:(list|listMovements)|cashSessions:(getLiveSummary|getCashOnHand|listLocal|getOpenLocal.*)|promotions:listActive|coupons:findByCode|pharmacyServices:list.*|sync:getStatus|.*:(getPending\w*|getNeeding\w*|listBlocked\w*))$/;
+const CANALES_SILENCIOSOS = /^(catalog:(search|findByName|getByBarcode|getByIds|getBatchesByProduct|getProductById)|sales:(list|listMovements)|cashSessions:(getLiveSummary|getCashOnHand|listLocal|getOpenLocal.*)|promotions:listActive|coupons:findByCode|pharmacyServices:list.*|sync:getStatus|.*:(getPending\w*|getNeeding\w*|listBlocked\w*))$/;
 
 let log = { info() {}, warn() {}, error() {}, prune() {} };
 
@@ -466,6 +466,8 @@ function registrarIPCHandlers() {
 
   // Catálogo local (Prisma/SQLite). El renderer nunca toca la DB directo.
   ipcMain.handle('catalog:search', async (_event, term) => productsDb.search(await getPrisma(), term));
+  ipcMain.handle('catalog:findByName', async (_event, name, excludeId) =>
+    productsDb.findByName(await getPrisma(), name, excludeId));
   ipcMain.handle('catalog:getByBarcode', async (_event, code) =>
     productsDb.getByBarcode(await getPrisma(), code));
   ipcMain.handle('catalog:getByIds', async (_event, ids) =>
