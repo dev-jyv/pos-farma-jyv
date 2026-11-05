@@ -188,8 +188,27 @@
                   name="stockEntryName"
                   class="w-full"
                   [ngModel]="name()"
-                  (ngModelChange)="name.set($event ?? '')"
+                  (ngModelChange)="onNameChange($event ?? '')"
+                  [attr.aria-invalid]="nameConflictMessage() ? true : null"
+                  [attr.aria-describedby]="nameConflictMessage() ? 'stock-entry-name-conflict' : null"
                 />
+                @if (nameConflictMessage(); as conflict) {
+                  <div
+                    id="stock-entry-name-conflict"
+                    class="flex flex-wrap items-center gap-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+                    role="alert"
+                  >
+                    <span class="flex-1">{{ conflict }}</span>
+                    @if (suggestedName() !== name().trim()) {
+                      <p-button
+                        size="small"
+                        severity="secondary"
+                        [label]="'stockEntry.useSuggestedName' | translate: { name: suggestedName() }"
+                        (onClick)="useSuggestedName()"
+                      />
+                    }
+                  </div>
+                }
               </div>
 
               <div class="flex flex-col gap-1">

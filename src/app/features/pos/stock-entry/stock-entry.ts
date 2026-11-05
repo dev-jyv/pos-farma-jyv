@@ -15,13 +15,14 @@ import { CheckboxModule } from 'primeng/checkbox';
 import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
 import { SelectModule } from 'primeng/select';
-import { Subject, debounceTime, finalize, switchMap } from 'rxjs';
+import { Subject, catchError, debounceTime, finalize, of, switchMap } from 'rxjs';
 
 import { getApiErrorMessage } from '../../../core/api/api.utils';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { Category, ControlledGroup, Product, PurchaseInvoice } from '../../../shared/models';
 import { CONTROLLED_GROUPS, CONTROLLED_GROUP_RULES } from '../../../shared/utils/controlled';
 import { todayLocalDateString } from '../../../shared/utils/local-date';
+import { suggestProductName } from '../../../shared/utils/product-name';
 import { roundMoney } from '../../../shared/utils/money';
 import { DEFAULT_UNIT, buildUnitOptions } from '../../../shared/utils/units';
 import { CategoryService } from '../services/category.service';
@@ -76,6 +77,7 @@ export class StockEntryScreen {
   private readonly notifications = inject(NotificationService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly search$ = new Subject<string>();
+  private readonly nameCheck$ = new Subject<void>();
 
   readonly invoices = signal<PurchaseInvoice[]>([]);
   readonly invoicesLoading = signal(false);
@@ -111,6 +113,30 @@ export class StockEntryScreen {
   readonly hasIeps = signal(false);
   /** Porcentaje capturado por el cajero; al backend viaja como fracción. */
   readonly iepsPercent = signal<number | null>(null);
+
+  /**
+   * Otro producto del catálogo con el mismo nombre. El servidor no admite
+   * nombres repetidos: el alta se quedaría rechazada en la cola para siempre.
+   */
+  readonly nameConflict = signal<Product | null>(null);
+
+  /** Nombre que se propone para desempatar: el nombre más el código de barras. */
+  readonly suggestedName = computed(() =>
+    suggestProductName({ name: this.name(), barcode: this.barcode(), sku: this.sku() }),
+  );
+
+  /** Por qué el nombre no sirve, o `null` si está libre. */
+  readonly nameConflictMessage = computed<string | null>(() => {
+    const conflict = this.nameConflict();
+    if (!conflict) {
+      return null;
+    }
+    const sameSku = conflict.sku.trim().toLowerCase() === this.sku().trim().toLowerCase();
+    if (sameSku && this.isNewProduct()) {
+      return `"${conflict.name}" ya está en el catálogo con el SKU ${conflict.sku}: búscalo y selecciónalo en lugar de darlo de alta.`;
+    }
+    return `Ya existe "${conflict.name}" con otro SKU (${conflict.sku}). Usa otro nombre, por ejemplo "${this.suggestedName()}".`;
+  });
 
   // Datos de la partida que entra.
   readonly lotNumber = signal('');
@@ -212,6 +238,37 @@ export class StockEntryScreen {
         this.searching.set(false);
         this.searched.set(true);
       });
+
+    this.nameCheck$
+      .pipe(
+        debounceTime(250),
+        switchMap(() => {
+          // Solo cuando el nombre lo va a mandar el cajero: un alta, o un
+          // producto existente al que le cambió el nombre.
+          const existing = this.selectedProduct();
+          const name = this.name();
+          const renamed = existing !== null && name.trim() !== existing.name;
+          if (!name.trim() || !(this.isNewProduct() || renamed)) {
+            return of([] as Product[]);
+          }
+          // Si la consulta local falla, decide el guardado (SQLite vuelve a revisar).
+          return this.products
+            .findByName(name, existing?.id ?? null)
+            .pipe(catchError(() => of([] as Product[])));
+        }),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((matches) => this.nameConflict.set(matches[0] ?? null));
+  }
+
+  onNameChange(value: string): void {
+    this.name.set(value);
+    this.nameCheck$.next();
+  }
+
+  /** Aplica el nombre propuesto (nombre + código de barras) y lo vuelve a revisar. */
+  useSuggestedName(): void {
+    this.onNameChange(this.suggestedName());
   }
 
   loadInvoices(): void {
@@ -258,6 +315,7 @@ export class StockEntryScreen {
   selectProduct(product: Product): void {
     this.selectedProduct.set(product);
     this.mode.set('existing');
+    this.nameConflict.set(null);
     this.results.set([]);
     this.searchTerm.set(product.name);
 
@@ -288,7 +346,7 @@ export class StockEntryScreen {
     if (/^[0-9A-Z_-]+$/.test(term)) {
       this.sku.set(term);
     } else {
-      this.name.set(term);
+      this.onNameChange(term);
     }
   }
 
@@ -437,6 +495,10 @@ export class StockEntryScreen {
     if (!this.name().trim()) {
       reasons.push('El nombre del producto es requerido.');
     }
+    const nameConflict = this.nameConflictMessage();
+    if (nameConflict) {
+      reasons.push(nameConflict);
+    }
     if (!this.sku().trim()) {
       reasons.push('El SKU es requerido.');
     }
@@ -475,6 +537,7 @@ export class StockEntryScreen {
 
   private resetProductFields(): void {
     this.name.set('');
+    this.nameConflict.set(null);
     this.sku.set('');
     this.barcode.set('');
     this.activeIngredient.set('');

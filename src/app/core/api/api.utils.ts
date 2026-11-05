@@ -51,7 +51,8 @@ export function getApiErrorMessage(error: unknown): string {
     }
   }
   if (error instanceof Error) {
-    return error.message;
+    // Un error del proceso main llega envuelto por el IPC de Electron.
+    return error.message.replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, '');
   }
   return 'Ocurrió un error inesperado.';
 }

@@ -327,6 +327,7 @@
     "sku": "SKU",
     "barcode": "Barcode",
     "barcodePlaceholder": "8 to 14 digits",
+    "useSuggestedName": "Use “{{name}}”",
     "activeIngredient": "Active ingredient",
     "concentration": "Strength",
     "concentrationPlaceholder": "E.g. 500 mg",

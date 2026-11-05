@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   catalog: {
     search: (term) => ipcRenderer.invoke('catalog:search', term),
+    findByName: (name, excludeId) => ipcRenderer.invoke('catalog:findByName', name, excludeId),
     getByBarcode: (code) => ipcRenderer.invoke('catalog:getByBarcode', code),
     getByIds: (ids) => ipcRenderer.invoke('catalog:getByIds', ids),
     getBatchesByProduct: (productId) => ipcRenderer.invoke('catalog:getBatchesByProduct', productId),

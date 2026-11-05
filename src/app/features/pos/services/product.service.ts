@@ -19,6 +19,17 @@ export class ProductService {
     return from(this.api().search(normalized));
   }
 
+  /**
+   * Productos (activos o no) con ese mismo nombre en el catálogo local.
+   * `excludeId` deja fuera al producto que se está editando.
+   */
+  findByName(name: string, excludeId?: string | null): Observable<Product[]> {
+    if (!name.trim()) {
+      return of([]);
+    }
+    return from(this.api().findByName(name, excludeId ?? null));
+  }
+
   getByBarcode(code: string): Observable<Product | null> {
     return from(this.api().getByBarcode(code));
   }

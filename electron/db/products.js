@@ -83,6 +83,59 @@ async function resolveLocalProductId(prisma, idOrRemoteId) {
   return local.id;
 }
 
+/**
+ * Nombre comparable. El servidor no admite dos productos con el mismo nombre:
+ * un alta local repetida nunca sube y se queda rechazada en la cola para
+ * siempre. Se compara sin mayúsculas ni espacios de más.
+ */
+function normalizeProductName(name) {
+  return String(name ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/** Nombre sugerido para desempatar: el nombre más el código de barras (o el SKU). */
+function suggestProductName(fields) {
+  const base = String(fields.name ?? '').trim().replace(/\s+/g, ' ');
+  const suffix = String(fields.barcode ?? '').trim() || String(fields.sku ?? '').trim();
+  return suffix ? `${base} ${suffix}` : base;
+}
+
+/**
+ * Productos del catálogo local, activos o no (el servidor también cuenta los
+ * inactivos), con el mismo nombre. `excludeId` deja fuera al propio producto
+ * cuando se edita.
+ */
+async function findByName(prisma, name, excludeId = null) {
+  const target = normalizeProductName(name);
+  if (!target) {
+    return [];
+  }
+  const rows = await prisma.product.findMany({
+    where: { name: { contains: String(name).trim().split(/\s+/)[0] } },
+  });
+  return rows
+    .filter((row) => normalizeProductName(row.name) === target)
+    .filter((row) => !excludeId || (row.id !== excludeId && row.remoteId !== excludeId))
+    .map(toProductDto);
+}
+
+/** Mensaje del alta rechazada por nombre repetido, con el nombre que se propone. */
+function duplicateNameMessage(fields, existing) {
+  const sku = String(fields.sku ?? '').trim();
+  if (sku && sku.toLowerCase() === String(existing.sku ?? '').trim().toLowerCase()) {
+    return `"${existing.name}" ya está en el catálogo con el SKU ${existing.sku}: ` +
+      'búscalo y selecciónalo en lugar de darlo de alta.';
+  }
+  return `Ya existe "${existing.name}" con otro SKU (${existing.sku}). ` +
+    `Usa otro nombre, por ejemplo "${suggestProductName(fields)}".`;
+}
+
+async function assertNameAvailable(prisma, fields, excludeId = null) {
+  const [existing] = await findByName(prisma, fields.name, excludeId);
+  if (existing) {
+    throw new Error(duplicateNameMessage(fields, existing));
+  }
+}
+
 async function search(prisma, term) {
   const normalized = term?.trim() ?? '';
   const where = normalized
@@ -165,6 +218,7 @@ async function recordStockEntryTx(prisma, payload) {
   }
 
   if (payload.product) {
+    await assertNameAvailable(prisma, payload.product);
     const created = await prisma.product.create({
       data: {
         ...productFieldsData(payload.product),
@@ -514,6 +568,7 @@ async function getProductById(prisma, id) {
  * embebido en su propio `POST /stock-entries`.
  */
 async function createCatalogProduct(prisma, fields) {
+  await assertNameAvailable(prisma, fields);
   const created = await prisma.product.create({
     data: {
       ...productFieldsData(fields),
@@ -659,6 +714,8 @@ async function listBlockedProducts(prisma) {
 module.exports = {
   retryProductPush,
   search,
+  findByName,
+  suggestProductName,
   getByBarcode,
   getByIds,
   recordStockEntry,
