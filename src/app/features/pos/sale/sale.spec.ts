@@ -165,12 +165,12 @@ describe('Sale', () => {
         { provide: SyncScheduler, useValue: syncSchedulerMock },
         {
           provide: CashSessionService,
-          // `cashOnHand` lo consume el diálogo de apertura que monta esta pantalla.
+          // `cashOnHandDetail` lo consume el diálogo de apertura que monta esta pantalla.
           useValue: {
             isOpen,
             current: signal(null),
             refreshCurrent: () => of(null),
-            cashOnHand: () => of(0),
+            cashOnHandDetail: () => of({ amount: 0, lastClosedAt: null, countedAtLastClose: null, movementsSinceClose: 0 }),
           },
         },
         {

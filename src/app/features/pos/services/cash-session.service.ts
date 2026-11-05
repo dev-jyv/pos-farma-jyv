@@ -6,6 +6,7 @@ import {
   catchError,
   concatMap,
   defaultIfEmpty,
+  defer,
   finalize,
   lastValueFrom,
   from,
@@ -155,31 +156,14 @@ export class CashSessionService {
   }
 
   /**
-   * Efectivo que quedó en el cajón tras el último cierre (más/menos lo que se
-   * movió entre turnos). Con esto se precarga el fondo al abrir: el dinero no
-   * desaparece al cerrar el turno, sigue físicamente en la caja.
-   */
-  cashOnHand(): Observable<number> {
-    const api = window.electronAPI;
-    if (!api) {
-      return of(0);
-    }
-    return from(api.cashSessions.getCashOnHand()).pipe(
-      map((result) => result.amount),
-      // Precargar es una comodidad: si falla, el cajero captura el fondo a mano
-      // en vez de quedarse sin poder abrir turno.
-      catchError(() => of(0)),
-    );
-  }
-
-  /**
    * Lo mismo, con el desglose (qué se contó en el último corte y qué se movió
    * después) y **propagando el error**: la caja de la farmacia enseña este
    * número como saldo, y ahí un cero por un fallo de lectura se lee como "no
    * hay efectivo" — justo lo contrario de la verdad.
    */
   cashOnHandDetail(): Observable<CashOnHand> {
-    return from(this.api().getCashOnHand());
+    // `defer`: sin Electron `api()` lanza; debe llegar como error del observable.
+    return defer(() => this.api().getCashOnHand());
   }
 
   /** Efectivo esperado en vivo (fondo + acumulado del turno), sin red. */

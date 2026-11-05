@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthService } from '../../../core/auth/auth.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
+import { CashOnHand } from '../../../core/electron/window.d';
 import { CashSession, CashSessionSummary } from '../../../shared/models';
 import { CashSessionService } from '../services/cash-session.service';
 import { TicketPrintService } from '../ticket/ticket-print.service';
@@ -53,6 +54,10 @@ const ES = {
   },
 };
 
+function detalle(amount: number, lastClosedAt: Date | null = new Date()): CashOnHand {
+  return { amount, lastClosedAt, countedAtLastClose: lastClosedAt ? amount : null, movementsSinceClose: 0 };
+}
+
 function summary(overrides: Partial<CashSessionSummary> = {}): CashSessionSummary {
   return {
     salesCount: 3,
@@ -90,7 +95,7 @@ describe('CashSessionDialog (local-first)', () => {
     expectedCashAmount: number;
     expectedServicesCashAmount: number;
   }>;
-  let cashOnHand: () => Observable<number>;
+  let cashOnHand: () => Observable<CashOnHand>;
   let printCashCut: ReturnType<typeof vi.fn>;
   let notifyError: ReturnType<typeof vi.fn>;
 
@@ -132,7 +137,7 @@ describe('CashSessionDialog (local-first)', () => {
             closeLocal: (id: string, counted: number, closedBy: string, closedByLabel?: string) =>
               closeLocal(id, counted, closedBy, closedByLabel),
             liveSummary: () => liveSummary(),
-            cashOnHand: () => cashOnHand(),
+            cashOnHandDetail: () => cashOnHand(),
           },
         },
         { provide: TicketPrintService, useValue: { printCashCut } },
@@ -184,7 +189,7 @@ describe('CashSessionDialog (local-first)', () => {
       orden.push('resumen');
       return of({ summary: summary(), expectedCashAmount: 1200, expectedServicesCashAmount: 0 });
     };
-    cashOnHand = () => of(0);
+    cashOnHand = () => of(detalle(0, null));
   });
 
   describe('apertura', () => {
@@ -226,34 +231,26 @@ describe('CashSessionDialog (local-first)', () => {
     });
 
     /**
-     * El dinero no desaparece al cerrar el turno: sigue en el cajón. Teclearlo
-     * a mano cada mañana es la vía rápida a un fondo mal capturado y un arqueo
-     * que no cuadra.
+     * El dinero no desaparece al cerrar el turno: sigue en el cajón. El fondo es
+     * el de ese cierre, no algo que se teclea.
      */
-    describe('fondo precargado con el efectivo que quedó en caja', () => {
-      it('precarga el monto heredado del cierre anterior', async () => {
-        cashOnHand = () => of(780);
+    describe('fondo tomado del cierre anterior', () => {
+      it('muestra el monto heredado y abre con él, sin campo editable', async () => {
+        cashOnHand = () => of(detalle(780));
         await build(null);
 
-        expect(component.cashOnHand()).toBe(780);
-        expect(component.openingAmount()).toBe(780);
-      });
-
-      it('el cajero puede corregirlo: es una precarga, no un candado', async () => {
-        cashOnHand = () => of(780);
-        await build(null);
-
-        component.openingAmount.set(800);
-        expect(component.openingAmount()).toBe(800);
+        expect(host().querySelector('input')).toBeNull();
+        expect(host().querySelector('#openingAmount')?.textContent).toContain('780.00');
 
         component.confirmOpen();
-        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 800);
+        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 780);
       });
 
       it('sin cierres previos abre en $0.00, sin inventar un fondo', async () => {
-        cashOnHand = () => of(0);
+        cashOnHand = () => of(detalle(0, null));
         await build(null);
 
+        expect(component.hasPreviousClose()).toBe(false);
         expect(component.openingAmount()).toBe(0);
       });
 
@@ -263,45 +260,53 @@ describe('CashSessionDialog (local-first)', () => {
        * fondo falso y el faltante reaparecía en el arqueo del cierre siguiente,
        * sin que nadie pudiera explicarlo.
        */
-      it('un saldo heredado en rojo se precarga tal cual, no se recorta a cero', async () => {
-        cashOnHand = () => of(-150);
+      it('un saldo heredado en rojo se usa tal cual, no se recorta a cero', async () => {
+        cashOnHand = () => of(detalle(-150));
         await build(null);
-
-        expect(component.openingAmount()).toBe(-150);
 
         component.confirmOpen();
         expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', -150);
       });
 
-
-      it('si la consulta falla, deja capturar el fondo a mano en vez de bloquear', async () => {
+      it('si la lectura falla no abre en $0.00 y deja reintentar', async () => {
         cashOnHand = () => throwError(() => new Error('SQLite ocupada'));
         await build(null);
 
-        expect(component.cashOnHandLoading()).toBe(false);
-        // El fallo se absorbe: sin manejador de error escapaba del `subscribe`
-        // como excepción no controlada, aunque la prueba pasara igual.
-        expect(component.cashOnHand()).toBe(0);
-        component.openingAmount.set(500);
+        expect(component.canOpen()).toBe(false);
+        expect(boton('cut-open')!.disabled).toBe(true);
         component.confirmOpen();
-        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 500);
+        expect(openLocal).not.toHaveBeenCalled();
+
+        cashOnHand = () => of(detalle(780));
+        boton('cut-open-retry')!.click();
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        component.confirmOpen();
+        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 780);
+      });
+
+      it('mientras carga no se puede abrir: aún no hay monto real', async () => {
+        const enVuelo = new Subject<CashOnHand>();
+        cashOnHand = () => enVuelo.asObservable();
+        await build(null);
+
+        component.confirmOpen();
+        expect(openLocal).not.toHaveBeenCalled();
+
+        enVuelo.next(detalle(780));
+        enVuelo.complete();
+        component.confirmOpen();
+        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 780);
       });
 
       it('el modo cierre no consulta el efectivo heredado: ese turno ya tiene fondo', async () => {
-        const consultado = vi.fn(() => of(780));
+        const consultado = vi.fn(() => of(detalle(780)));
         cashOnHand = consultado;
         await build(session);
 
         expect(consultado).not.toHaveBeenCalled();
       });
-    });
-
-    it('abre el turno local con el fondo capturado, con el cajero de la sesión', () => {
-      component.openingAmount.set(500);
-      component.confirmOpen();
-
-      expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 500);
-      expect(component.submitting()).toBe(false);
     });
 
     it('un fallo al abrir se avisa y deja reintentar', () => {
@@ -682,24 +687,7 @@ describe('CashSessionDialog (local-first)', () => {
       expect(closeLocal).toHaveBeenCalledWith('s1', -500, 'u1', 'cajero@test.com');
     });
 
-    /**
-     * El fondo es la excepción: hereda el efectivo del corte anterior, que queda
-     * en rojo si se retiró más de lo que había en el cajón. Recortarlo abría el
-     * turno con un fondo falso y el faltante reaparecía en el arqueo siguiente.
-     */
-    it('el fondo inicial sí admite negativo: es el saldo heredado', async () => {
-      await build(null);
-
-      component.setOpeningAmount(-300);
-      component.confirmOpen();
-
-      expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', -300);
-    });
-
     it('ningún campo del corte declara mínimo: la caja puede quedar en rojo', async () => {
-      await build(null);
-      expect(host().querySelector('#openingAmount')?.getAttribute('aria-valuemin')).toBeNull();
-
       await build(session);
       expect(host().querySelector('#countedCash')?.getAttribute('aria-valuemin')).toBeNull();
     });
@@ -735,12 +723,9 @@ describe('CashSessionDialog (local-first)', () => {
       });
 
       it('el clic en "abrir turno" abre el turno de verdad', () => {
-        component.setOpeningAmount(500);
-        fixture.detectChanges();
-
         boton('cut-open')!.click();
 
-        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 500);
+        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 0);
       });
 
       it('un doble clic no abre dos turnos', () => {
