@@ -59,22 +59,32 @@
     </div>
   } @else if (mode() === 'open') {
     <label for="openingAmount" class="mb-1.5 block text-sm font-medium text-slate-700">{{ 'cashCut.openingAmount' | translate }}</label>
-    <p-inputnumber
-      inputId="openingAmount"
-      [ngModel]="openingAmount()"
-      (ngModelChange)="setOpeningAmount($event)"
-      mode="currency"
-      currency="MXN"
-      locale="es-MX"
-      [minFractionDigits]="2"
-      inputStyleClass="!text-xl !font-semibold !tabular-nums"
-      styleClass="w-full"
-    />
-    @if (cashOnHand() > 0) {
+    <output
+      id="openingAmount"
+      class="block rounded-lg bg-slate-50 px-3 py-2 text-xl font-semibold tabular-nums text-slate-900"
+    >
+      @if (canOpen()) {
+        ${{ openingAmount() | number: '1.2-2' }}
+      } @else {
+        —
+      }
+    </output>
+    @if (cashOnHandError()) {
+      <div class="mt-2 flex items-center justify-between gap-2 text-xs text-red-700" role="alert">
+        <span>{{ 'cashCut.cashOnHandError' | translate }}</span>
+        <p-button
+          data-testid="cut-open-retry"
+          [label]="'cashCut.retry' | translate"
+          severity="secondary"
+          size="small"
+          [outlined]="true"
+          (onClick)="loadCashOnHand()"
+        />
+      </div>
+    } @else if (!cashOnHandLoading()) {
       <p class="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
         <i class="pi pi-info-circle"></i>
-        {{ 'cashCut.cashOnHandHint' | translate }}
-        <span class="font-semibold tabular-nums text-slate-700">${{ cashOnHand() | number: '1.2-2' }}</span>
+        {{ (hasPreviousClose() ? 'cashCut.cashOnHandHint' : 'cashCut.cashOnHandNoClose') | translate }}
       </p>
     }
   } @else {
@@ -340,6 +350,7 @@
           [label]="'cashCut.open' | translate"
           [styleClass]="canDismiss() ? 'flex-1' : 'w-full'"
           [loading]="submitting()"
+          [disabled]="!canOpen()"
           (onClick)="confirmOpen()"
         />
       } @else {

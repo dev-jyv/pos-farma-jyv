@@ -93,9 +93,12 @@ export class CashSessionDialog {
     () => !this.syncing() && (this.mode() !== 'open' || this.dismissible()),
   );
   readonly openingAmount = signal(0);
-  /** Efectivo heredado del cierre anterior, con el que se precarga el fondo. */
-  readonly cashOnHand = signal(0);
+  /** Hay un corte previo en este equipo del cual sale el fondo. */
+  readonly hasPreviousClose = signal(false);
   readonly cashOnHandLoading = signal(false);
+  readonly cashOnHandError = signal(false);
+  /** Sin el monto real leído no hay fondo que asentar. */
+  readonly canOpen = computed(() => !this.cashOnHandLoading() && !this.cashOnHandError());
   /**
    * Se precarga con el efectivo esperado, pero el cajero puede cerrar tal cual
    * o dejarlo en $0.00: ambos son cierres válidos. No se le exige tocar el
@@ -213,32 +216,28 @@ export class CashSessionDialog {
     // Modo apertura: no hay turno que cortar, solo el fondo inicial.
     this.summary.set(null);
     this.expectedCash.set(0);
-    this.preloadCashOnHand();
+    this.loadCashOnHand();
   }
 
   /**
-   * El fondo inicial arranca con el efectivo que quedó en el cajón al cerrar
-   * el turno anterior (ajustado por lo que se metió o sacó entre turnos): ese
-   * dinero sigue ahí físicamente, y teclearlo a mano cada mañana es la vía
-   * rápida a un fondo mal capturado y un arqueo que no cuadra.
+   * El fondo inicial **no se captura**: es el efectivo con el que cerró el turno
+   * anterior (ajustado por lo que se metió o sacó entre turnos). Ese dinero sigue
+   * en el cajón, y dejarlo teclear abría turnos con un fondo que no venía de
+   * ningún corte. Si la lectura falla no se abre: un $0.00 por un error se
+   * asentaría como fondo real.
    */
-  private preloadCashOnHand(): void {
+  loadCashOnHand(): void {
     this.cashOnHandLoading.set(true);
+    this.cashOnHandError.set(false);
     this.cashSessionService
-      .cashOnHand()
+      .cashOnHandDetail()
       .pipe(finalize(() => this.cashOnHandLoading.set(false)))
       .subscribe({
-        next: (amount) => {
-          this.cashOnHand.set(amount);
-          // No pisa lo que el cajero ya haya tecleado mientras cargaba.
-          if (this.openingAmount() === 0) {
-            this.openingAmount.set(amount);
-          }
+        next: (detail) => {
+          this.openingAmount.set(detail.amount);
+          this.hasPreviousClose.set(detail.lastClosedAt !== null);
         },
-        // Es una comodidad, no un requisito: si la consulta falla, el fondo
-        // queda en cero para teclearlo a mano. Sin este manejador el error
-        // escapaba del `subscribe` como excepción no controlada.
-        error: () => this.cashOnHand.set(0),
+        error: () => this.cashOnHandError.set(true),
       });
   }
 
@@ -246,7 +245,7 @@ export class CashSessionDialog {
     const user = this.authService.user();
     // El doble clic abriría dos turnos: el segundo ahora lo rechaza SQLite,
     // pero el cajero solo vería un error donde en realidad todo salió bien.
-    if (!user || this.submitting()) {
+    if (!user || this.submitting() || !this.canOpen()) {
       return;
     }
     this.submitting.set(true);
@@ -273,17 +272,6 @@ export class CashSessionDialog {
    */
   setCountedCash(value: number | null): void {
     this.countedCashAmount.set(value ?? 0);
-  }
-
-  /**
-   * El fondo **puede ser negativo**: hereda el efectivo del corte anterior, y
-   * ese saldo queda en rojo si se retiró más de lo que había en el cajón.
-   * Recortarlo a cero no hacía aparecer el dinero — solo abría el turno con un
-   * fondo falso, y el faltante reaparecía en el arqueo del cierre siguiente sin
-   * que nadie pudiera explicarlo.
-   */
-  setOpeningAmount(value: number | null): void {
-    this.openingAmount.set(value ?? 0);
   }
 
   /**

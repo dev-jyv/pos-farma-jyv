@@ -412,8 +412,16 @@ export class Sale {
   /* ── Venta por caja (SPEC 46) ─────────────────────────────────────────── */
 
   readonly hasBox = hasBoxSale;
+  /** Da el ancho de la columna de acciones en la búsqueda. */
+  readonly resultsHaveBox = computed(() => this.results().some((product) => hasBoxSale(product)));
   readonly isBox = isBoxLine;
   readonly stockLabelOf = stockLabel;
+
+  /** Debajo del stock en la búsqueda: las piezas ya están arriba, solo las cajas. */
+  boxStockOf(product: Product): string {
+    const cajas = fullBoxes(product);
+    return `${cajas} ${cajas === 1 ? 'caja' : 'cajas'}`;
+  }
   readonly piecesPerUnitOf = linePiecesPerUnit;
 
   /**

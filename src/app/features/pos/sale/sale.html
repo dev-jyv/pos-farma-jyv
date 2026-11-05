@@ -171,9 +171,11 @@
         <ng-template #header>
           <tr>
             <th>Producto</th>
-            <th class="w-28 text-right">Precio</th>
+            <th class="w-32 text-right">Precio</th>
             <th class="w-20 text-right">Stock</th>
-            <th class="w-32"></th>
+            <!-- La tabla es `table-layout: fixed`: el ancho no sigue al contenido y
+                 lo que no cabe se encima sobre Stock. Con caja, Pieza | Caja (N). -->
+            <th [class.w-56]="resultsHaveBox()" [class.w-28]="!resultsHaveBox()"></th>
           </tr>
         </ng-template>
         <ng-template #body let-product>
@@ -243,16 +245,20 @@
                 {{ product.stock }}
               </span>
               @if (hasBox(product)) {
-                <span data-testid="search-box-stock" class="mt-0.5 block text-[10px] leading-tight text-slate-500">
-                  {{ stockLabelOf(product) }}
+                <span
+                  data-testid="search-box-stock"
+                  class="mt-0.5 block whitespace-nowrap text-[10px] leading-tight text-slate-500"
+                  [title]="stockLabelOf(product)"
+                >
+                  {{ boxStockOf(product) }}
                 </span>
               }
             </td>
-            <td class="text-right" (click)="$event.stopPropagation()">
-              <div class="flex justify-end gap-1">
+            <td class="whitespace-nowrap text-right" (click)="$event.stopPropagation()">
+              <div class="flex flex-nowrap items-center justify-end gap-1">
                 <button
                   type="button"
-                  class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                  class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                   (click)="printLabel(product)"
                   [attr.aria-label]="'label.print' | translate"
                   [title]="'label.print' | translate"
@@ -264,7 +270,7 @@
                        Clic en la fila sigue agregando la pieza. -->
                   <div
                     data-testid="search-unit-picker"
-                    class="inline-flex h-8 overflow-hidden rounded-lg border border-emerald-600 text-xs font-semibold"
+                    class="inline-flex h-8 shrink-0 overflow-hidden whitespace-nowrap rounded-lg border border-emerald-600 text-xs font-semibold"
                     role="group"
                     [attr.aria-label]="'Agregar ' + product.name"
                   >
@@ -291,7 +297,7 @@
                 } @else {
                   <button
                     type="button"
-                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600 text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
                     [disabled]="product.stock < 1 || !cashSessionOpen()"
                     (click)="addToCart(product)"
                     aria-label="Agregar al ticket"
@@ -434,7 +440,7 @@
                          una línea de la otra unidad. -->
                     <div
                       data-testid="line-unit-picker"
-                      class="mt-1.5 inline-flex overflow-hidden rounded-md border border-slate-200 text-[11px] font-semibold"
+                      class="mt-1.5 inline-flex overflow-hidden whitespace-nowrap rounded-md border border-slate-200 text-[11px] font-semibold"
                       role="group"
                       [attr.aria-label]="'Unidad de ' + nameOf(line)"
                     >

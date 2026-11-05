@@ -165,12 +165,12 @@ describe('Sale', () => {
         { provide: SyncScheduler, useValue: syncSchedulerMock },
         {
           provide: CashSessionService,
-          // `cashOnHand` lo consume el diálogo de apertura que monta esta pantalla.
+          // `cashOnHandDetail` lo consume el diálogo de apertura que monta esta pantalla.
           useValue: {
             isOpen,
             current: signal(null),
             refreshCurrent: () => of(null),
-            cashOnHand: () => of(0),
+            cashOnHandDetail: () => of({ amount: 0, lastClosedAt: null, countedAtLastClose: null, movementsSinceClose: 0 }),
           },
         },
         {
@@ -1585,6 +1585,19 @@ describe('Sale', () => {
       expect(component.cart()[0].quantity).toBe(20);
     });
 
+    it('la columna de acciones se ensancha solo si algún resultado se vende por caja', () => {
+      const el = fixture.nativeElement as HTMLElement;
+      const columna = () => el.querySelector('thead th:last-child');
+
+      component.results.set([conCaja()]);
+      fixture.detectChanges();
+      expect(columna()?.classList.contains('w-56')).toBe(true);
+
+      component.results.set([{ ...conCaja(), boxQuantity: undefined, boxPrice: undefined }]);
+      fixture.detectChanges();
+      expect(columna()?.classList.contains('w-28')).toBe(true);
+    });
+
     it('el resultado de búsqueda ofrece Pieza | Caja (N) y las existencias en cajas', () => {
       component.results.set([conCaja()]);
       fixture.detectChanges();
@@ -1592,7 +1605,7 @@ describe('Sale', () => {
 
       expect(el.querySelector('[data-testid="search-unit-picker"]')?.textContent).toContain('Caja (10)');
       expect(el.querySelector('[data-testid="search-box-stock"]')?.textContent?.trim()).toBe(
-        '35 pzas · 3 cajas completas',
+        '3 cajas',
       );
       (el.querySelector('[data-testid="search-add-box"]') as HTMLButtonElement).click();
       expect(component.keyOf(component.cart()[0])).toBe('product:p1:box');
