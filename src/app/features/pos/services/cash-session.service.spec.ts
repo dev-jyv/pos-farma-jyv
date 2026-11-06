@@ -203,19 +203,32 @@ describe('CashSessionService (local-first)', () => {
         openingCounted: 700,
         inheritedFloat: 780,
         openingNote: 'Faltan 80',
+        openedAt: '2026-08-08T14:00:00.000Z',
       });
       create.flush({ data: { id: 'remote-1' } });
       await flushMicrotasks();
     });
 
     it('un turno en cola desde antes de la actualización sube como siempre', () => {
-      expect(openingBody(localSession({ openingAmount: 500 }))).toEqual({ openingAmount: 500 });
+      expect(openingBody(localSession({ openingAmount: 500 }))).toEqual({
+        openingAmount: 500,
+        openedAt: '2026-08-08T14:00:00.000Z',
+      });
+    });
+
+    it('manda la hora de apertura de la caja: el turno pudo subir días después', () => {
+      // Por IPC la fecha puede llegar como texto.
+      const viaIpc = localSession({ openedAt: '2026-11-05T19:56:00.000Z' as unknown as Date });
+      expect(openingBody(viaIpc).openedAt).toBe('2026-11-05T19:56:00.000Z');
+      // Ilegible: no se manda, y el backend usa la hora de recepción.
+      const rota = localSession({ openedAt: 'no-es-fecha' as unknown as Date });
+      expect(openingBody(rota)).toEqual({ openingAmount: 500 });
     });
 
     it('contado sin heredado (primer turno) no manda inheritedFloat ni nota', () => {
       expect(
         openingBody(localSession({ openingAmount: 300, openingCounted: 300, inheritedFloat: null })),
-      ).toEqual({ openingAmount: 300, openingCounted: 300 });
+      ).toEqual({ openingAmount: 300, openingCounted: 300, openedAt: '2026-08-08T14:00:00.000Z' });
     });
 
     it('el autocierre manda autoClosedByExpiry: el turno local queda para revisión', async () => {

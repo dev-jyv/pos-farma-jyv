@@ -81,23 +81,42 @@ export interface AuditCashSession extends CashSession {
  * Cuerpo de `POST /cash-sessions`. El arqueo de apertura (SPEC 63) solo viaja si
  * el turno lo tiene: un turno en cola desde antes de la actualización sube como
  * siempre, y el backend lo trata como un POS viejo.
+ *
+ * `openedAt` es la hora en que **esta caja** abrió el turno. Sin conexión el
+ * turno nace en el servidor al sincronizar, horas o días después, y sin ella el
+ * backend tomaba la hora de recepción como apertura: todas las ventas del turno
+ * quedaban "antes de la apertura" y, con el turno ya cerrado, iban a
+ * conciliación (06/11, 22 ventas). Un backend anterior la descarta.
  */
 export function openingBody(session: CashSession): {
   openingAmount: number;
   openingCounted?: number;
   inheritedFloat?: number;
   openingNote?: string;
+  openedAt?: string;
 } {
+  const openedAt = isoOrNull(session.openedAt);
+  const withOpenedAt = openedAt ? { openedAt } : {};
   const counted = session.openingCounted;
   if (counted == null) {
-    return { openingAmount: session.openingAmount };
+    return { openingAmount: session.openingAmount, ...withOpenedAt };
   }
   return {
     openingAmount: counted,
     openingCounted: counted,
     ...(session.inheritedFloat != null ? { inheritedFloat: session.inheritedFloat } : {}),
     ...(session.openingNote ? { openingNote: session.openingNote } : {}),
+    ...withOpenedAt,
   };
+}
+
+/** Fecha a ISO, o `null` si no es legible (por IPC puede llegar como texto). */
+function isoOrNull(value: Date | string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 /**
