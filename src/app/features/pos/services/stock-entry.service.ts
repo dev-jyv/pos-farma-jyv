@@ -45,6 +45,11 @@ export interface CreateStockEntryPayload {
    * `recordStockEntry` al guardar en SQLite si no viene.
    */
   capturedAt?: string;
+  /**
+   * "Sí, es otra partida" (SPEC 58): el cajero confirmó que la partida no es la
+   * misma que ya tiene la factura. Lo pone `confirmDuplicateStockEntry`.
+   */
+  confirmDuplicate?: boolean;
   lotNumber: string;
   /** `YYYY-MM-DD`; el backend rechaza fechas pasadas. */
   expiryDate: string;
@@ -100,6 +105,66 @@ function warningMessage(code: string, lotNumber: string, productName: string): s
     return `El lote ${lotNumber} de ${productName} ya existía con otra caducidad. Revisa la factura.`;
   }
   return `Entrada de ${productName} (lote ${lotNumber}): ${code}.`;
+}
+
+/**
+ * 409 del servidor (SPEC 58): la factura ya tiene una entrada con el mismo
+ * producto, lote y cantidad, registrada con otra llave. Casi siempre es la misma
+ * factura capturada dos veces (foto y PDF, otra caja, IA más captura manual).
+ */
+export const ENTRY_POSSIBLE_DUPLICATE = 'ENTRY_POSSIBLE_DUPLICATE';
+
+/** Fecha corta de México (dd/mm/aaaa) para el aviso; `null` si no se puede leer. */
+function shortDate(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const date = toDate(value);
+  if (!date || Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return new Intl.DateTimeFormat('es-MX', {
+    timeZone: 'America/Mexico_City',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(date);
+}
+
+/**
+ * Si el error es el 409 `ENTRY_POSSIBLE_DUPLICATE`, devuelve con qué se reconoce
+ * la entrada que ya existe (folio o fecha, si el servidor los manda); si no,
+ * `null`. Se aceptan en `details` o en `details.existing`, porque el contrato
+ * solo fija "el folio o fecha de la existente".
+ */
+export function entryPossibleDuplicateOf(error: unknown): { reference: string | null } | null {
+  if (!(error instanceof HttpErrorResponse) || error.status !== 409) {
+    return null;
+  }
+  const details = (error.error as { error?: { details?: Record<string, unknown> } } | null)?.error
+    ?.details;
+  if (!details || details['code'] !== ENTRY_POSSIBLE_DUPLICATE) {
+    return null;
+  }
+  const existing =
+    details['existing'] && typeof details['existing'] === 'object'
+      ? (details['existing'] as Record<string, unknown>)
+      : {};
+  const pick = (key: string): unknown => existing[key] ?? details[key];
+  const folio = pick('folio');
+  if (typeof folio === 'string' && folio.trim()) {
+    return { reference: `folio ${folio.trim()}` };
+  }
+  const date = shortDate(pick('createdAt') ?? pick('date') ?? pick('capturedAt'));
+  return { reference: date ? `del ${date}` : null };
+}
+
+/** Motivo que queda en el lote: visible en "Rechazados" con su código al final. */
+export function possibleDuplicateReason(reference: string | null): string {
+  return (
+    'La factura ya tiene una entrada con el mismo producto, lote y cantidad' +
+    `${reference ? ` (${reference})` : ''}. ¿Es otra partida? [${ENTRY_POSSIBLE_DUPLICATE}]`
+  );
 }
 
 interface InvoiceDto {
@@ -339,6 +404,19 @@ flushQueueAsync(): Promise<void> {
               return from(this.api().markStockEntrySynced(item.id, result.product?.id ?? null));
             }),
             catchError((error: unknown) => {
+              // SPEC 58: posible factura recapturada. No se decide sola: queda
+              // bloqueada visible hasta que alguien elija "Sí, es otra partida"
+              // (reenvía con `confirmDuplicate`) o "Descartar".
+              const possibleDuplicate = entryPossibleDuplicateOf(error);
+              if (possibleDuplicate) {
+                this.inProgressBackoff.delete(item.id);
+                return from(
+                  this.api().markStockEntryPushFailed(
+                    item.id,
+                    possibleDuplicateReason(possibleDuplicate.reference),
+                  ),
+                );
+              }
               // SPEC 60: el alta embebida chocó con **otro** producto (el backend
               // ya adopta cuando es el mismo). Queda bloqueada visible con el
               // nombre del existente, para corregir SKU/nombre o avisar al admin.

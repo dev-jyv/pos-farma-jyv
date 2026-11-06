@@ -274,6 +274,40 @@ export class Shell {
     this.closeBlockedIfEmpty();
   }
 
+  /** Entrada con aviso de posible factura recapturada (SPEC 58). */
+  isPossibleDuplicate(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.isPossibleDuplicate(record);
+  }
+
+  /**
+   * "Sí, es otra partida" (SPEC 58): reenvía la entrada con `confirmDuplicate` y
+   * empuja en el acto, como "Reintentar". Se confirma nombrándola: si era la
+   * misma mercancía, el stock queda contado dos veces también en el servidor.
+   */
+  async confirmDuplicateEntry(record: BlockedSyncRecord): Promise<void> {
+    const confirmado = window.confirm(
+      `¿"${record.label}" (${record.detail}) es otra partida de la factura?\n\n` +
+        'Se registrará aunque la factura ya tenga una entrada igual. Si es la misma ' +
+        'mercancía capturada otra vez, elige Descartar.',
+    );
+    if (!confirmado) {
+      return;
+    }
+    this.retryingBlockedId.set(record.id);
+    try {
+      await this.blockedSync.confirmDuplicate(record);
+      await this.syncScheduler.flushPendingNow();
+      await this.blockedSync.refresh();
+    } catch (error: unknown) {
+      this.notifications.error(
+        error instanceof Error ? error.message : 'No se pudo reenviar la entrada.',
+      );
+    } finally {
+      this.retryingBlockedId.set(null);
+    }
+    this.closeBlockedIfEmpty();
+  }
+
   fixBlocked(record: BlockedSyncRecord): void {
     this.blockedDialogVisible.set(false);
     if (record.kind === 'product') {

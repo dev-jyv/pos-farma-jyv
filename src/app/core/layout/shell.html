@@ -381,6 +381,18 @@
                 [disabled]="retryingBlockedId() !== null || repairingId() !== null"
                 (onClick)="resolveConflict(record, 'mine')"
               />
+            } @else if (isPossibleDuplicate(record)) {
+              <!-- SPEC 58: posible factura recapturada; reintentar sin confirmar volvería a chocar. -->
+              <p-button
+                label="Sí, es otra partida"
+                icon="pi pi-check"
+                size="small"
+                severity="primary"
+                data-testid="duplicate-confirm"
+                [loading]="retryingBlockedId() === record.id"
+                [disabled]="retryingBlockedId() !== null || repairingId() !== null"
+                (onClick)="confirmDuplicateEntry(record)"
+              />
             } @else {
               <p-button
                 label="Reintentar"

@@ -260,6 +260,7 @@ export type BlockedCode =
   | 'listo-para-reintentar'
   | 'entrada-a-medias'
   | 'entrada-en-curso'
+  | 'entrada-posible-duplicada'
   | 'turno-duplicado'
   | 'turno-abierto-existente'
   | 'turno-ajeno'
@@ -371,6 +372,11 @@ declare global {
         clearStockEntryPushError: (batchLocalId: string) => Promise<void>;
         /** Borra un lote que nunca subió y descuenta sus piezas del stock local. */
         discardStockEntry: (batchLocalId: string) => Promise<void>;
+        /**
+         * "Sí, es otra partida" (SPEC 58): reenvía la entrada con `confirmDuplicate: true`
+         * tras un 409 `ENTRY_POSSIBLE_DUPLICATE`. `false` si ya no estaba pendiente.
+         */
+        confirmDuplicateStockEntry: (batchLocalId: string) => Promise<boolean>;
         /** Altas o ediciones de catálogo que el servidor rechazó. */
         listBlockedProducts: () => Promise<BlockedSyncRecord[]>;
         markStockEntrySynced: (batchLocalId: string, remoteProductId?: string | null) => Promise<void>;

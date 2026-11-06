@@ -490,6 +490,9 @@ function registrarIPCHandlers() {
     productsDb.clearStockEntryPushError(await getPrisma(), batchLocalId));
   ipcMain.handle('catalog:discardStockEntry', async (_event, batchLocalId) =>
     productsDb.discardStockEntry(await getPrisma(), batchLocalId));
+  // SPEC 58: "Sí, es otra partida" ante un 409 ENTRY_POSSIBLE_DUPLICATE.
+  ipcMain.handle('catalog:confirmDuplicateStockEntry', async (_event, batchLocalId) =>
+    productsDb.confirmDuplicateStockEntry(await getPrisma(), batchLocalId));
   ipcMain.handle('catalog:listBlockedProducts', async () =>
     productsDb.listBlockedProducts(await getPrisma()));
   ipcMain.handle('catalog:markStockEntrySynced', async (_event, batchLocalId, remoteProductId) =>

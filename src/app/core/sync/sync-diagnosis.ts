@@ -78,6 +78,15 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
       'lote en inventario. Si ya está registrado ahí, esta copia se puede descartar.',
     recommended: 'avisar-admin',
   }),
+  'entrada-posible-duplicada': () => ({
+    title: '¿Factura capturada dos veces?',
+    explanation:
+      'Esta factura ya tiene en el servidor una entrada con el mismo producto, lote y cantidad. ' +
+      'Si de verdad son dos partidas iguales, pulsa "Sí, es otra partida". Si es la misma ' +
+      'mercancía capturada otra vez (otra foto, el PDF o en otra caja), pulsa "Descartar": se ' +
+      'quitan esas piezas del stock de esta caja.',
+    recommended: 'corregir',
+  }),
   'listo-para-reintentar': () => ({
     title: 'Ya se puede enviar',
     explanation: 'Lo que faltaba ya llegó al servidor. Pulsa Reintentar.',

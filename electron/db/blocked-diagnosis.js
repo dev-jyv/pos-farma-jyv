@@ -46,6 +46,8 @@ const POR_CODIGO = {
   SESSION_FORBIDDEN: 'turno-ajeno',
   ENTRY_IN_PROGRESS: 'entrada-en-curso',
   ENTRY_AMBIGUOUS: 'entrada-a-medias',
+  // SPEC 58: la factura ya tiene una entrada con el mismo producto, lote y cantidad.
+  ENTRY_POSSIBLE_DUPLICATE: 'entrada-posible-duplicada',
   // SPEC 56: el PATCH de la caja chocó con un cambio de precio o estado del panel.
   CATALOG_CONFLICT: 'catalogo-en-conflicto',
   // SPEC 60: el alta chocó por SKU o nombre con **otro** producto (no se adopta).

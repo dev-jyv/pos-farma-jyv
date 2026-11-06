@@ -766,6 +766,29 @@ async function clearStockEntryPushError(prisma, batchLocalId) {
 }
 
 /**
+ * "Sí, es otra partida" (SPEC 58): el servidor avisó que la factura ya tiene una
+ * entrada con el mismo producto, lote y cantidad (409 `ENTRY_POSSIBLE_DUPLICATE`)
+ * y el cajero confirma que es legítima (dos lotes iguales en la misma factura).
+ * Se guarda `confirmDuplicate: true` en el payload y el lote vuelve a la cola;
+ * la llave de idempotencia no cambia. Devuelve `false` si el lote ya no está
+ * pendiente (subió o se descartó mientras tanto).
+ */
+async function confirmDuplicateStockEntry(prisma, batchLocalId) {
+  return inTransaction(prisma, async (tx) => {
+    const batch = await tx.batch.findUnique({ where: { id: batchLocalId } });
+    if (!batch || !batch.pendingPush || !batch.payloadJson) {
+      return false;
+    }
+    const payload = { ...JSON.parse(batch.payloadJson), confirmDuplicate: true };
+    await tx.batch.update({
+      where: { id: batchLocalId },
+      data: { payloadJson: JSON.stringify(payload), pushError: null },
+    });
+    return true;
+  });
+}
+
+/**
  * Borra un lote que **nunca llegó** al servidor y le quita al producto las piezas
  * que había sumado en local. Reclama la fila con `deleteMany({ pendingPush })`:
  * un lote que ya subió no se toca (el servidor lo tiene) y dos descartes
@@ -1184,6 +1207,7 @@ module.exports = {
   markStockEntryPushFailed,
   listBlockedStockEntries,
   clearStockEntryPushError,
+  confirmDuplicateStockEntry,
   discardStockEntry,
   listBlockedProducts,
   getProductById,

@@ -44,6 +44,9 @@ describe('código de sincronización del servidor (SPEC 49)', () => {
     expect(codeFromReason('Otro texto [SESSION_FORBIDDEN]')).toBe('turno-ajeno');
     expect(codeFromReason('quedó a medio registrar [ENTRY_IN_PROGRESS]')).toBe('entrada-en-curso');
     expect(codeFromReason('quedó a medio registrar [ENTRY_AMBIGUOUS]')).toBe('entrada-a-medias');
+    expect(codeFromReason('La factura ya tiene una entrada igual [ENTRY_POSSIBLE_DUPLICATE]')).toBe(
+      'entrada-posible-duplicada',
+    );
   });
 
   it('un código sin traducción cae al texto', () => {

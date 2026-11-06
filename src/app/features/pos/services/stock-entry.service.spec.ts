@@ -188,6 +188,39 @@ describe('StockEntryService', () => {
       );
     });
 
+    it('409 ENTRY_POSSIBLE_DUPLICATE: bloqueo visible con el folio de la existente (SPEC 58)', async () => {
+      await respond(409, {
+        error: {
+          code: 'CONFLICT',
+          message: 'Posible entrada duplicada.',
+          details: { code: 'ENTRY_POSSIBLE_DUPLICATE', existing: { folio: 'E-000123' } },
+        },
+      });
+
+      expect(catalog.markStockEntrySynced).not.toHaveBeenCalled();
+      expect(catalog.markStockEntryPushFailed).toHaveBeenCalledWith(
+        'b-1',
+        'La factura ya tiene una entrada con el mismo producto, lote y cantidad (folio E-000123). ' +
+          '¿Es otra partida? [ENTRY_POSSIBLE_DUPLICATE]',
+      );
+    });
+
+    it('409 ENTRY_POSSIBLE_DUPLICATE sin folio: usa la fecha de la existente', async () => {
+      await respond(409, {
+        error: {
+          code: 'CONFLICT',
+          message: 'Posible entrada duplicada.',
+          details: { code: 'ENTRY_POSSIBLE_DUPLICATE', createdAt: '2026-11-05T18:30:00.000Z' },
+        },
+      });
+
+      expect(catalog.markStockEntryPushFailed).toHaveBeenCalledWith(
+        'b-1',
+        'La factura ya tiene una entrada con el mismo producto, lote y cantidad (del 05/11/2026). ' +
+          '¿Es otra partida? [ENTRY_POSSIBLE_DUPLICATE]',
+      );
+    });
+
     it('backend viejo: un 409 sin código se sigue tomando como rechazo permanente', async () => {
       await respond(409, { error: { code: 'CONFLICT', message: 'quedó a medio registrar' } });
 

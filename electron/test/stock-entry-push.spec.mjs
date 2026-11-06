@@ -131,3 +131,69 @@ describe('entradas: fecha de captura (SPEC 59)', () => {
     expect(pendiente.payload.capturedAt).toBe('2026-11-01T15:00:00.000Z');
   });
 });
+
+describe('entradas: posible factura recapturada (SPEC 58)', () => {
+  const MOTIVO =
+    'La factura ya tiene una entrada con el mismo producto, lote y cantidad (folio E-000123). ' +
+    '¿Es otra partida? [ENTRY_POSSIBLE_DUPLICATE]';
+
+  async function entradaBloqueada() {
+    const { product } = await productos.recordStockEntry(prisma, {
+      invoiceId: 'inv-1',
+      lotNumber: 'L-1',
+      expiryDate: '2027-12-31',
+      quantity: 6,
+      product: { sku: 'SKU-1', name: 'Paracetamol 500', salePrice: 50, minStock: 0 },
+      idempotencyKey: 'llave-2',
+    });
+    await prisma.product.update({ where: { id: product.id }, data: { remoteId: REMOTO } });
+    const [entrada] = await productos.getPendingStockEntries(prisma);
+    await productos.markStockEntryPushFailed(prisma, entrada.id, MOTIVO);
+    return { entrada, product };
+  }
+
+  it('queda fuera de la cola, visible y con su diagnóstico', async () => {
+    await entradaBloqueada();
+
+    expect(await productos.getPendingStockEntries(prisma)).toEqual([]);
+    const [bloqueada] = await productos.listBlockedStockEntries(prisma);
+    expect(bloqueada.reason).toBe(MOTIVO);
+    expect(bloqueada.diagnosis).toEqual({
+      code: 'entrada-posible-duplicada',
+      syncCode: 'ENTRY_POSSIBLE_DUPLICATE',
+    });
+  });
+
+  it('"Sí, es otra partida": vuelve a la cola con confirmDuplicate y la misma llave', async () => {
+    const { entrada } = await entradaBloqueada();
+
+    expect(await productos.confirmDuplicateStockEntry(prisma, entrada.id)).toBe(true);
+
+    const [pendiente] = await productos.getPendingStockEntries(prisma);
+    expect(pendiente.id).toBe(entrada.id);
+    expect(pendiente.payload).toMatchObject({
+      confirmDuplicate: true,
+      idempotencyKey: 'llave-2',
+      productId: REMOTO,
+    });
+    expect(await productos.listBlockedStockEntries(prisma)).toEqual([]);
+  });
+
+  it('"Descartar": borra el lote y quita sus piezas del stock local', async () => {
+    const { entrada, product } = await entradaBloqueada();
+
+    await productos.discardStockEntry(prisma, entrada.id);
+
+    expect(await productos.listBlockedStockEntries(prisma)).toEqual([]);
+    const fila = await prisma.product.findUnique({ where: { id: product.id } });
+    expect(fila.totalStock).toBe(0);
+  });
+
+  it('un lote que ya no está pendiente no se toca', async () => {
+    const { entrada } = await entradaBloqueada();
+    await productos.markStockEntrySynced(prisma, entrada.id, REMOTO);
+
+    expect(await productos.confirmDuplicateStockEntry(prisma, entrada.id)).toBe(false);
+    expect(await productos.confirmDuplicateStockEntry(prisma, 'no-existe')).toBe(false);
+  });
+});

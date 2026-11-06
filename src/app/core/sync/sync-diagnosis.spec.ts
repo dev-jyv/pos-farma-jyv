@@ -42,6 +42,19 @@ describe('describeBlocked', () => {
     expect(describeBlocked(registro({ diagnosis: { code: 'turno-cerrado' } })).recommended).toBe('avisar-admin');
   });
 
+  it('posible factura recapturada (SPEC 58): explica las dos salidas', () => {
+    const ayuda = describeBlocked(
+      registro({
+        kind: 'stockEntry',
+        diagnosis: { code: 'entrada-posible-duplicada', syncCode: 'ENTRY_POSSIBLE_DUPLICATE' },
+      }),
+    );
+
+    expect(ayuda.title).toBe('¿Factura capturada dos veces?');
+    expect(ayuda.explanation).toContain('Sí, es otra partida');
+    expect(ayuda.explanation).toContain('Descartar');
+  });
+
   it('sin diagnóstico (IPC viejo) cae en desconocido y manda con el admin', () => {
     const ayuda = describeBlocked(registro());
 

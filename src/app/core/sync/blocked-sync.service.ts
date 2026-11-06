@@ -3,6 +3,7 @@ import { Injectable, inject, signal } from '@angular/core';
 import { AuthService } from '../auth/auth.service';
 import { BlockedSyncRecord, CatalogConflictChoice } from '../electron/window.d';
 import { pushOwnerFilter } from './push-owner';
+import { blockedCodeOf } from './sync-diagnosis';
 
 /**
  * Registros que el servidor rechazó al sincronizar (ventas, gastos, turnos,
@@ -75,6 +76,25 @@ export class BlockedSyncService {
   }
 
   /**
+   * Una entrada que el servidor avisó como posible factura recapturada (409
+   * `ENTRY_POSSIBLE_DUPLICATE`, SPEC 58) se resuelve con "Sí, es otra partida" o
+   * "Descartar", no con "Reintentar": reintentar sin confirmar volvería a chocar.
+   */
+  isPossibleDuplicate(record: BlockedSyncRecord): boolean {
+    return record.kind === 'stockEntry' && blockedCodeOf(record) === 'entrada-posible-duplicada';
+  }
+
+  /** "Sí, es otra partida": vuelve a la cola con `confirmDuplicate`; quien llama empuja después. */
+  async confirmDuplicate(record: BlockedSyncRecord): Promise<void> {
+    const api = window.electronAPI;
+    if (!api || !this.isPossibleDuplicate(record)) {
+      return;
+    }
+    await api.catalog.confirmDuplicateStockEntry(record.id);
+    await this.refresh();
+  }
+
+  /**
    * "Arreglar" solo tiene sentido en una venta que espera a algo **local** (su
    * turno o un producto sin `remoteId`). Un rechazo del servidor sin
    * bloqueadores se resuelve con "Reintentar" tras corregir la causa.
@@ -112,7 +132,10 @@ export class BlockedSyncService {
     }
     if (record.kind === 'stockEntry') {
       // Quita piezas del stock local sin dejar rastro: como una venta, solo el admin.
-      return this.auth.isAdmin();
+      // Excepción (SPEC 58): ante una posible factura recapturada "Descartar" es
+      // una de las dos respuestas que se le piden a quien capturó, y lo que quita
+      // es justo la mercancía contada dos veces; el servidor ya tiene la original.
+      return this.auth.isAdmin() || this.isPossibleDuplicate(record);
     }
     // Un producto no se descarta: ventas y lotes locales cuelgan de él.
     return record.kind === 'cashMovement';

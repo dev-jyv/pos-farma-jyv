@@ -230,3 +230,66 @@ describe('BlockedSyncService — conflicto de catálogo con el panel (SPEC 56)',
     expect(listBlockedProducts).toHaveBeenCalled();
   });
 });
+
+describe('BlockedSyncService — posible factura recapturada (SPEC 58)', () => {
+  afterEach(() => {
+    window.electronAPI = undefined;
+    TestBed.resetTestingModule();
+  });
+
+  const duplicada: BlockedSyncRecord = {
+    kind: 'stockEntry',
+    id: 'b-dup',
+    label: 'Entrada L-1',
+    detail: 'Paracetamol · 6 pzas',
+    occurredAt: '2026-11-06T10:00:00Z',
+    reason: 'La factura ya tiene una entrada igual. [ENTRY_POSSIBLE_DUPLICATE]',
+    diagnosis: { code: 'entrada-posible-duplicada', syncCode: 'ENTRY_POSSIBLE_DUPLICATE' },
+  };
+
+  function api() {
+    const confirmDuplicateStockEntry = vi.fn().mockResolvedValue(true);
+    const discardStockEntry = vi.fn().mockResolvedValue(undefined);
+    window.electronAPI = {
+      sales: { listBlocked: vi.fn().mockResolvedValue([]) },
+      cashMovements: { listBlocked: vi.fn().mockResolvedValue([]) },
+      cashSessions: { listBlocked: vi.fn().mockResolvedValue([]) },
+      catalog: {
+        listBlockedStockEntries: vi.fn().mockResolvedValue([]),
+        listBlockedProducts: vi.fn().mockResolvedValue([]),
+        confirmDuplicateStockEntry,
+        discardStockEntry,
+      },
+    } as unknown as typeof window.electronAPI;
+    return { confirmDuplicateStockEntry, discardStockEntry };
+  }
+
+  it('reconoce el aviso solo en entradas con ese diagnóstico', () => {
+    const service = build(false);
+    expect(service.isPossibleDuplicate(duplicada)).toBe(true);
+    expect(service.isPossibleDuplicate(entrada)).toBe(false);
+    expect(service.isPossibleDuplicate({ ...duplicada, kind: 'sale' })).toBe(false);
+  });
+
+  it('"Sí, es otra partida" reenvía la entrada con confirmDuplicate', async () => {
+    const { confirmDuplicateStockEntry } = api();
+    await build(false).confirmDuplicate(duplicada);
+    expect(confirmDuplicateStockEntry).toHaveBeenCalledWith('b-dup');
+  });
+
+  it('una entrada sin el aviso no se confirma como duplicada', async () => {
+    const { confirmDuplicateStockEntry } = api();
+    await build(true).confirmDuplicate(entrada);
+    expect(confirmDuplicateStockEntry).not.toHaveBeenCalled();
+  });
+
+  it('"Descartar" también lo puede elegir el cajero ante el aviso; otro lote no', async () => {
+    const { discardStockEntry } = api();
+    const cajero = build(false);
+    expect(cajero.canDiscard(duplicada)).toBe(true);
+    expect(cajero.canDiscard(entrada)).toBe(false);
+
+    await cajero.discard(duplicada);
+    expect(discardStockEntry).toHaveBeenCalledWith('b-dup');
+  });
+});

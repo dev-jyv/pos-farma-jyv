@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearStockEntryPushError: (batchLocalId) =>
       ipcRenderer.invoke('catalog:clearStockEntryPushError', batchLocalId),
     discardStockEntry: (batchLocalId) => ipcRenderer.invoke('catalog:discardStockEntry', batchLocalId),
+    confirmDuplicateStockEntry: (batchLocalId) =>
+      ipcRenderer.invoke('catalog:confirmDuplicateStockEntry', batchLocalId),
     listBlockedProducts: () => ipcRenderer.invoke('catalog:listBlockedProducts'),
     markStockEntrySynced: (batchLocalId, remoteProductId) =>
       ipcRenderer.invoke('catalog:markStockEntrySynced', batchLocalId, remoteProductId),
