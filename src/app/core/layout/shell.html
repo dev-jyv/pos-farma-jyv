@@ -359,16 +359,40 @@
                 (onClick)="repairBlocked(record)"
               />
             }
-            <p-button
-              label="Reintentar"
-              icon="pi pi-refresh"
-              size="small"
-              [severity]="recomendado === 'reintentar' ? 'primary' : 'secondary'"
-              [outlined]="recomendado !== 'reintentar'"
-              [loading]="retryingBlockedId() === record.id"
-              [disabled]="retryingBlockedId() !== null || repairingId() !== null"
-              (onClick)="retryBlocked(record)"
-            />
+            @if (canResolveConflict(record)) {
+              <!-- SPEC 56: el panel cambió precio o estado; reintentar volvería a chocar. -->
+              <p-button
+                label="Usar el del panel"
+                icon="pi pi-check"
+                size="small"
+                severity="primary"
+                data-testid="conflict-use-panel"
+                [loading]="retryingBlockedId() === record.id"
+                [disabled]="retryingBlockedId() !== null || repairingId() !== null"
+                (onClick)="resolveConflict(record, 'panel')"
+              />
+              <p-button
+                label="Forzar el mío"
+                icon="pi pi-upload"
+                size="small"
+                severity="warn"
+                [outlined]="true"
+                data-testid="conflict-force-mine"
+                [disabled]="retryingBlockedId() !== null || repairingId() !== null"
+                (onClick)="resolveConflict(record, 'mine')"
+              />
+            } @else {
+              <p-button
+                label="Reintentar"
+                icon="pi pi-refresh"
+                size="small"
+                [severity]="recomendado === 'reintentar' ? 'primary' : 'secondary'"
+                [outlined]="recomendado !== 'reintentar'"
+                [loading]="retryingBlockedId() === record.id"
+                [disabled]="retryingBlockedId() !== null || repairingId() !== null"
+                (onClick)="retryBlocked(record)"
+              />
+            }
             @if (canSendBlockedToUnreconciled(record)) {
               <p-button
                 label="Mandar a conciliación"

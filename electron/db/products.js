@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const { toDate } = require('./timestamps');
 const { diagnoseReason } = require('./blocked-diagnosis');
+const { appendSafe } = require('./sync-log');
 
 /** Forma que consume el POS (búsqueda/carrito), igual a `shared/models`' `Product`. */
 function toProductDto(row) {
@@ -290,39 +291,91 @@ async function pendingStockDelta(db, localProductId) {
 }
 
 /**
+ * Campos de catálogo que un pull escribe y una edición local sube. Son los que
+ * protege una edición pendiente (SPEC 56): el pull no los toca en esa fila.
+ */
+function remoteCatalogData(remote) {
+  return {
+    sku: remote.sku,
+    barcode: remote.barcode ?? null,
+    name: remote.name,
+    activeIngredient: remote.activeIngredient ?? null,
+    concentration: remote.concentration ?? null,
+    categoryId: remote.categoryId ?? null,
+    unit: remote.unit ?? null,
+    salePrice: remote.salePrice,
+    minStock: remote.minStock ?? 0,
+    hasIva: Boolean(remote.hasIva),
+    hasIvaZero: Boolean(remote.hasIvaZero),
+    hasIeps: Boolean(remote.hasIeps),
+    iepsRate: remote.iepsRate ?? null,
+    controlledGroup: remote.controlledGroup ?? null,
+    requiresPrescription: Boolean(remote.requiresPrescription),
+    isActive: remote.isActive !== false,
+    // Venta por caja (SPEC 46). Un backend anterior no los manda: quedan en
+    // null y el producto se vende solo por pieza, como siempre.
+    boxQuantity: isValidBoxQuantity(remote.boxQuantity) ? remote.boxQuantity : null,
+    boxPrice: typeof remote.boxPrice === 'number' && remote.boxPrice > 0 ? remote.boxPrice : null,
+    boxBarcode: typeof remote.boxBarcode === 'string' && remote.boxBarcode.trim() ? remote.boxBarcode.trim() : null,
+    // `suppliers` no se escribe: nada en la caja lo lee (`toProductDto` no lo
+    // expone) y serializarlo por producto en cada pull era peso muerto. Por eso
+    // `GET /products/sync` tampoco lo manda.
+  };
+}
+
+/** Columnas de catálogo de `Product` (las de `remoteCatalogData`). */
+const CATALOG_COLUMNS = Object.keys(remoteCatalogData({}));
+
+/**
+ * ¿La fila tiene una edición de catálogo que todavía no sube? Una edición desde
+ * Productos (`pendingCatalogPush`) o una entrada de stock pendiente que trae
+ * `productUpdate` (corrección de precio, código…). En ambos casos el pull no
+ * debe pisar sus campos de catálogo: la edición se perdía sin aviso y el push
+ * siguiente subía la fila ya pisada (SPEC 56, C2).
+ */
+async function hasPendingCatalogEdit(db, row) {
+  if (row.pendingCatalogPush) {
+    return true;
+  }
+  const entries = await db.batch.findMany({
+    where: { productId: row.id, pendingPush: true, payloadJson: { not: null } },
+    select: { payloadJson: true },
+  });
+  return entries.some((entry) => {
+    try {
+      const update = JSON.parse(entry.payloadJson)?.productUpdate;
+      return Boolean(update) && typeof update === 'object' && Object.keys(update).length > 0;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** El más nuevo de dos `updatedAt` remotos (cualquiera puede faltar). */
+function newestDate(a, b) {
+  if (!a) return b ?? null;
+  if (!b) return a;
+  return a.getTime() >= b.getTime() ? a : b;
+}
+
+/**
  * Upsert por `remoteId`: usado por el pull periódico desde `GET /products/sync`.
- * El backend manda solo los campos que esta tabla persiste, así que aquí no hay
- * nada que descartar: lo que llega es lo que se guarda.
+ *
+ * - Fila sin edición pendiente: el servidor manda. Se guardan sus campos, la
+ *   foto `baseFields` (lo que el PATCH compara después) y `remoteUpdatedAt`.
+ * - Fila con edición pendiente (SPEC 56): solo stock, lotes y
+ *   `remoteUpdatedAt`. Los campos de catálogo y la foto se quedan como estaban:
+ *   el PATCH manda la diferencia contra esa foto vieja con su `baseUpdatedAt`, y
+ *   el servidor avisa con 409 si el precio o el estado cambiaron en el panel.
+ *
+ * El upsert es idempotente: el cursor se traslapa (`serverTime − 120 s`) y el
+ * mismo producto puede llegar en dos pulls seguidos sin efecto alguno.
  */
 async function upsertMany(prisma, remoteProducts) {
   for (const remote of remoteProducts) {
-    const data = {
-      sku: remote.sku,
-      barcode: remote.barcode ?? null,
-      name: remote.name,
-      activeIngredient: remote.activeIngredient ?? null,
-      concentration: remote.concentration ?? null,
-      categoryId: remote.categoryId ?? null,
-      unit: remote.unit ?? null,
-      salePrice: remote.salePrice,
-      minStock: remote.minStock ?? 0,
-      hasIva: Boolean(remote.hasIva),
-      hasIvaZero: Boolean(remote.hasIvaZero),
-      hasIeps: Boolean(remote.hasIeps),
-      iepsRate: remote.iepsRate ?? null,
-      controlledGroup: remote.controlledGroup ?? null,
-      requiresPrescription: Boolean(remote.requiresPrescription),
-      isActive: remote.isActive !== false,
-      // Venta por caja (SPEC 46). Un backend anterior no los manda: quedan en
-      // null y el producto se vende solo por pieza, como siempre.
-      boxQuantity: isValidBoxQuantity(remote.boxQuantity) ? remote.boxQuantity : null,
-      boxPrice: typeof remote.boxPrice === 'number' && remote.boxPrice > 0 ? remote.boxPrice : null,
-      boxBarcode: typeof remote.boxBarcode === 'string' && remote.boxBarcode.trim() ? remote.boxBarcode.trim() : null,
-      // `suppliers` no se escribe: nada en la caja lo lee (`toProductDto` no lo
-      // expone) y serializarlo por producto en cada pull era peso muerto. Por eso
-      // `GET /products/sync` tampoco lo manda.
-      totalStock: remote.stock ?? remote.totalStock ?? 0,
-    };
+    const catalog = remoteCatalogData(remote);
+    const remoteUpdatedAt = toDate(remote.updatedAt);
+    let totalStock = remote.stock ?? remote.totalStock ?? 0;
     // Producto + sus lotes en una sola transacción: si el proceso se interrumpe
     // a media pasada, este producto no queda con el catálogo actualizado pero
     // los lotes viejos borrados a medias (o viceversa). El cursor de sync solo
@@ -330,14 +383,40 @@ async function upsertMany(prisma, remoteProducts) {
     // se reintenta entero en el siguiente pull.
     await prisma.$transaction(async (tx) => {
       const existing = await tx.product.findUnique({ where: { remoteId: remote.id } });
+      let product;
       if (existing) {
-        data.totalStock = Math.max(0, data.totalStock + (({ sold, entries }) => entries - sold)(await pendingStockDelta(tx, existing.id)));
+        const { sold, entries } = await pendingStockDelta(tx, existing.id);
+        totalStock = Math.max(0, totalStock + entries - sold);
+        const stamp = newestDate(existing.remoteUpdatedAt ?? null, remoteUpdatedAt);
+        if (await hasPendingCatalogEdit(tx, existing)) {
+          product = await tx.product.update({
+            where: { id: existing.id },
+            data: { totalStock, ...(stamp ? { remoteUpdatedAt: stamp } : {}) },
+          });
+        } else {
+          product = await tx.product.update({
+            where: { id: existing.id },
+            data: {
+              ...catalog,
+              totalStock,
+              baseFields: serializeBase(remoteUpdatedAt, catalogFieldsOf(catalog)),
+              remoteUpdatedAt: stamp,
+              catalogConflict: null,
+            },
+          });
+        }
+      } else {
+        product = await tx.product.create({
+          data: {
+            ...catalog,
+            totalStock,
+            remoteId: remote.id,
+            pendingPush: false,
+            baseFields: serializeBase(remoteUpdatedAt, catalogFieldsOf(catalog)),
+            remoteUpdatedAt,
+          },
+        });
       }
-      const product = await tx.product.upsert({
-        where: { remoteId: remote.id },
-        update: data,
-        create: { ...data, remoteId: remote.id, pendingPush: false },
-      });
 
       if (Array.isArray(remote.batches)) {
         // Los remotos son la foto autoritativa de este producto: se reemplazan
@@ -497,16 +576,108 @@ async function getPendingStockEntries(prisma, { includeWaiting = false } = {}) {
 }
 
 async function markStockEntrySynced(prisma, batchLocalId, remoteProductId) {
-  const batch = await prisma.batch.update({
-    where: { id: batchLocalId },
-    data: { pendingPush: false, pushError: null },
-  });
-  if (remoteProductId) {
-    await prisma.product.update({
-      where: { id: batch.productId },
-      data: { remoteId: remoteProductId, pendingPush: false, pushError: null },
+  await inTransaction(prisma, async (tx) => {
+    const batch = await tx.batch.update({
+      where: { id: batchLocalId },
+      data: { pendingPush: false, pushError: null },
     });
+    if (remoteProductId) {
+      const local = await tx.product.findUnique({ where: { id: batch.productId } });
+      await linkRemoteId(tx, batch.productId, remoteProductId, {
+        preferLocalCatalog: Boolean(local) && (await hasPendingCatalogEdit(tx, local)),
+        reason: 'entrada de stock',
+      });
+      await tx.product.update({
+        where: { id: batch.productId },
+        data: { pendingPush: false, pushError: null },
+      });
+    }
+  });
+}
+
+/** Corre `fn` en una transacción, salvo que `prisma` ya sea una (no se anidan). */
+function inTransaction(prisma, fn) {
+  return typeof prisma.$transaction === 'function' ? prisma.$transaction(fn) : fn(prisma);
+}
+
+/**
+ * Enlaza la fila local `localId` con el producto remoto `remoteId` (SPEC 56, B6).
+ *
+ * Si el pull ya había creado **otra** fila con ese `remoteId` (bajó el producto
+ * antes de que esta caja confirmara su alta), `remoteId @unique` hacía fallar el
+ * enlace: quedaban dos productos locales, el stock contado doble y las ventas
+ * del id local esperando para siempre. Aquí se fusionan, dentro de la misma
+ * transacción que el enlace:
+ *
+ * - las partidas de venta y los lotes de la fila del pull pasan a la local, que
+ *   es la que conocen las ventas y entradas ya capturadas;
+ * - los lotes ya subidos de la local se sustituyen por la foto del servidor que
+ *   trajo el pull (si trajo lotes), como haría un pull normal;
+ * - el stock es el del servidor (el de la fila del pull sin lo pendiente que ya
+ *   llevaba) más todo lo que la fila fusionada tiene pendiente de subir;
+ * - el catálogo es el del servidor, salvo que la local tenga una edición
+ *   pendiente (`preferLocalCatalog`), que se conserva para subirla;
+ * - se borra la fila del pull y queda un renglón en `SyncLog`.
+ *
+ * Devuelve `true` si fusionó.
+ */
+async function linkRemoteId(tx, localId, remoteId, { preferLocalCatalog = false, reason = 'enlace' } = {}) {
+  const other = await tx.product.findUnique({ where: { remoteId } });
+  if (!other || other.id === localId) {
+    await tx.product.update({ where: { id: localId }, data: { remoteId } });
+    return false;
   }
+  const local = await tx.product.findUnique({ where: { id: localId } });
+  if (!local) {
+    // La fila local ya no existe: la del pull es la buena, no hay nada que fusionar.
+    return false;
+  }
+
+  // Stock del servidor según el pull: lo que tenía la fila menos lo pendiente
+  // que esa fila ya llevaba sumado o restado.
+  const pendingOfOther = await pendingStockDelta(tx, other.id);
+  const serverStock = (other.totalStock ?? 0) - (pendingOfOther.entries - pendingOfOther.sold);
+
+  await tx.saleItem.updateMany({ where: { productId: other.id }, data: { productId: localId } });
+  const otherBatches = await tx.batch.count({ where: { productId: other.id } });
+  if (otherBatches > 0) {
+    await tx.batch.deleteMany({ where: { productId: localId, pendingPush: false } });
+  }
+  await tx.batch.updateMany({ where: { productId: other.id }, data: { productId: localId } });
+  await tx.product.delete({ where: { id: other.id } });
+
+  const { sold, entries } = await pendingStockDelta(tx, localId);
+  const catalog = {};
+  if (!preferLocalCatalog) {
+    for (const column of CATALOG_COLUMNS) {
+      catalog[column] = other[column] ?? null;
+    }
+    catalog.isActive = other.isActive !== false;
+    catalog.minStock = other.minStock ?? 0;
+    catalog.hasIva = Boolean(other.hasIva);
+    catalog.hasIvaZero = Boolean(other.hasIvaZero);
+    catalog.hasIeps = Boolean(other.hasIeps);
+    catalog.requiresPrescription = Boolean(other.requiresPrescription);
+  }
+  await tx.product.update({
+    where: { id: localId },
+    data: {
+      ...catalog,
+      remoteId,
+      totalStock: Math.max(0, serverStock + entries - sold),
+      baseFields: other.baseFields ?? local.baseFields ?? null,
+      remoteUpdatedAt: newestDate(local.remoteUpdatedAt ?? null, other.remoteUpdatedAt ?? null),
+    },
+  });
+  await appendSafe(tx, {
+    level: 'warn',
+    entity: 'product',
+    ref: localId,
+    message:
+      `Fusión de producto duplicado (${reason}): la fila ${other.id} del pull ` +
+      `con remoteId ${remoteId} se unió a la local ${localId} "${local.name}".`,
+  });
+  return true;
 }
 
 async function markStockEntryPushFailed(prisma, batchLocalId, message) {
@@ -637,6 +808,108 @@ function toPushFields(row) {
   return fields;
 }
 
+/**
+ * Foto de catálogo comparable (SPEC 56): la forma de `toPushFields`, más
+ * `isActive` siempre (el alta no lo manda, pero la foto debe saberlo para que el
+ * PATCH no reactive un producto que el panel desactivó).
+ */
+function catalogFieldsOf(row) {
+  return { ...toPushFields(row), isActive: row.isActive !== false };
+}
+
+/** `baseFields` = `{ updatedAt (ISO remoto o null), fields }`. */
+function serializeBase(updatedAt, fields) {
+  const iso = toDate(updatedAt)?.toISOString() ?? null;
+  return JSON.stringify({ updatedAt: iso, fields });
+}
+
+/** Lee `baseFields`; `null` si no hay foto (fila anterior a SPEC 56) o es ilegible. */
+function parseBaseFields(raw) {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !parsed.fields || typeof parsed.fields !== 'object') {
+      return null;
+    }
+    return {
+      updatedAt: typeof parsed.updatedAt === 'string' && parsed.updatedAt ? parsed.updatedAt : null,
+      fields: parsed.fields,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Lee `catalogConflict`: `{ salePrice, isActive, force? }` o `null`. */
+function parseConflict(raw) {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    return {
+      salePrice: typeof parsed.salePrice === 'number' ? parsed.salePrice : null,
+      isActive: typeof parsed.isActive === 'boolean' ? parsed.isActive : null,
+      force: parsed.force === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Los impuestos se validan juntos en el backend (`hasIeps` exige `iepsRate`;
+ * IVA 16 % y 0 % se excluyen): si cambia uno, viajan todos los que hay.
+ */
+const TAX_FIELDS = ['hasIva', 'hasIvaZero', 'hasIeps', 'iepsRate'];
+
+/**
+ * Lo que cambió en local respecto a la foto: solo eso sube en el PATCH (SPEC 56,
+ * C3). Mandar el registro completo era "gana la última escritura": una caja con
+ * datos viejos que corregía otro campo revertía el precio del admin, y además
+ * reactivaba un producto desactivado. Un campo que se vació en local no viaja
+ * (el backend no acepta `null`), igual que antes con el registro completo.
+ */
+function diffCatalogFields(current, base) {
+  const changes = {};
+  for (const [key, value] of Object.entries(current)) {
+    if (value !== base[key]) {
+      changes[key] = value;
+    }
+  }
+  if (TAX_FIELDS.some((key) => key in changes)) {
+    for (const key of TAX_FIELDS) {
+      if (current[key] !== undefined) {
+        changes[key] = current[key];
+      }
+    }
+  }
+  return changes;
+}
+
+/** Texto que ve el cajero cuando el panel cambió precio o estado (409 `CATALOG_CONFLICT`). */
+function conflictMessage(row, current) {
+  const partes = [];
+  if (current.salePrice !== null && current.salePrice !== row.salePrice) {
+    partes.push(`El precio cambió en el panel: $${current.salePrice.toFixed(2)}`);
+  }
+  if (current.isActive !== null && current.isActive !== row.isActive) {
+    const estado = current.isActive ? 'se reactivó' : 'se desactivó';
+    partes.push(partes.length ? `y el producto ${estado}` : `El producto ${estado} en el panel`);
+  }
+  if (!partes.length) {
+    return current.salePrice !== null
+      ? `El precio cambió en el panel: $${current.salePrice.toFixed(2)}`
+      : 'El producto cambió en el panel';
+  }
+  return partes.join(' ');
+}
+
 async function getPendingCatalogPush(prisma) {
   const rows = await prisma.product.findMany({
     // Igual que las otras colas: un producto con `catalogPushError` ya quedó
@@ -644,39 +917,150 @@ async function getPendingCatalogPush(prisma) {
     where: { pendingCatalogPush: true, catalogPushError: null },
     orderBy: { updatedAt: 'asc' },
   });
-  return rows.map((row) => ({
-    id: row.id,
-    remoteId: row.remoteId ?? null,
-    fields: toPushFields(row),
-    catalogPushError: row.catalogPushError ?? null,
-    // Foto de la edición que se va a subir: `markCatalogSynced` la compara para no
-    // dar por subida una edición que llegó mientras el PATCH estaba en vuelo.
-    version: row.updatedAt ? new Date(row.updatedAt).toISOString() : null,
-  }));
+  return rows.map((row) => {
+    const snapshot = catalogFieldsOf(row);
+    const base = row.remoteId ? parseBaseFields(row.baseFields) : null;
+    const conflict = parseConflict(row.catalogConflict);
+    return {
+      id: row.id,
+      remoteId: row.remoteId ?? null,
+      fields: toPushFields(row),
+      // Edición con foto: solo lo cambiado. `null` = sin foto (alta, o fila de
+      // antes de SPEC 56): sube completo, como siempre.
+      changes: base ? diffCatalogFields(snapshot, base.fields) : null,
+      // "Forzar el mío" sube sin `baseUpdatedAt`: el servidor ya no compara.
+      baseUpdatedAt: base && !conflict?.force ? base.updatedAt : null,
+      // Lo que queda en el servidor si el push sale bien: la foto nueva.
+      snapshot,
+      catalogPushError: row.catalogPushError ?? null,
+      // Foto de la edición que se va a subir: `markCatalogSynced` la compara para no
+      // dar por subida una edición que llegó mientras el PATCH estaba en vuelo.
+      version: row.updatedAt ? new Date(row.updatedAt).toISOString() : null,
+    };
+  });
 }
 
-async function markCatalogSynced(prisma, localId, remoteId, pushedVersion) {
-  // Si el producto se editó mientras el push estaba en vuelo, su `updatedAt` ya no
-  // es el de la foto que se subió: se guarda el `remoteId` pero la edición nueva
-  // sigue pendiente. Si no, se marcaba subida y el siguiente pull la pisaba con el
-  // valor viejo del servidor.
-  const current = pushedVersion
-    ? await prisma.product.findUnique({ where: { id: localId }, select: { updatedAt: true } })
-    : null;
-  const editadoEnVuelo =
-    Boolean(current?.updatedAt) && new Date(current.updatedAt).toISOString() !== pushedVersion;
-  await prisma.product.update({
-    where: { id: localId },
-    data: {
-      ...(remoteId ? { remoteId } : {}),
+/**
+ * Confirma un push de catálogo. `synced` (opcional) trae la foto que ya tiene el
+ * servidor: `fields` (lo subido) y `remoteUpdatedAt` (el `updatedAt` que
+ * respondió). Con ella se renueva `baseFields`, para que el siguiente PATCH
+ * compare contra lo que de verdad quedó arriba.
+ *
+ * Si el `remoteId` ya lo tiene otra fila (el pull la creó antes de este enlace),
+ * se fusionan (`linkRemoteId`) en vez de fallar por `remoteId @unique`.
+ */
+async function markCatalogSynced(prisma, localId, remoteId, pushedVersion, synced = null) {
+  await inTransaction(prisma, async (tx) => {
+    const current = await tx.product.findUnique({ where: { id: localId } });
+    if (!current) {
+      return;
+    }
+    // Si el producto se editó mientras el push estaba en vuelo, su `updatedAt` ya no
+    // es el de la foto que se subió: se guarda el `remoteId` pero la edición nueva
+    // sigue pendiente. Si no, se marcaba subida y el siguiente pull la pisaba con el
+    // valor viejo del servidor.
+    const editadoEnVuelo =
+      Boolean(pushedVersion) &&
+      Boolean(current.updatedAt) &&
+      new Date(current.updatedAt).toISOString() !== pushedVersion;
+    if (remoteId && current.remoteId !== remoteId) {
+      // Lo recién subido es lo que tiene el servidor: se conserva el catálogo local.
+      await linkRemoteId(tx, localId, remoteId, { preferLocalCatalog: true, reason: 'catálogo' });
+    }
+    const data = {
       ...(editadoEnVuelo ? {} : { pendingCatalogPush: false }),
       catalogPushError: null,
-    },
+      catalogConflict: null,
+    };
+    if (synced && synced.fields && typeof synced.fields === 'object') {
+      const after = await tx.product.findUnique({ where: { id: localId } });
+      const previous = parseBaseFields(after?.baseFields);
+      const remoteUpdatedAt = toDate(synced.remoteUpdatedAt);
+      data.baseFields = serializeBase(remoteUpdatedAt ?? previous?.updatedAt ?? null, synced.fields);
+      if (remoteUpdatedAt) {
+        data.remoteUpdatedAt = newestDate(after?.remoteUpdatedAt ?? null, remoteUpdatedAt);
+      }
+    }
+    await tx.product.update({ where: { id: localId }, data });
   });
 }
 
 async function markCatalogPushFailed(prisma, localId, message) {
   await prisma.product.update({ where: { id: localId }, data: { catalogPushError: message } });
+}
+
+/**
+ * El PATCH respondió 409 `CATALOG_CONFLICT` (SPEC 56): el precio o el estado
+ * cambiaron en el panel después de la foto. Se guarda el valor actual del
+ * servidor y la edición queda **bloqueada visible** en "Rechazados" con el
+ * texto "El precio cambió en el panel: $X", hasta que alguien elija "Usar el del
+ * panel" o "Forzar el mío" (`resolveCatalogConflict`).
+ */
+async function markCatalogConflict(prisma, localId, current) {
+  const row = await prisma.product.findUnique({ where: { id: localId } });
+  if (!row) {
+    return;
+  }
+  const panel = {
+    salePrice: typeof current?.salePrice === 'number' ? current.salePrice : null,
+    isActive: typeof current?.isActive === 'boolean' ? current.isActive : null,
+  };
+  await prisma.product.update({
+    where: { id: localId },
+    data: {
+      catalogConflict: JSON.stringify(panel),
+      catalogPushError: `${conflictMessage(row, panel)} [CATALOG_CONFLICT]`,
+    },
+  });
+}
+
+/**
+ * Resuelve un conflicto de catálogo:
+ *
+ * - `panel` ("Usar el del panel"): la caja toma el precio y el estado del panel
+ *   y los da por base; lo demás que se editó en local sigue pendiente y sube en
+ *   el siguiente push (ya sin tocar precio ni estado). Si no queda nada, el push
+ *   lo da por subido sin pedir nada al servidor.
+ * - `mine` ("Forzar el mío"): la edición vuelve a la cola y sube **sin**
+ *   `baseUpdatedAt`, así que el servidor la aplica aunque el panel haya cambiado.
+ *
+ * Devuelve `false` si no hay conflicto que resolver.
+ */
+async function resolveCatalogConflict(prisma, localId, choice) {
+  const row = await prisma.product.findUnique({ where: { id: localId } });
+  const conflict = parseConflict(row?.catalogConflict);
+  if (!row || !conflict) {
+    return false;
+  }
+  if (choice === 'mine') {
+    await prisma.product.update({
+      where: { id: localId },
+      data: {
+        catalogConflict: JSON.stringify({ ...conflict, force: true }),
+        catalogPushError: null,
+        pendingCatalogPush: true,
+      },
+    });
+    return true;
+  }
+  if (choice !== 'panel') {
+    throw new Error(`Opción de conflicto desconocida: ${choice}`);
+  }
+  const panel = {};
+  if (conflict.salePrice !== null) panel.salePrice = conflict.salePrice;
+  if (conflict.isActive !== null) panel.isActive = conflict.isActive;
+  const base = parseBaseFields(row.baseFields);
+  await prisma.product.update({
+    where: { id: localId },
+    data: {
+      ...panel,
+      ...(base ? { baseFields: JSON.stringify({ ...base, fields: { ...base.fields, ...panel } }) } : {}),
+      catalogConflict: null,
+      catalogPushError: null,
+      pendingCatalogPush: true,
+    },
+  });
+  return true;
 }
 
 /**
@@ -715,15 +1099,20 @@ async function listBlockedProducts(prisma) {
     where: { pendingCatalogPush: true, catalogPushError: { not: null } },
     orderBy: { updatedAt: 'asc' },
   });
-  return rows.map((row) => ({
-    kind: 'product',
-    id: row.id,
-    label: row.name,
-    detail: `SKU ${row.sku}`,
-    occurredAt: row.updatedAt,
-    reason: row.catalogPushError,
-    diagnosis: diagnoseReason(row.catalogPushError),
-  }));
+  return rows.map((row) => {
+    const conflict = parseConflict(row.catalogConflict);
+    return {
+      kind: 'product',
+      id: row.id,
+      label: row.name,
+      detail: `SKU ${row.sku}`,
+      occurredAt: row.updatedAt,
+      reason: row.catalogPushError,
+      diagnosis: diagnoseReason(row.catalogPushError),
+      // Solo con 409 `CATALOG_CONFLICT`: lo que dice el panel, para "Usar el del panel".
+      ...(conflict ? { conflict: { salePrice: conflict.salePrice, isActive: conflict.isActive } } : {}),
+    };
+  });
 }
 
 module.exports = {
@@ -749,6 +1138,8 @@ module.exports = {
   getPendingCatalogPush,
   markCatalogSynced,
   markCatalogPushFailed,
+  markCatalogConflict,
+  resolveCatalogConflict,
   clearCatalogPushError,
   toProductDto,
 };

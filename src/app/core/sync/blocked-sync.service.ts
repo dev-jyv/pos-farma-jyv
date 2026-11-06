@@ -1,7 +1,7 @@
 import { Injectable, inject, signal } from '@angular/core';
 
 import { AuthService } from '../auth/auth.service';
-import { BlockedSyncRecord } from '../electron/window.d';
+import { BlockedSyncRecord, CatalogConflictChoice } from '../electron/window.d';
 import { pushOwnerFilter } from './push-owner';
 
 /**
@@ -53,6 +53,25 @@ export class BlockedSyncService {
    */
   canFix(record: BlockedSyncRecord): boolean {
     return record.kind === 'cashMovement' || record.kind === 'product';
+  }
+
+  /**
+   * Un producto cuyo PATCH chocó con un cambio del panel (409 `CATALOG_CONFLICT`,
+   * SPEC 56) se resuelve con "Usar el del panel" o "Forzar el mío", no con
+   * "Reintentar": reintentar igual volvería a chocar.
+   */
+  canResolveConflict(record: BlockedSyncRecord): boolean {
+    return record.kind === 'product' && Boolean(record.conflict);
+  }
+
+  /** Aplica la elección y relee la lista; quien llama empuja después. */
+  async resolveConflict(record: BlockedSyncRecord, choice: CatalogConflictChoice): Promise<void> {
+    const api = window.electronAPI;
+    if (!api || !this.canResolveConflict(record)) {
+      return;
+    }
+    await api.catalog.resolveCatalogConflict(record.id, choice);
+    await this.refresh();
   }
 
   /**

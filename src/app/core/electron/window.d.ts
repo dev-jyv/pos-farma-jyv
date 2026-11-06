@@ -37,10 +37,36 @@ export interface PendingCatalogProduct {
   /** `null` = alta nueva (nunca sincronizó); si tiene valor, es una edición. */
   remoteId: string | null;
   fields: ProductFieldsPayload;
+  /**
+   * Edición con foto (SPEC 56): solo los campos que difieren de `baseFields`;
+   * eso es lo que sube el PATCH. `null`/ausente = sin foto (alta, o producto de
+   * antes de la migración): sube `fields` completo, como siempre.
+   */
+  changes?: Partial<ProductFieldsPayload> | null;
+  /** `updatedAt` remoto de la foto; `null` sin foto o con "Forzar el mío". */
+  baseUpdatedAt?: string | null;
+  /** Campos de catálogo completos tal como quedarán arriba; la foto nueva al confirmar. */
+  snapshot?: Partial<ProductFieldsPayload>;
   catalogPushError: string | null;
   /** `updatedAt` del producto al leer la cola; se devuelve a `markCatalogSynced`. */
   version?: string | null;
 }
+
+/** Lo que el servidor ya tiene tras un push de catálogo: renueva la foto `baseFields`. */
+export interface CatalogSyncedSnapshot {
+  fields: Partial<ProductFieldsPayload>;
+  /** `updatedAt` que respondió el servidor (ISO o `Timestamp` serializado). */
+  remoteUpdatedAt?: unknown;
+}
+
+/** Valor actual del panel en un 409 `CATALOG_CONFLICT` (SPEC 56). */
+export interface CatalogConflictCurrent {
+  salePrice: number | null;
+  isActive: boolean | null;
+}
+
+/** "Usar el del panel" o "Forzar el mío". */
+export type CatalogConflictChoice = 'panel' | 'mine';
 
 export interface StockEntryLocalResult {
   product: Product;
@@ -203,6 +229,11 @@ export interface BlockedSyncRecord {
    * `remoteId`). Vacío si el bloqueo es un rechazo del servidor.
    */
   blockers?: PosBlocker[];
+  /**
+   * Solo productos con 409 `CATALOG_CONFLICT` (SPEC 56): lo que dice el panel.
+   * Con él se ofrecen "Usar el del panel" y "Forzar el mío".
+   */
+  conflict?: CatalogConflictCurrent;
 }
 
 export type BlockedCode =
@@ -221,6 +252,7 @@ export type BlockedCode =
   | 'turno-no-encontrado'
   | 'sin-stock'
   | 'promocion-no-vigente'
+  | 'catalogo-en-conflicto'
   | 'desconocido';
 
 export interface BlockedDiagnosis {
@@ -325,7 +357,16 @@ declare global {
         createCatalogProduct: (fields: ProductFieldsPayload) => Promise<Product>;
         updateCatalogProduct: (id: string, fields: Partial<ProductFieldsPayload>) => Promise<Product>;
         getPendingCatalogPush: () => Promise<PendingCatalogProduct[]>;
-        markCatalogSynced: (localId: string, remoteId?: string | null, pushedVersion?: string | null) => Promise<void>;
+        markCatalogSynced: (
+          localId: string,
+          remoteId?: string | null,
+          pushedVersion?: string | null,
+          synced?: CatalogSyncedSnapshot | null,
+        ) => Promise<void>;
+        /** 409 `CATALOG_CONFLICT`: bloquea la edición visible con el valor del panel. */
+        markCatalogConflict: (localId: string, current: CatalogConflictCurrent) => Promise<void>;
+        /** `false` si el producto no tiene conflicto que resolver. */
+        resolveCatalogConflict: (localId: string, choice: CatalogConflictChoice) => Promise<boolean>;
         markCatalogPushFailed: (localId: string, message: string) => Promise<void>;
         clearCatalogPushError: (localId: string) => Promise<void>;
         /**

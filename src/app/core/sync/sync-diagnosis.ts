@@ -141,6 +141,14 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
       'administrador: decide si se respeta el precio cobrado.',
     recommended: 'avisar-admin',
   }),
+  'catalogo-en-conflicto': () => ({
+    title: 'El producto cambió en el panel',
+    explanation:
+      'Mientras esta caja guardaba su cambio, en el panel cambiaron el precio o el estado del ' +
+      'producto. Elige "Usar el del panel" para quedarte con lo del panel, o "Forzar el mío" si ' +
+      'el valor de esta caja es el correcto. Lo demás que corregiste se sube igual.',
+    recommended: 'corregir',
+  }),
   desconocido: (_dep, record) => ({
     title: 'Motivo no reconocido',
     explanation:

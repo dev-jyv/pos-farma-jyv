@@ -47,8 +47,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createCatalogProduct: (fields) => ipcRenderer.invoke('catalog:createCatalogProduct', fields),
     updateCatalogProduct: (id, fields) => ipcRenderer.invoke('catalog:updateCatalogProduct', id, fields),
     getPendingCatalogPush: () => ipcRenderer.invoke('catalog:getPendingCatalogPush'),
-    markCatalogSynced: (localId, remoteId, pushedVersion) =>
-      ipcRenderer.invoke('catalog:markCatalogSynced', localId, remoteId, pushedVersion),
+    markCatalogSynced: (localId, remoteId, pushedVersion, synced) =>
+      ipcRenderer.invoke('catalog:markCatalogSynced', localId, remoteId, pushedVersion, synced),
+    markCatalogConflict: (localId, current) =>
+      ipcRenderer.invoke('catalog:markCatalogConflict', localId, current),
+    resolveCatalogConflict: (localId, choice) =>
+      ipcRenderer.invoke('catalog:resolveCatalogConflict', localId, choice),
     markCatalogPushFailed: (localId, message) =>
       ipcRenderer.invoke('catalog:markCatalogPushFailed', localId, message),
     clearCatalogPushError: (localId) => ipcRenderer.invoke('catalog:clearCatalogPushError', localId),

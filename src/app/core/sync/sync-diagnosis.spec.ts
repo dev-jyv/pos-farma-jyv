@@ -112,3 +112,19 @@ describe('describeBlocked', () => {
     }
   });
 });
+
+describe('describeBlocked — conflicto de catálogo (SPEC 56)', () => {
+  it('explica que el panel cambió el producto y nombra las dos salidas', () => {
+    const record = registro({
+      kind: 'product',
+      reason: 'El precio cambió en el panel: $58.00 [CATALOG_CONFLICT]',
+      diagnosis: { code: 'catalogo-en-conflicto', syncCode: 'CATALOG_CONFLICT' },
+    });
+
+    expect(blockedCodeOf(record)).toBe('catalogo-en-conflicto');
+    const ayuda = describeBlocked(record);
+    expect(ayuda.title).toBe('El producto cambió en el panel');
+    expect(ayuda.explanation).toContain('Usar el del panel');
+    expect(ayuda.explanation).toContain('Forzar el mío');
+  });
+});

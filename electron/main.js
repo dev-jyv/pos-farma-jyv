@@ -505,8 +505,16 @@ function registrarIPCHandlers() {
     productsDb.updateCatalogProduct(await getPrisma(), id, fields));
   ipcMain.handle('catalog:getPendingCatalogPush', async () =>
     productsDb.getPendingCatalogPush(await getPrisma()));
-  ipcMain.handle('catalog:markCatalogSynced', async (_event, localId, remoteId, pushedVersion) =>
-    productsDb.markCatalogSynced(await getPrisma(), localId, remoteId, pushedVersion));
+  ipcMain.handle('catalog:markCatalogSynced', async (_event, localId, remoteId, pushedVersion, synced) =>
+    productsDb.markCatalogSynced(await getPrisma(), localId, remoteId, pushedVersion, synced));
+  // SPEC 56: 409 `CATALOG_CONFLICT` (el panel cambió precio o estado) y su resolución.
+  ipcMain.handle('catalog:markCatalogConflict', async (_event, localId, current) => {
+    const prisma = await getPrisma();
+    await productsDb.markCatalogConflict(prisma, localId, current);
+    await bitacoraFallo(prisma, 'product', localId, 'Edición de producto en conflicto con el panel');
+  });
+  ipcMain.handle('catalog:resolveCatalogConflict', async (_event, localId, choice) =>
+    productsDb.resolveCatalogConflict(await getPrisma(), localId, choice));
   ipcMain.handle('catalog:markCatalogPushFailed', async (_event, localId, message) => {
     const prisma = await getPrisma();
     await productsDb.markCatalogPushFailed(prisma, localId, message);

@@ -190,3 +190,43 @@ describe('BlockedSyncService — reparación', () => {
     ).toBe(true);
   });
 });
+
+describe('BlockedSyncService — conflicto de catálogo con el panel (SPEC 56)', () => {
+  afterEach(() => {
+    window.electronAPI = undefined;
+    TestBed.resetTestingModule();
+  });
+
+  const enConflicto = {
+    kind: 'product',
+    id: 'p1',
+    conflict: { salePrice: 58, isActive: true },
+  } as BlockedSyncRecord;
+
+  it('solo un producto con conflicto ofrece "Usar el del panel" / "Forzar el mío"', () => {
+    const service = build(false);
+    expect(service.canResolveConflict(enConflicto)).toBe(true);
+    expect(service.canResolveConflict(producto)).toBe(false);
+    expect(service.canResolveConflict({ ...venta, conflict: enConflicto.conflict } as BlockedSyncRecord)).toBe(false);
+  });
+
+  it('resolver pasa la elección al proceso main y relee la lista', async () => {
+    const resolveCatalogConflict = vi.fn().mockResolvedValue(true);
+    const listBlockedProducts = vi.fn().mockResolvedValue([]);
+    window.electronAPI = {
+      sales: { listBlocked: vi.fn().mockResolvedValue([]) },
+      cashMovements: { listBlocked: vi.fn().mockResolvedValue([]) },
+      cashSessions: { listBlocked: vi.fn().mockResolvedValue([]) },
+      catalog: {
+        listBlockedStockEntries: vi.fn().mockResolvedValue([]),
+        listBlockedProducts,
+        resolveCatalogConflict,
+      },
+    } as unknown as typeof window.electronAPI;
+
+    await build(false).resolveConflict(enConflicto, 'mine');
+
+    expect(resolveCatalogConflict).toHaveBeenCalledWith('p1', 'mine');
+    expect(listBlockedProducts).toHaveBeenCalled();
+  });
+});

@@ -4,13 +4,42 @@ import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, las
 
 import { getApiErrorMessage, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
 import { AutoPushService } from '../../../core/sync/auto-push.service';
-import { PendingCatalogProduct } from '../../../core/electron/window.d';
+import {
+  CatalogConflictChoice,
+  CatalogConflictCurrent,
+  CatalogSyncedSnapshot,
+  PendingCatalogProduct,
+} from '../../../core/electron/window.d';
 import { Product, ProductFieldsPayload } from '../../../shared/models';
 import { environment } from '../../../../environments/environment';
 
 interface ProductSummaryDto {
   id: string;
   sku: string;
+  updatedAt?: unknown;
+}
+
+/**
+ * 409 `CATALOG_CONFLICT` del `PATCH /products/:id` (SPEC 56): el precio o el
+ * estado cambiaron en el panel después de la foto que mandó la caja. Devuelve el
+ * valor actual del servidor (`details.current`), o `null` si es otro error.
+ */
+export function catalogConflictOf(error: unknown): CatalogConflictCurrent | null {
+  if (!(error instanceof HttpErrorResponse) || error.status !== 409) {
+    return null;
+  }
+  const body = error.error as {
+    error?: { details?: { code?: unknown; current?: { salePrice?: unknown; isActive?: unknown } } };
+  } | null;
+  const details = body?.error?.details;
+  if (!details || details.code !== 'CATALOG_CONFLICT') {
+    return null;
+  }
+  const current = details.current ?? {};
+  return {
+    salePrice: typeof current.salePrice === 'number' ? current.salePrice : null,
+    isActive: typeof current.isActive === 'boolean' ? current.isActive : null,
+  };
 }
 
 /**
@@ -52,6 +81,16 @@ export class ProductCatalogService {
 
   update(id: string, fields: Partial<ProductFieldsPayload>): Observable<Product> {
     return from(this.api().updateCatalogProduct(id, fields)).pipe(tap(() => this.afterLocalWrite()));
+  }
+
+  /**
+   * Resuelve un 409 `CATALOG_CONFLICT` (SPEC 56): "Usar el del panel" (`panel`)
+   * o "Forzar el mío" (`mine`). Lo resuelto vuelve a la cola; quien llama empuja.
+   */
+  async resolveConflict(localId: string, choice: CatalogConflictChoice): Promise<boolean> {
+    const resolved = await this.api().resolveCatalogConflict(localId, choice);
+    this.refreshPending();
+    return resolved;
   }
 
   /** Reintenta un producto que el servidor rechazó, tras corregir la causa. */
@@ -161,8 +200,23 @@ flushQueueAsync(): Promise<void> {
       );
   }
 
-  /** Confirma la subida con la versión leída de la cola, para no dar por subida una edición posterior. */
-  private markSynced(item: PendingCatalogProduct, remoteId: string | null): Promise<void> {
+  /**
+   * Confirma la subida con la versión leída de la cola, para no dar por subida una
+   * edición posterior. Con `remoteUpdatedAt` (lo que respondió el servidor) se
+   * renueva la foto `baseFields` contra la que compara el siguiente PATCH.
+   */
+  private markSynced(
+    item: PendingCatalogProduct,
+    remoteId: string | null,
+    remoteUpdatedAt?: unknown,
+  ): Promise<void> {
+    const synced: CatalogSyncedSnapshot | null =
+      item.snapshot && remoteUpdatedAt !== undefined
+        ? { fields: item.snapshot, remoteUpdatedAt }
+        : null;
+    if (synced) {
+      return this.api().markCatalogSynced(item.id, remoteId, item.version ?? null, synced);
+    }
     return item.version
       ? this.api().markCatalogSynced(item.id, remoteId, item.version)
       : this.api().markCatalogSynced(item.id, remoteId);
@@ -170,10 +224,7 @@ flushQueueAsync(): Promise<void> {
 
   private pushOne(item: PendingCatalogProduct): Observable<unknown> {
     if (item.remoteId) {
-      return this.http.patch<unknown>(`${this.apiUrl}/products/${item.remoteId}`, item.fields).pipe(
-        switchMap(() => from(this.markSynced(item, item.remoteId))),
-        catchError((error: unknown) => this.handleFailure(item.id, error)),
-      );
+      return this.patchOne(item, item.remoteId);
     }
     return this.findExistingBySku(item.fields.sku).pipe(
       switchMap((existingId) => {
@@ -183,7 +234,7 @@ flushQueueAsync(): Promise<void> {
         return this.http.post<unknown>(`${this.apiUrl}/products`, item.fields).pipe(
           switchMap((response) => {
             const created = unwrapEntity<ProductSummaryDto>(response);
-            return from(this.markSynced(item, created.id));
+            return from(this.markSynced(item, created.id, created.updatedAt));
           }),
           // 409 = el SKU ya existe (p. ej. backend sin el filtro `sku`, que
           // ignora el parámetro): se adopta el producto existente en vez de
@@ -196,6 +247,37 @@ flushQueueAsync(): Promise<void> {
         );
       }),
       catchError((error: unknown) => this.handleFailure(item.id, error)),
+    );
+  }
+
+  /**
+   * Edición de un producto que ya existe arriba (SPEC 56). Con foto sube **solo
+   * lo cambiado** más `baseUpdatedAt`; el servidor responde 409
+   * `CATALOG_CONFLICT` si el precio o el estado cambiaron en el panel después, y
+   * la edición queda bloqueada visible con el valor del panel. Sin cambios
+   * respecto a la foto no hay nada que subir: se da por subida sin red.
+   */
+  private patchOne(item: PendingCatalogProduct, remoteId: string): Observable<unknown> {
+    const changes = item.changes ?? null;
+    if (changes && !Object.keys(changes).length) {
+      return from(this.markSynced(item, remoteId, null));
+    }
+    const body: Record<string, unknown> = { ...(changes ?? item.fields) };
+    if (changes && item.baseUpdatedAt) {
+      body['baseUpdatedAt'] = item.baseUpdatedAt;
+    }
+    return this.http.patch<unknown>(`${this.apiUrl}/products/${remoteId}`, body).pipe(
+      switchMap((response) => {
+        const updated = response ? unwrapEntity<Partial<ProductSummaryDto>>(response) : null;
+        return from(this.markSynced(item, remoteId, updated?.updatedAt ?? null));
+      }),
+      catchError((error: unknown) => {
+        const current = catalogConflictOf(error);
+        if (current) {
+          return from(this.api().markCatalogConflict(item.id, current)).pipe(switchMap(() => EMPTY));
+        }
+        return this.handleFailure(item.id, error);
+      }),
     );
   }
 

@@ -220,3 +220,9 @@ describe('listBlocked de gastos', () => {
     expect(registro.diagnosis).toEqual({ code: 'turno-cerrado' });
   });
 });
+
+describe('conflicto de catálogo (SPEC 56)', () => {
+  it('el código CATALOG_CONFLICT del motivo da catalogo-en-conflicto', () => {
+    expect(codeFromReason('El precio cambió en el panel: $58.00 [CATALOG_CONFLICT]')).toBe('catalogo-en-conflicto');
+  });
+});
