@@ -222,6 +222,16 @@ describe('listBlocked de gastos', () => {
 });
 
 describe('conflicto de catálogo (SPEC 56)', () => {
+  it('un alta que choca con otro producto (SPEC 60) da producto-duplicado, por código o por texto', () => {
+    expect(codeFromReason('Ya existe otro producto con ese SKU: Ibuprofeno [PRODUCT_DUPLICATE]')).toBe(
+      'producto-duplicado',
+    );
+    expect(codeFromReason('Ya existe otro producto con ese nombre: X [PRODUCT_NAME_TAKEN]')).toBe(
+      'producto-duplicado',
+    );
+    expect(codeFromReason('Ya existe otro producto con ese SKU: Ibuprofeno')).toBe('producto-duplicado');
+  });
+
   it('el código CATALOG_CONFLICT del motivo da catalogo-en-conflicto', () => {
     expect(codeFromReason('El precio cambió en el panel: $58.00 [CATALOG_CONFLICT]')).toBe('catalogo-en-conflicto');
   });

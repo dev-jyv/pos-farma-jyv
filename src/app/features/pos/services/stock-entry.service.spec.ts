@@ -423,3 +423,61 @@ describe('StockEntryService — advertencias del servidor (SPEC 59)', () => {
     expect(stockEntryWarnings(null)).toEqual([]);
   });
 });
+
+describe('StockEntryService — alta embebida duplicada (SPEC 60)', () => {
+  let service: StockEntryService;
+  let http: HttpTestingController;
+  let markStockEntryPushFailed: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    markStockEntryPushFailed = vi.fn().mockResolvedValue(undefined);
+    window.electronAPI = {
+      getDeviceInfo: vi.fn().mockResolvedValue({ id: 'aa:bb' }),
+      catalog: {
+        getPendingStockEntries: vi.fn().mockResolvedValue([
+          {
+            id: 'b-1',
+            payload: {
+              invoiceId: 'inv-1',
+              lotNumber: 'L-1',
+              quantity: 5,
+              product: { sku: 'PARA-500', name: 'Paracetamol', barcode: '7501000000011' },
+            },
+          },
+        ]),
+        markStockEntrySynced: vi.fn().mockResolvedValue(undefined),
+        markStockEntryPushFailed,
+      },
+    } as unknown as Window['electronAPI'];
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    service = TestBed.inject(StockEntryService);
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => http.verify());
+
+  it('409 PRODUCT_DUPLICATE: queda bloqueada visible con el nombre del existente', async () => {
+    const done = service.flushQueueAsync();
+    await flushMicrotasks();
+    http.expectOne(BASE).flush(
+      {
+        error: {
+          code: 'CONFLICT',
+          message: 'Ya existe otro producto con ese SKU',
+          details: {
+            code: 'PRODUCT_DUPLICATE',
+            existing: { id: 'r-9', name: 'Paracetamol infantil', sku: 'PARA-500', barcode: '7501000000099' },
+          },
+        },
+      },
+      { status: 409, statusText: 'Conflict' },
+    );
+    await done;
+
+    expect(markStockEntryPushFailed).toHaveBeenCalledWith(
+      'b-1',
+      'Ya existe otro producto con ese SKU: Paracetamol infantil [PRODUCT_DUPLICATE]',
+    );
+  });
+});

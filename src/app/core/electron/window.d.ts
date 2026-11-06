@@ -268,6 +268,7 @@ export type BlockedCode =
   | 'sin-stock'
   | 'promocion-no-vigente'
   | 'catalogo-en-conflicto'
+  | 'producto-duplicado'
   | 'desconocido';
 
 export interface BlockedDiagnosis {

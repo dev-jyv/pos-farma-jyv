@@ -149,6 +149,14 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
       'el valor de esta caja es el correcto. Lo demás que corregiste se sube igual.',
     recommended: 'corregir',
   }),
+  'producto-duplicado': () => ({
+    title: 'Ya existe otro producto con ese SKU o nombre',
+    explanation:
+      'Otra caja o el panel dio de alta un producto distinto con el mismo SKU o nombre, y no ' +
+      'coinciden el código de barras ni el nombre con su concentración, así que la caja no lo ' +
+      'adopta. Corrige el SKU o el nombre en Productos y reintenta, o avisa al administrador.',
+    recommended: 'corregir',
+  }),
   desconocido: (_dep, record) => ({
     title: 'Motivo no reconocido',
     explanation:

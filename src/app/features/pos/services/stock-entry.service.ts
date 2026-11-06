@@ -24,6 +24,7 @@ import {
   withSyncCode,
 } from '../../../core/sync/sync-error-codes';
 import { Product, ProductFieldsPayload, PurchaseInvoice } from '../../../shared/models';
+import { duplicateConflictReason, productDuplicateOf } from './product-catalog.service';
 import { environment } from '../../../../environments/environment';
 
 export type { ProductFieldsPayload };
@@ -338,6 +339,17 @@ flushQueueAsync(): Promise<void> {
               return from(this.api().markStockEntrySynced(item.id, result.product?.id ?? null));
             }),
             catchError((error: unknown) => {
+              // SPEC 60: el alta embebida chocó con **otro** producto (el backend
+              // ya adopta cuando es el mismo). Queda bloqueada visible con el
+              // nombre del existente, para corregir SKU/nombre o avisar al admin.
+              const duplicate = productDuplicateOf(error);
+              if (duplicate) {
+                this.inProgressBackoff.delete(item.id);
+                const reason = duplicate.existing
+                  ? duplicateConflictReason(duplicate.existing.name, duplicate.code)
+                  : `${getApiErrorMessage(error)} [${duplicate.code}]`;
+                return from(this.api().markStockEntryPushFailed(item.id, reason));
+              }
               // SPEC 49: con código decide la tabla única. `ENTRY_IN_PROGRESS`
               // (reserva reciente de un intento que puede seguir en curso) y los
               // `retryable` se quedan pendientes, **sin** `pushError`: marcarlos

@@ -4,7 +4,11 @@ import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
-import { ProductCatalogService, catalogConflictOf } from './product-catalog.service';
+import {
+  ProductCatalogService,
+  catalogConflictOf,
+  productDuplicateOf,
+} from './product-catalog.service';
 
 const FIELDS = { sku: 'QA-NEW-1', name: 'QA nuevo', salePrice: 10 };
 
@@ -44,9 +48,9 @@ describe('ProductCatalogService.flushQueueAsync (alta nueva)', () => {
     expect(lookup.request.params.get('sku')).toBe('QA-NEW-1');
     expect(lookup.request.params.has('search')).toBe(false);
     expect(lookup.request.params.get('limit')).toBe('1');
-    lookup.flush({ data: [{ id: 'remote-9', sku: 'QA-NEW-1' }] });
+    lookup.flush({ data: [{ id: 'remote-9', sku: 'QA-NEW-1', name: 'QA nuevo' }] });
     await done;
-    // Ya existía: se adopta sin crear un duplicado.
+    // Ya existía y es el mismo (mismo nombre, sin código): se adopta sin crear un duplicado.
     http.expectNone(`${environment.apiUrl}/products`);
     expect(markCatalogSynced).toHaveBeenCalledWith('local-1', 'remote-9');
   });
@@ -72,10 +76,176 @@ describe('ProductCatalogService.flushQueueAsync (alta nueva)', () => {
     await tick();
     const fallback = http.expectOne((req) => req.method === 'GET');
     expect(fallback.request.params.get('search')).toBe('QA-NEW-1');
-    fallback.flush({ data: [{ id: 'remote-7', sku: 'qa-new-1' }] });
+    fallback.flush({ data: [{ id: 'remote-7', sku: 'qa-new-1', name: 'QA  Nuevo' }] });
     await done;
     expect(markCatalogSynced).toHaveBeenCalledWith('local-1', 'remote-7');
     expect(markCatalogPushFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProductCatalogService: adoptar solo si es el mismo producto (SPEC 60)', () => {
+  let http: HttpTestingController;
+  let service: ProductCatalogService;
+  let catalog: {
+    getPendingCatalogPush: ReturnType<typeof vi.fn>;
+    markCatalogSynced: ReturnType<typeof vi.fn>;
+    markCatalogPushFailed: ReturnType<typeof vi.fn>;
+  };
+
+  const LOCAL = {
+    sku: 'PARA-500',
+    name: 'Paracetamol',
+    concentration: '500 mg',
+    barcode: '7501000000011',
+    salePrice: 25,
+  };
+
+  beforeEach(() => {
+    catalog = {
+      getPendingCatalogPush: vi.fn().mockResolvedValue([
+        { id: 'local-1', remoteId: null, fields: LOCAL, catalogPushError: null },
+      ]),
+      markCatalogSynced: vi.fn().mockResolvedValue(undefined),
+      markCatalogPushFailed: vi.fn().mockResolvedValue(undefined),
+    };
+    (window as unknown as { electronAPI: unknown }).electronAPI = { catalog };
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    http = TestBed.inject(HttpTestingController);
+    service = TestBed.inject(ProductCatalogService);
+  });
+
+  afterEach(() => {
+    http.verify();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('no adopta un producto con SKU igual y barcode distinto: conflicto visible', async () => {
+    const done = service.flushQueueAsync();
+    await tick();
+    http.expectOne((req) => req.method === 'GET').flush({
+      data: [{ id: 'remote-9', sku: 'PARA-500', name: 'Paracetamol infantil', barcode: '7501000000099' }],
+    });
+    await done;
+
+    http.expectNone((req) => req.method === 'POST');
+    expect(catalog.markCatalogSynced).not.toHaveBeenCalled();
+    expect(catalog.markCatalogPushFailed).toHaveBeenCalledWith(
+      'local-1',
+      'Ya existe otro producto con ese SKU: Paracetamol infantil [PRODUCT_DUPLICATE]',
+    );
+  });
+
+  it('SKU igual y mismo barcode: lo adopta', async () => {
+    const done = service.flushQueueAsync();
+    await tick();
+    http.expectOne((req) => req.method === 'GET').flush({
+      data: [{ id: 'remote-9', sku: 'PARA-500', name: 'Paracetamol 500', barcode: '7501000000011' }],
+    });
+    await done;
+
+    expect(catalog.markCatalogSynced).toHaveBeenCalledWith('local-1', 'remote-9');
+    expect(catalog.markCatalogPushFailed).not.toHaveBeenCalled();
+  });
+
+  it('409 PRODUCT_NAME_TAKEN con existing: lee el producto y adopta si coincide el nameKey', async () => {
+    catalog.getPendingCatalogPush.mockResolvedValue([
+      { id: 'local-1', remoteId: null, fields: { ...LOCAL, barcode: undefined }, catalogPushError: null },
+    ]);
+    const done = service.flushQueueAsync();
+    await tick();
+    http.expectOne((req) => req.method === 'GET').flush({ data: [] });
+    await tick();
+    http.expectOne((req) => req.method === 'POST').flush(
+      {
+        error: {
+          code: 'CONFLICT',
+          message: 'Ya existe un producto con ese nombre',
+          details: {
+            code: 'PRODUCT_NAME_TAKEN',
+            existing: { id: 'remote-3', name: 'paracetamol 500MG', sku: 'OTRO-SKU', barcode: null },
+          },
+        },
+      },
+      { status: 409, statusText: 'Conflict' },
+    );
+    await tick();
+    http
+      .expectOne(`${environment.apiUrl}/products/remote-3`)
+      .flush({ data: { id: 'remote-3', sku: 'OTRO-SKU', name: 'paracetamol 500MG', concentration: null } });
+    await done;
+
+    expect(catalog.markCatalogSynced).toHaveBeenCalledWith('local-1', 'remote-3');
+  });
+
+  it('409 PRODUCT_SKU_TAKEN de otro producto: queda en conflicto con su nombre', async () => {
+    const done = service.flushQueueAsync();
+    await tick();
+    http.expectOne((req) => req.method === 'GET').flush({ data: [] });
+    await tick();
+    http.expectOne((req) => req.method === 'POST').flush(
+      {
+        error: {
+          code: 'CONFLICT',
+          message: 'Ya existe un producto con ese SKU',
+          details: {
+            code: 'PRODUCT_SKU_TAKEN',
+            existing: { id: 'remote-4', name: 'Ibuprofeno 400', sku: 'PARA-500', barcode: '7501000000044' },
+          },
+        },
+      },
+      { status: 409, statusText: 'Conflict' },
+    );
+    await tick();
+    http.expectOne(`${environment.apiUrl}/products/remote-4`).flush({
+      data: { id: 'remote-4', sku: 'PARA-500', name: 'Ibuprofeno 400', barcode: '7501000000044' },
+    });
+    await done;
+
+    expect(catalog.markCatalogSynced).not.toHaveBeenCalled();
+    expect(catalog.markCatalogPushFailed).toHaveBeenCalledWith(
+      'local-1',
+      'Ya existe otro producto con ese SKU: Ibuprofeno 400 [PRODUCT_SKU_TAKEN]',
+    );
+  });
+
+  it('backend viejo, 409 por nombre sin SKU coincidente: se marca con el mensaje del servidor', async () => {
+    const done = service.flushQueueAsync();
+    await tick();
+    http.expectOne((req) => req.method === 'GET').flush({ data: [] });
+    await tick();
+    http
+      .expectOne((req) => req.method === 'POST')
+      .flush({ error: { message: 'Ya existe un producto con ese nombre' } }, { status: 409, statusText: 'Conflict' });
+    await tick();
+    http.expectOne((req) => req.method === 'GET' && req.params.get('search') === 'PARA-500').flush({ data: [] });
+    await done;
+
+    expect(catalog.markCatalogSynced).not.toHaveBeenCalled();
+    expect(catalog.markCatalogPushFailed).toHaveBeenCalledWith('local-1', 'Ya existe un producto con ese nombre');
+  });
+});
+
+describe('productDuplicateOf', () => {
+  it('reconoce los 409 de duplicado con sus datos del existente', () => {
+    const error = new HttpErrorResponse({
+      status: 409,
+      error: {
+        error: {
+          details: { code: 'PRODUCT_DUPLICATE', existing: { id: 'r1', name: 'X', sku: 'S', barcode: '1' } },
+        },
+      },
+    });
+    expect(productDuplicateOf(error)).toEqual({
+      code: 'PRODUCT_DUPLICATE',
+      existing: { id: 'r1', name: 'X', sku: 'S', barcode: '1' },
+    });
+    expect(productDuplicateOf(new HttpErrorResponse({ status: 409, error: {} }))).toBeNull();
+    expect(
+      productDuplicateOf(new HttpErrorResponse({ status: 400, error: error.error })),
+    ).toBeNull();
   });
 });
 
