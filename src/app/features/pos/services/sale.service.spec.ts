@@ -567,6 +567,53 @@ describe('SaleService', () => {
 
       expect(sales.markRemoteVoided).toHaveBeenCalledWith('v1');
     });
+
+    it('ALREADY_VOIDED cierra la anulación pendiente aunque el texto no diga "anulada" (SPEC 49)', async () => {
+      sales.getNeedingRemoteVoid.mockResolvedValue([
+        { id: 'v1', remoteId: 'remote-1', voidedAt: null, voidedBy: null },
+      ]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+
+      http.expectOne(`${SALES_URL}/remote-1/void`).flush(
+        {
+          error: {
+            code: 'BAD_REQUEST',
+            message: 'Operación repetida',
+            details: { code: 'ALREADY_VOIDED', retryable: false },
+          },
+        },
+        { status: 400, statusText: 'Bad Request' },
+      );
+      await flushMicrotasks();
+
+      expect(sales.markRemoteVoided).toHaveBeenCalledWith('v1');
+    });
+
+    it('un rechazo con otro código no la da por anulada', async () => {
+      sales.getNeedingRemoteVoid.mockResolvedValue([
+        { id: 'v1', remoteId: 'remote-1', voidedAt: null, voidedBy: null },
+      ]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+
+      http.expectOne(`${SALES_URL}/remote-1/void`).flush(
+        {
+          error: {
+            code: 'BAD_REQUEST',
+            message: 'La venta ya fue anulada parcialmente por devolución',
+            details: { code: 'HAS_RETURNS', retryable: false },
+          },
+        },
+        { status: 400, statusText: 'Bad Request' },
+      );
+      await flushMicrotasks();
+
+      // Con código, el texto ("anulada") ya no decide.
+      expect(sales.markRemoteVoided).not.toHaveBeenCalled();
+    });
   });
 
   describe('rechazo del servidor', () => {
@@ -636,6 +683,106 @@ describe('SaleService', () => {
       expect(sales.markPushFailed).toHaveBeenCalledWith('local-1', 'Llave de idempotencia ya usada');
     });
 
+    describe('por código del servidor (SPEC 49)', () => {
+      async function flushBulkWith(result: Record<string, unknown>): Promise<void> {
+        rejectWith('');
+        await flushMicrotasks();
+        http.expectOne(`${SALES_URL}/bulk`).flush({ data: [{ ok: false, ...result }] });
+        await flushMicrotasks();
+      }
+
+      it('retryable: queda pendiente, sin pushError ni conciliación', async () => {
+        await flushBulkWith({ code: 'INTERNAL', error: 'Error interno', retryable: true });
+
+        http.expectNone(`${SALES_URL}/unreconciled`);
+        expect(sales.markPushFailed).not.toHaveBeenCalled();
+        expect(sales.markUnreconciled).not.toHaveBeenCalled();
+        expect(sales.markSynced).not.toHaveBeenCalled();
+      });
+
+      it('DEFERRED no cuenta como rechazo', async () => {
+        await flushBulkWith({ code: 'DEFERRED', error: 'Lote diferido', retryable: true });
+
+        expect(sales.markPushFailed).not.toHaveBeenCalled();
+      });
+
+      it('STOCK_INSUFFICIENT va a conciliación aunque el texto no diga "stock"', async () => {
+        await flushBulkWith({ code: 'STOCK_INSUFFICIENT', error: 'Faltan 2 piezas', retryable: false });
+
+        const request = http.expectOne(`${SALES_URL}/unreconciled`);
+        expect(request.request.body).toMatchObject({ localId: 'local-1', reason: 'Faltan 2 piezas' });
+        request.flush({ data: {} });
+        await flushMicrotasks();
+
+        expect(sales.markUnreconciled).toHaveBeenCalledWith('local-1', 'Faltan 2 piezas');
+      });
+
+      it('PRODUCT_NOT_FOUND va a conciliación aunque el texto no coincida', async () => {
+        await flushBulkWith({
+          code: 'PRODUCT_NOT_FOUND',
+          error: 'Producto abc123 no encontrado',
+          retryable: false,
+        });
+
+        http.expectOne(`${SALES_URL}/unreconciled`).flush({ data: {} });
+        await flushMicrotasks();
+        expect(sales.markUnreconciled).toHaveBeenCalled();
+      });
+
+      it('SESSION_CLOSED se bloquea visible con su código, no se concilia sola', async () => {
+        await flushBulkWith({
+          code: 'SESSION_CLOSED',
+          error: 'El turno de caja ya está cerrado',
+          retryable: false,
+        });
+
+        http.expectNone(`${SALES_URL}/unreconciled`);
+        expect(sales.markPushFailed).toHaveBeenCalledWith(
+          'local-1',
+          'El turno de caja ya está cerrado [SESSION_CLOSED]',
+        );
+      });
+
+      it('VALIDATION se bloquea visible aunque el texto hable de stock', async () => {
+        await flushBulkWith({ code: 'VALIDATION', error: 'stock: debe ser número', retryable: false });
+
+        http.expectNone(`${SALES_URL}/unreconciled`);
+        expect(sales.markPushFailed).toHaveBeenCalledWith('local-1', 'stock: debe ser número [VALIDATION]');
+      });
+
+      it('backend viejo con código HTTP (BAD_REQUEST): decide el texto, como antes', async () => {
+        await flushBulkWith({ code: 'BAD_REQUEST', error: 'Stock insuficiente para CORIVER' });
+
+        http.expectOne(`${SALES_URL}/unreconciled`).flush({ data: {} });
+        await flushMicrotasks();
+        expect(sales.markUnreconciled).toHaveBeenCalledWith('local-1', 'Stock insuficiente para CORIVER');
+      });
+
+      it('un INTERNAL en la petición entera no biseca ni marca', async () => {
+        sales.getPendingPush.mockResolvedValue([
+          localSale({ id: 'local-1', payload: { idempotencyKey: 'key-1' } }),
+          localSale({ id: 'local-2', payload: { idempotencyKey: 'key-2' } }),
+        ]);
+        service.flushQueue();
+        await flushMicrotasks();
+
+        http.expectOne(`${SALES_URL}/bulk`).flush(
+          {
+            error: {
+              code: 'CONFLICT',
+              message: 'Contención',
+              details: { code: 'INTERNAL', retryable: true },
+            },
+          },
+          { status: 409, statusText: 'Conflict' },
+        );
+        await flushMicrotasks();
+
+        http.expectNone(`${SALES_URL}/bulk`);
+        expect(sales.markPushFailed).not.toHaveBeenCalled();
+      });
+    });
+
     it('si tampoco se puede guardar aparte, queda bloqueada y visible', async () => {
       rejectWith('Stock insuficiente para CORIVER');
       await flushMicrotasks();
@@ -702,6 +849,46 @@ describe('SaleService', () => {
       http.expectNone(`${SALES_URL}/undefined/void`);
       expect(sales.markPushFailed).toHaveBeenCalledWith('local-8', 'Stock insuficiente para Paracetamol');
       expect(sales.markRemoteVoided).not.toHaveBeenCalled();
+    });
+
+    it('un rechazo retryable la deja como estaba, sin pushError (SPEC 49)', async () => {
+      sales.getPendingVoided.mockResolvedValue([
+        { ...localSale({ id: 'local-8', payload: { idempotencyKey: 'key-8' } }), voidedAt: null, voidedBy: null },
+      ]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+
+      http
+        .expectOne(`${SALES_URL}/bulk`)
+        .flush({ data: [{ ok: false, code: 'INTERNAL', error: 'Error interno', retryable: true }] });
+      await flushMicrotasks();
+
+      expect(sales.markPushFailed).not.toHaveBeenCalled();
+      expect(sales.markRemoteVoided).not.toHaveBeenCalled();
+    });
+
+    it('creada y ya anulada allá (ALREADY_VOIDED): se da por sincronizada y anulada', async () => {
+      sales.getPendingVoided.mockResolvedValue([
+        { ...localSale({ id: 'local-7', payload: { idempotencyKey: 'key-7' } }), voidedAt: null, voidedBy: null },
+      ]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+
+      http
+        .expectOne(`${SALES_URL}/bulk`)
+        .flush({ data: [{ ok: true, sale: { id: 'remote-7', folio: 'V-7' } }] });
+      await flushMicrotasks();
+      http.expectOne(`${SALES_URL}/remote-7/void`).flush(
+        { error: { code: 'BAD_REQUEST', message: 'x', details: { code: 'ALREADY_VOIDED', retryable: false } } },
+        { status: 400, statusText: 'Bad Request' },
+      );
+      await flushMicrotasks();
+
+      expect(sales.markSynced).toHaveBeenCalledWith('local-7', 'remote-7', 'V-7');
+      expect(sales.markRemoteVoided).toHaveBeenCalledWith('local-7');
+      expect(sales.markPushFailed).not.toHaveBeenCalled();
     });
   });
 

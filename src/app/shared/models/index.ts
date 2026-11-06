@@ -1033,3 +1033,35 @@ export interface PosCommandResult {
   message?: string;
   deviceId: string;
 }
+
+/**
+ * Código estable con el que el backend explica un rechazo de sincronización
+ * (SPEC 49). **Copia exacta** de `back: constants/sync-error-codes.ts`: un
+ * contrato distinto en cada repo es un bug. Llega en el índice de
+ * `/sales/bulk` (`{ ok: false, code, error, retryable }`) y en
+ * `error.details.code` de los errores HTTP de `/sales/:id/void` y
+ * `/stock-entries`. Qué hace la caja con cada uno: `core/sync/sync-error-codes.ts`.
+ */
+export const SYNC_ERROR_CODES = [
+  'STOCK_INSUFFICIENT',
+  'BATCH_EXPIRED',
+  'PRODUCT_NOT_FOUND',
+  'PRODUCT_INACTIVE',
+  'SESSION_CLOSED',
+  'SESSION_FORBIDDEN',
+  'IDEMPOTENCY_CONFLICT',
+  'VALIDATION',
+  'DEFERRED',
+  'ENTRY_IN_PROGRESS',
+  'ENTRY_AMBIGUOUS',
+  'ALREADY_VOIDED',
+  'HAS_RETURNS',
+  'VOID_FORBIDDEN',
+  'INTERNAL',
+] as const;
+
+export type SyncErrorCode = (typeof SYNC_ERROR_CODES)[number];
+
+export function isSyncErrorCode(value: unknown): value is SyncErrorCode {
+  return typeof value === 'string' && (SYNC_ERROR_CODES as readonly string[]).includes(value);
+}

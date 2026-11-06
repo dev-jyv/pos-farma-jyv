@@ -17,6 +17,11 @@ import { HttpErrorResponse } from '@angular/common/http';
 
 import { getApiErrorMessage, toDate, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
 import { AutoPushService } from '../../../core/sync/auto-push.service';
+import {
+  syncActionFor,
+  syncFailureFromError,
+  withSyncCode,
+} from '../../../core/sync/sync-error-codes';
 import { Product, ProductFieldsPayload, PurchaseInvoice } from '../../../shared/models';
 import { environment } from '../../../../environments/environment';
 
@@ -212,6 +217,22 @@ flushQueueAsync(): Promise<void> {
               return from(this.api().markStockEntrySynced(item.id, result.product?.id ?? null));
             }),
             catchError((error: unknown) => {
+              // SPEC 49: con código decide la tabla única. `ENTRY_IN_PROGRESS`
+              // (reserva reciente de un intento que puede seguir en curso) y los
+              // `retryable` se quedan pendientes, **sin** `pushError`: marcarlos
+              // dejaba el stock solo en la caja y luego fallaban sus ventas.
+              const failure = syncFailureFromError(error);
+              const action = syncActionFor(failure);
+              if (action !== null) {
+                if (action === 'retry') {
+                  return EMPTY;
+                }
+                // Una entrada no tiene conciliación: lo demás se bloquea visible.
+                return from(
+                  this.api().markStockEntryPushFailed(item.id, withSyncCode(failure.message, failure)),
+                );
+              }
+              // Backend sin código: el criterio por status de siempre.
               if (this.isPermanentFailure(error)) {
                 return from(this.api().markStockEntryPushFailed(item.id, getApiErrorMessage(error)));
               }

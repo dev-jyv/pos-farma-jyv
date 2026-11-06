@@ -1,4 +1,5 @@
 import { BlockedCode, BlockedSyncRecord } from '../electron/window.d';
+import { SyncErrorCode, isSyncErrorCode } from '../../shared/models';
 
 /** Qué conviene hacer primero. Nunca "descartar": puede ser dinero ya cobrado. */
 export type BlockedAction = 'reintentar' | 'corregir' | 'avisar-admin';
@@ -62,6 +63,13 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
             'el cobro ya se hizo.',
           recommended: 'avisar-admin',
         },
+  'entrada-en-curso': () => ({
+    title: 'El servidor todavía está registrando esta entrada',
+    explanation:
+      'Un intento anterior de subir esta entrada sigue en curso en el servidor. No es un rechazo: ' +
+      'espera unos minutos y pulsa Reintentar. No la captures de nuevo, se duplicaría el stock.',
+    recommended: 'reintentar',
+  }),
   'entrada-a-medias': () => ({
     title: 'El servidor dejó esta entrada a medias',
     explanation:
@@ -143,9 +151,31 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
   }),
 };
 
+/**
+ * Código de sincronización del servidor (SPEC 49) → causa del panel. Manda sobre
+ * el código por texto: un `pushError` guardado con un IPC viejo, o un texto que
+ * cambió en el backend, no confunde el diagnóstico cuando la caja tiene el código.
+ */
+const POR_CODIGO_DE_SERVIDOR: Partial<Record<SyncErrorCode, BlockedCode>> = {
+  STOCK_INSUFFICIENT: 'sin-stock',
+  BATCH_EXPIRED: 'sin-stock',
+  PRODUCT_NOT_FOUND: 'producto-no-encontrado',
+  SESSION_CLOSED: 'turno-cerrado',
+  SESSION_FORBIDDEN: 'turno-ajeno',
+  ENTRY_IN_PROGRESS: 'entrada-en-curso',
+  ENTRY_AMBIGUOUS: 'entrada-a-medias',
+};
+
+/** Causa del panel para un registro: primero el código del servidor, luego el diagnóstico por texto. */
+export function blockedCodeOf(record: BlockedSyncRecord): BlockedCode {
+  const syncCode = record.diagnosis?.syncCode;
+  const porServidor = isSyncErrorCode(syncCode) ? POR_CODIGO_DE_SERVIDOR[syncCode] : undefined;
+  return porServidor ?? record.diagnosis?.code ?? 'desconocido';
+}
+
 /** Ayuda para un registro bloqueado; sin diagnóstico (versión vieja del IPC) cae en `desconocido`. */
 export function describeBlocked(record: BlockedSyncRecord): BlockedHelp {
-  const code = record.diagnosis?.code ?? 'desconocido';
+  const code = blockedCodeOf(record);
   const ayuda = AYUDA[code] ?? AYUDA.desconocido;
   return ayuda(record.diagnosis?.dependency?.label ?? '', record);
 }

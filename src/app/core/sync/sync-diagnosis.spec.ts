@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { BlockedSyncRecord } from '../electron/window.d';
-import { describeBlocked } from './sync-diagnosis';
+import { blockedCodeOf, describeBlocked } from './sync-diagnosis';
 
 function registro(overrides: Partial<BlockedSyncRecord> = {}): BlockedSyncRecord {
   return {
@@ -46,6 +46,38 @@ describe('describeBlocked', () => {
     const ayuda = describeBlocked(registro());
 
     expect(ayuda.title).toBe('Motivo no reconocido');
+    expect(ayuda.recommended).toBe('avisar-admin');
+  });
+
+  it('ENTRY_IN_PROGRESS: el código manda sobre el texto y ya no dice "No la reintentes" (SPEC 49)', () => {
+    const ayuda = describeBlocked({
+      kind: 'stockEntry',
+      id: 'b1',
+      // El texto del servidor es el mismo que el de una entrada a medias.
+      diagnosis: { code: 'entrada-a-medias', syncCode: 'ENTRY_IN_PROGRESS' },
+    } as BlockedSyncRecord);
+
+    expect(ayuda.recommended).toBe('reintentar');
+    expect(ayuda.explanation).not.toMatch(/no la reintentes/i);
+  });
+
+  it('el código del servidor resuelve la causa aunque el texto no se reconozca', () => {
+    expect(
+      blockedCodeOf(registro({ diagnosis: { code: 'desconocido', syncCode: 'SESSION_CLOSED' } })),
+    ).toBe('turno-cerrado');
+    expect(
+      blockedCodeOf(registro({ diagnosis: { code: 'desconocido', syncCode: 'PRODUCT_NOT_FOUND' } })),
+    ).toBe('producto-no-encontrado');
+    // Un código que esta versión no conoce no pisa el diagnóstico por texto.
+    expect(blockedCodeOf(registro({ diagnosis: { code: 'sin-stock', syncCode: 'NUEVO' } }))).toBe('sin-stock');
+  });
+
+  it('ENTRY_AMBIGUOUS sigue mandando con el admin', () => {
+    const ayuda = describeBlocked({
+      kind: 'stockEntry',
+      id: 'b1',
+      diagnosis: { code: 'desconocido', syncCode: 'ENTRY_AMBIGUOUS' },
+    } as BlockedSyncRecord);
     expect(ayuda.recommended).toBe('avisar-admin');
   });
 

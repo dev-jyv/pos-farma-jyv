@@ -1,4 +1,4 @@
-const { codeFromReason } = require('./blocked-diagnosis');
+const { diagnoseReason } = require('./blocked-diagnosis');
 
 /**
  * Ciclos de sync que una venta puede esperar a que su producto suba antes de
@@ -514,7 +514,7 @@ async function listBlocked(prisma, { ownerUid } = {}) {
       // vivo qué dependencia falta; un rechazo del servidor, por su texto.
       diagnosis: isWaitBlocked(row)
         ? await diagnoseDependency(prisma, row)
-        : { code: codeFromReason(row.pushError) },
+        : diagnoseReason(row.pushError),
       // Qué la detiene (turno/productos sin identidad remota). El panel los
       // muestra y decide si ofrece "Arreglar". Vacío en rechazos del servidor
       // que no dependen de nada local (stock, llave reciclada…).

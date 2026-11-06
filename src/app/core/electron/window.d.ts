@@ -213,6 +213,7 @@ export type BlockedCode =
   | 'producto-no-encontrado'
   | 'listo-para-reintentar'
   | 'entrada-a-medias'
+  | 'entrada-en-curso'
   | 'turno-duplicado'
   | 'turno-abierto-existente'
   | 'turno-ajeno'
@@ -224,6 +225,11 @@ export type BlockedCode =
 
 export interface BlockedDiagnosis {
   code: BlockedCode;
+  /**
+   * Código estable del servidor (SPEC 49) que la caja guardó con el motivo, si
+   * vino (`SyncErrorCode`, o uno que esta versión no conoce). Manda sobre el texto.
+   */
+  syncCode?: string;
   /** Lo que la venta espera: con qué nombre lo reconoce el cajero. */
   dependency?: { kind: 'cashSession' | 'product'; label: string };
 }

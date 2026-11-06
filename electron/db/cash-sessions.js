@@ -1,4 +1,4 @@
-const { codeFromReason } = require('./blocked-diagnosis');
+const { diagnoseReason } = require('./blocked-diagnosis');
 
 function emptyMethod() {
   return { count: 0, total: 0 };
@@ -551,7 +551,7 @@ async function listBlocked(prisma) {
     detail: row.openedBy ?? '',
     occurredAt: row.openedAt,
     reason: row.closePushError ?? row.pushError,
-    diagnosis: { code: codeFromReason(row.closePushError ?? row.pushError) },
+    diagnosis: diagnoseReason(row.closePushError ?? row.pushError),
   }));
 }
 

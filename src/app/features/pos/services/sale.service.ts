@@ -20,7 +20,7 @@ import {
   throwError,
 } from 'rxjs';
 
-import { getApiErrorMessage, getApiErrorStatus, unwrapEntity } from '../../../core/api/api.utils';
+import { getApiErrorStatus, unwrapEntity } from '../../../core/api/api.utils';
 import { AuthService } from '../../../core/auth/auth.service';
 import { AutoPushService } from '../../../core/sync/auto-push.service';
 import {
@@ -58,6 +58,16 @@ import { fromCents, toCents } from '../../../shared/utils/money';
 import { resolveTender } from '../../../shared/utils/tender';
 import { environment } from '../../../../environments/environment';
 import { pushOwnerFilter } from '../../../core/sync/push-owner';
+import {
+  SyncFailure,
+  SyncRejectionError,
+  legacyAlreadyVoided,
+  legacySaleRejectionAction,
+  syncActionFor,
+  syncFailureFromError,
+  syncFailureFromResult,
+  withSyncCode,
+} from '../../../core/sync/sync-error-codes';
 
 export interface CreateSalePayload {
   /**
@@ -153,7 +163,10 @@ export interface ListSalesParams {
 }
 
 /** Un elemento de la respuesta de `POST /sales/bulk`, en el mismo orden que se mandó. */
-type BulkSaleResult = { ok: true; sale: { id: string; folio: string } } | { ok: false; error: string };
+type BulkSaleResult =
+  | { ok: true; sale: { id: string; folio: string } }
+  /** `code`/`retryable` desde SPEC 49; un backend viejo manda el código HTTP o nada. */
+  | { ok: false; error: string; code?: string; retryable?: boolean };
 
 interface SaleDto {
   id: string;
@@ -773,25 +786,33 @@ flushQueueAsync(): Promise<void> {
    *
    * El dinero ya se cobró y el ticket ya se imprimió: la venta **no** puede
    * quedarse muerta en la caja. Si el motivo no se arregla reintentando
-   * (inventario remoto, turno ya cerrado allá), se registra en
-   * `unreconciledSales`: el movimiento y el importe quedan en el servidor, el
-   * inventario no se descuadra, y alguien concilia a mano.
+   * (inventario remoto), se registra en `unreconciledSales`: el movimiento y el
+   * importe quedan en el servidor, el inventario no se descuadra, y alguien
+   * concilia a mano.
    *
-   * El resto de rechazos (llave reciclada, etc.) sí se marcan como bloqueados:
-   * el cajero puede corregir y reintentar.
+   * Desde SPEC 49 decide el **código** del servidor (`core/sync/sync-error-codes.ts`):
+   * un rechazo `retryable` se queda pendiente sin `pushError`, `STOCK_*`/`PRODUCT_*`
+   * van a conciliación y `SESSION_*`/`VALIDATION` se bloquean visibles. Solo sin
+   * código (backend viejo) se clasifica por el texto, como antes.
    */
-  private handleRejected(item: PendingSale, error: string): Observable<unknown> {
-    if (!this.isUnreconcileableRejection(error)) {
-      return from(this.api().sales.markPushFailed(item.id, error));
+  private handleRejected(item: PendingSale, failure: SyncFailure): Observable<unknown> {
+    const action = syncActionFor(failure) ?? legacySaleRejectionAction(failure.message);
+    if (action === 'retry') {
+      // Transitorio (contención, lote diferido, error interno): sigue en cola.
+      return of(undefined);
+    }
+    const pushError = withSyncCode(failure.message, failure);
+    if (action !== 'reconcile') {
+      return from(this.api().sales.markPushFailed(item.id, pushError));
     }
 
-    return this.postUnreconciled$(item, error)
+    return this.postUnreconciled$(item, failure.message)
       .pipe(
         // Registrada aparte: sale de la cola para que el badge no mienta, pero
         // el historial la sigue mostrando con su motivo.
-        switchMap(() => from(this.api().sales.markUnreconciled(item.id, error))),
+        switchMap(() => from(this.api().sales.markUnreconciled(item.id, failure.message))),
         // Si ni eso se pudo, se marca como bloqueada y el cajero la ve.
-        catchError(() => from(this.api().sales.markPushFailed(item.id, error))),
+        catchError(() => from(this.api().sales.markPushFailed(item.id, pushError))),
       );
   }
 
@@ -840,28 +861,6 @@ flushQueueAsync(): Promise<void> {
     this.refreshPending();
   }
 
-  /** Rechazos que no se arreglan reintentando el mismo push → unreconciled. */
-  private isUnreconcileableRejection(error: string): boolean {
-    return this.isInventoryRejection(error) || this.isClosedShiftRejection(error);
-  }
-
-  /** Rechazo por inventario: no se resuelve reintentando el mismo push. */
-  private isInventoryRejection(error: string): boolean {
-    const normalized = error.toLowerCase();
-    return (
-      normalized.includes('stock') ||
-      normalized.includes('lote') ||
-      normalized.includes('producto no encontrado') ||
-      normalized.includes('producto no existe')
-    );
-  }
-
-  /** El turno remoto ya cerró: reintentar el POST /sales no la va a registrar. */
-  private isClosedShiftRejection(error: string): boolean {
-    const normalized = error.toLowerCase();
-    return normalized.includes('turno') && normalized.includes('cerrado');
-  }
-
   /**
    * Sube un trozo de la cola. Si el servidor lo rechaza en bloque con un 4xx,
    * **parte el trozo en dos y reintenta cada mitad** hasta aislar la venta
@@ -889,11 +888,16 @@ flushQueueAsync(): Promise<void> {
             }
             return result.ok
               ? from(this.api().sales.markSynced(item.id, result.sale.id, result.sale.folio))
-              : this.handleRejected(item, result.error);
+              : this.handleRejected(item, syncFailureFromResult(result));
           });
           return forkJoin(marks).pipe(defaultIfEmpty([] as unknown[]));
         }),
         catchError((error: unknown) => {
+          // Rechazo transitorio de la petición entera (SPEC 49): ni se marca ni
+          // se biseca, el lote completo vuelve a salir en el próximo envío.
+          if (syncActionFor(syncFailureFromError(error)) === 'retry') {
+            return of(null);
+          }
           if (!this.isBulkRejection(error) || pending.length === 1) {
             // Una sola venta (o un fallo de red/5xx): el marcado de siempre.
             return this.markBulkHttpFailure(pending, error);
@@ -929,7 +933,8 @@ flushQueueAsync(): Promise<void> {
     if (!this.isBulkRejection(error) || pending.length === 0) {
       return of(null);
     }
-    const message = getApiErrorMessage(error);
+    const failure = syncFailureFromError(error);
+    const message = withSyncCode(failure.message, failure);
     return forkJoin(
       pending.map((item) => from(this.api().sales.markPushFailed(item.id, message))),
     ).pipe(
@@ -969,7 +974,7 @@ flushQueueAsync(): Promise<void> {
                     throw new Error('El servidor no devolvió resultado para la venta');
                   }
                   if (!result.ok) {
-                    throw new Error(result.error);
+                    throw new SyncRejectionError(syncFailureFromResult(result));
                   }
                   return result.sale;
                 }),
@@ -980,6 +985,12 @@ flushQueueAsync(): Promise<void> {
                       ...(item.voidedBy ? { voidedBy: item.voidedBy } : {}),
                     })
                     .pipe(
+                      // `ALREADY_VOIDED`: un intento anterior ya la anuló allá.
+                      catchError((error: unknown) =>
+                        syncActionFor(syncFailureFromError(error)) === 'done'
+                          ? of(null)
+                          : throwError(() => error),
+                      ),
                       switchMap(() =>
                         from(api.sales.markSynced(item.id, created.id, created.folio)),
                       ),
@@ -988,9 +999,17 @@ flushQueueAsync(): Promise<void> {
                 ),
                 // Un fallo deja la venta como estaba: se reintenta en el próximo
                 // sync. Crear sin anular queda cubierto por `needsRemoteVoid`.
-                catchError((error: unknown) =>
-                  from(this.api().sales.markPushFailed(item.id, getApiErrorMessage(error))),
-                ),
+                catchError((error: unknown) => {
+                  const failure = syncFailureFromError(error);
+                  // Transitorio con código (SPEC 49): se queda como estaba, sin
+                  // `pushError`, y se reintenta en el próximo sync.
+                  if (syncActionFor(failure) === 'retry') {
+                    return of(undefined);
+                  }
+                  return from(
+                    this.api().sales.markPushFailed(item.id, withSyncCode(failure.message, failure)),
+                  );
+                }),
               ),
           );
           return forkJoin(pushes);
@@ -1028,9 +1047,11 @@ flushQueueAsync(): Promise<void> {
               .pipe(
                 switchMap(() => from(api.sales.markRemoteVoided(item.id))),
                 catchError((error: unknown) => {
-                  const message = getApiErrorMessage(error).toLowerCase();
-                  // Ya estaba anulada allá: el objetivo se cumplió.
-                  if (message.includes('anulad') || message.includes('already void')) {
+                  const failure = syncFailureFromError(error);
+                  const action = syncActionFor(failure);
+                  // Ya estaba anulada allá (`ALREADY_VOIDED`, o el texto de un
+                  // backend sin código): el objetivo se cumplió.
+                  if (action === 'done' || (action === null && legacyAlreadyVoided(failure.message))) {
                     return from(api.sales.markRemoteVoided(item.id));
                   }
                   // Red / 5xx: se reintenta en el próximo sync.

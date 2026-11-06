@@ -120,4 +120,84 @@ describe('StockEntryService', () => {
       return Promise.resolve().then(() => expect(stock).toBe(46));
     });
   });
+
+  describe('envío de entradas: clasificación por código (SPEC 49)', () => {
+    let catalog: {
+      getPendingStockEntries: ReturnType<typeof vi.fn>;
+      markStockEntrySynced: ReturnType<typeof vi.fn>;
+      markStockEntryPushFailed: ReturnType<typeof vi.fn>;
+    };
+
+    beforeEach(() => {
+      catalog = window.electronAPI!.catalog as unknown as typeof catalog;
+      catalog.getPendingStockEntries.mockResolvedValue([
+        { id: 'b-1', payload: { invoiceId: 'inv-1', lotNumber: 'L-1', quantity: 5, productId: 'p1' } },
+      ]);
+      catalog.markStockEntrySynced.mockResolvedValue(undefined);
+      catalog.markStockEntryPushFailed.mockResolvedValue(undefined);
+    });
+
+    async function respond(status: number, body: object): Promise<void> {
+      const done = service.flushQueueAsync();
+      await flushMicrotasks();
+      const request = http.expectOne(BASE);
+      expect(request.request.body).toMatchObject({ idempotencyKey: 'b-1' });
+      request.flush(body, { status, statusText: 'x' });
+      await done;
+    }
+
+    it('ENTRY_IN_PROGRESS dentro de la ventana de reserva: queda pendiente, sin pushError', async () => {
+      await respond(409, {
+        error: {
+          code: 'CONFLICT',
+          message: 'Esta entrada se está registrando en un intento anterior.',
+          details: { code: 'ENTRY_IN_PROGRESS', retryable: true },
+        },
+      });
+
+      expect(catalog.markStockEntryPushFailed).not.toHaveBeenCalled();
+      expect(catalog.markStockEntrySynced).not.toHaveBeenCalled();
+    });
+
+    it('INTERNAL con retryable también se queda pendiente', async () => {
+      await respond(500, {
+        error: { code: 'INTERNAL_ERROR', message: 'Error', details: { code: 'INTERNAL', retryable: true } },
+      });
+
+      expect(catalog.markStockEntryPushFailed).not.toHaveBeenCalled();
+    });
+
+    it('ENTRY_AMBIGUOUS se bloquea visible con su código', async () => {
+      await respond(409, {
+        error: {
+          code: 'CONFLICT',
+          message: 'Esta entrada quedó a medio registrar en un intento anterior.',
+          details: { code: 'ENTRY_AMBIGUOUS', retryable: false },
+        },
+      });
+
+      expect(catalog.markStockEntryPushFailed).toHaveBeenCalledWith(
+        'b-1',
+        'Esta entrada quedó a medio registrar en un intento anterior. [ENTRY_AMBIGUOUS]',
+      );
+    });
+
+    it('backend viejo: un 409 sin código se sigue tomando como rechazo permanente', async () => {
+      await respond(409, { error: { code: 'CONFLICT', message: 'quedó a medio registrar' } });
+
+      expect(catalog.markStockEntryPushFailed).toHaveBeenCalledWith('b-1', 'quedó a medio registrar');
+    });
+
+    it('backend viejo: un 5xx sin código se reintenta', async () => {
+      await respond(503, { error: { message: 'Unavailable' } });
+
+      expect(catalog.markStockEntryPushFailed).not.toHaveBeenCalled();
+    });
+  });
 });
+
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 8; i += 1) {
+    await Promise.resolve();
+  }
+}

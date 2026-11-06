@@ -1,6 +1,6 @@
 const { randomUUID } = require('node:crypto');
 const { toDate } = require('./timestamps');
-const { codeFromReason } = require('./blocked-diagnosis');
+const { diagnoseReason } = require('./blocked-diagnosis');
 
 /** Forma que consume el POS (búsqueda/carrito), igual a `shared/models`' `Product`. */
 function toProductDto(row) {
@@ -517,7 +517,7 @@ async function listBlockedStockEntries(prisma) {
     detail: `${row.product?.name ?? 'Producto'} · ${row.quantity} pzas`,
     occurredAt: row.createdAt,
     reason: row.pushError,
-    diagnosis: { code: codeFromReason(row.pushError) },
+    diagnosis: diagnoseReason(row.pushError),
   }));
 }
 
@@ -707,7 +707,7 @@ async function listBlockedProducts(prisma) {
     detail: `SKU ${row.sku}`,
     occurredAt: row.updatedAt,
     reason: row.catalogPushError,
-    diagnosis: { code: codeFromReason(row.catalogPushError) },
+    diagnosis: diagnoseReason(row.catalogPushError),
   }));
 }
 
