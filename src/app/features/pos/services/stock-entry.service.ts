@@ -27,6 +27,14 @@ import { environment } from '../../../../environments/environment';
 
 export type { ProductFieldsPayload };
 
+/**
+ * Espera antes de reenviar una entrada que el servidor todavía está registrando
+ * (`ENTRY_IN_PROGRESS`, SPEC 55): 30 s, 1, 2, 5 y 10 min. Reenviarla en cada
+ * empuje no la apura —el intento anterior tiene la reserva— y solo gasta
+ * peticiones. Un `Retry-After` del servidor manda sobre la tabla.
+ */
+export const ENTRY_IN_PROGRESS_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000, 600_000];
+
 export interface CreateStockEntryPayload {
   invoiceId: string;
   lotNumber: string;
@@ -221,11 +229,34 @@ flushQueueAsync(): Promise<void> {
     return this.deviceIdPromise;
   }
 
+  /**
+   * Entradas en espera por `ENTRY_IN_PROGRESS`: id del lote → intentos y hasta
+   * cuándo no se reenvía. En memoria a propósito: siguen pendientes (cuentan en
+   * el aviso y en el auto-push) y un reinicio de la app solo adelanta un intento.
+   */
+  private readonly inProgressBackoff = new Map<string, { attempts: number; until: number }>();
+
+  private enEspera(id: string): boolean {
+    const espera = this.inProgressBackoff.get(id);
+    return Boolean(espera) && espera!.until > Date.now();
+  }
+
+  private esperarReintento(id: string, error: unknown): void {
+    const attempts = (this.inProgressBackoff.get(id)?.attempts ?? 0) + 1;
+    const tabla = ENTRY_IN_PROGRESS_BACKOFF_MS[Math.min(attempts, ENTRY_IN_PROGRESS_BACKOFF_MS.length) - 1];
+    const retryAfter =
+      error instanceof HttpErrorResponse ? Number(error.headers?.get('Retry-After')) : Number.NaN;
+    const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : tabla;
+    this.inProgressBackoff.set(id, { attempts, until: Date.now() + delay });
+  }
+
   private flush$(): Observable<unknown> {
     this.flushing = true;
     return from(Promise.all([this.api().getPendingStockEntries(), this.deviceId()]))
       .pipe(
-        concatMap(([pending, deviceId]) => from(pending.map((item) => ({ item, deviceId })))),
+        concatMap(([pending, deviceId]) =>
+          from(pending.filter((item) => !this.enEspera(item.id)).map((item) => ({ item, deviceId }))),
+        ),
         concatMap(({ item, deviceId }) =>
           this.http
             .post<unknown>(`${this.apiUrl}/stock-entries`, {
@@ -243,6 +274,7 @@ flushQueueAsync(): Promise<void> {
             })
             .pipe(
             concatMap((response) => {
+              this.inProgressBackoff.delete(item.id);
               const result = unwrapEntity<StockEntryResult>(response);
               return from(this.api().markStockEntrySynced(item.id, result.product?.id ?? null));
             }),
@@ -253,6 +285,12 @@ flushQueueAsync(): Promise<void> {
               // dejaba el stock solo en la caja y luego fallaban sus ventas.
               const failure = syncFailureFromError(error);
               const action = syncActionFor(failure);
+              if (failure.code === 'ENTRY_IN_PROGRESS') {
+                // SPEC 55: pendiente, sin `pushError`, y con espera creciente.
+                this.esperarReintento(item.id, error);
+                return EMPTY;
+              }
+              this.inProgressBackoff.delete(item.id);
               if (action !== null) {
                 if (action === 'retry') {
                   return EMPTY;

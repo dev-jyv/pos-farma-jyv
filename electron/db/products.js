@@ -417,7 +417,9 @@ const PRODUCTO_NO_ENCONTRADO = 'Producto no encontrado';
  * - Producto sin `remoteId` y sin `product` embebido: la entrada espera; sube
  *   cuando el catálogo suba al producto (el push va primero). Con `includeWaiting`
  *   también se devuelve (sin resolver) para contarla como pendiente.
- * - Con `product` embebido el alta viaja en la propia entrada: se envía tal cual.
+ * - Con `product` embebido el alta viaja en la propia entrada: se envía tal cual,
+ *   salvo que el producto ya tenga `remoteId` (SPEC 55): entonces va con
+ *   `productId` y sin `product`.
  * - Un lote bloqueado por "Producto no encontrado" se reintenta una sola vez si
  *   ahora hay un `remoteId` distinto del que mandó; si ya iba con el correcto,
  *   el 404 es otro problema y no se reintenta en bucle.
@@ -437,7 +439,7 @@ async function getPendingStockEntries(prisma, { includeWaiting = false } = {}) {
 
   const listos = [];
   for (const row of rows) {
-    const payload = JSON.parse(row.payloadJson);
+    let payload = JSON.parse(row.payloadJson);
     const remoteId = row.product?.remoteId ?? null;
 
     if (!payload.product) {
@@ -469,6 +471,19 @@ async function getPendingStockEntries(prisma, { includeWaiting = false } = {}) {
       }
     } else if (row.pushError) {
       continue;
+    } else if (remoteId) {
+      // El producto ya existe en el servidor (lo subió el catálogo, otra
+      // entrada o un enlace por el pull): reenviar el alta embebida chocaba con
+      // su propio SKU (409) y la entrada se quedaba atorada (SPEC 55, B5). Va
+      // como entrada de un producto existente. Se guarda resuelto para que el
+      // siguiente intento no vuelva a decidirlo; la llave de idempotencia no
+      // cambia: si un intento anterior sí se aplicó, el servidor lo reconoce.
+      const { product: _altaEmbebida, ...resto } = payload;
+      payload = { ...resto, productId: remoteId };
+      await prisma.batch.update({
+        where: { id: row.id },
+        data: { payloadJson: JSON.stringify(payload) },
+      });
     }
 
     listos.push({

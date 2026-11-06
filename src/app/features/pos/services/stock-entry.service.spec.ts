@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
 import { PurchaseInvoice } from '../../../shared/models';
-import { StockEntryService } from './stock-entry.service';
+import { ENTRY_IN_PROGRESS_BACKOFF_MS, StockEntryService } from './stock-entry.service';
 
 const BASE = `${environment.apiUrl}/stock-entries`;
 
@@ -196,7 +196,7 @@ describe('StockEntryService', () => {
   });
 });
 
-describe('StockEntryService — autor de las entradas (SPEC 54)', () => {
+describe('StockEntryService — autor y espera de las entradas (SPEC 54, SPEC 55)', () => {
   let service: StockEntryService;
   let http: HttpTestingController;
   let catalog: {
@@ -205,6 +205,14 @@ describe('StockEntryService — autor de las entradas (SPEC 54)', () => {
     markStockEntryPushFailed: ReturnType<typeof vi.fn>;
   };
   let getDeviceInfo: ReturnType<typeof vi.fn>;
+
+  const EN_CURSO = {
+    error: {
+      code: 'CONFLICT',
+      message: 'Esta entrada se está registrando en un intento anterior.',
+      details: { code: 'ENTRY_IN_PROGRESS', retryable: true },
+    },
+  };
 
   beforeEach(() => {
     catalog = {
@@ -269,6 +277,67 @@ describe('StockEntryService — autor de las entradas (SPEC 54)', () => {
 
     expect(body).not.toHaveProperty('deviceId');
     await responder(201, { data: { product: { id: 'p1' }, stock: 5 } });
+  });
+
+  it('ENTRY_IN_PROGRESS: pendiente sin pushError y no se reenvía hasta que pase la espera', async () => {
+    const base = Date.parse('2026-11-06T10:00:00.000Z');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(base);
+
+    const primero = await enviar();
+    await primero.responder(409, EN_CURSO);
+    expect(catalog.markStockEntryPushFailed).not.toHaveBeenCalled();
+
+    // Dentro de la espera: el empuje no la manda.
+    now.mockReturnValue(base + ENTRY_IN_PROGRESS_BACKOFF_MS[0] - 1);
+    expect((await enviar()).body).toBeNull();
+
+    // Pasada la espera sí; un segundo ENTRY_IN_PROGRESS espera el doble.
+    now.mockReturnValue(base + ENTRY_IN_PROGRESS_BACKOFF_MS[0]);
+    const segundo = await enviar();
+    expect(segundo.body).toMatchObject({ idempotencyKey: 'b-1' });
+    await segundo.responder(409, EN_CURSO);
+    const tras = base + ENTRY_IN_PROGRESS_BACKOFF_MS[0];
+    now.mockReturnValue(tras + ENTRY_IN_PROGRESS_BACKOFF_MS[1] - 1);
+    expect((await enviar()).body).toBeNull();
+    now.mockReturnValue(tras + ENTRY_IN_PROGRESS_BACKOFF_MS[1]);
+    const tercero = await enviar();
+    await tercero.responder(201, { data: { product: { id: 'p1' }, stock: 5 } });
+
+    expect(catalog.markStockEntrySynced).toHaveBeenCalledWith('b-1', 'p1');
+    expect(catalog.markStockEntryPushFailed).not.toHaveBeenCalled();
+    now.mockRestore();
+  });
+
+  it('un Retry-After del servidor manda sobre la tabla', async () => {
+    const base = Date.parse('2026-11-06T10:00:00.000Z');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(base);
+
+    const primero = await enviar();
+    await primero.responder(409, EN_CURSO, { 'Retry-After': '5' });
+
+    now.mockReturnValue(base + 4_999);
+    expect((await enviar()).body).toBeNull();
+    now.mockReturnValue(base + 5_000);
+    const segundo = await enviar();
+    expect(segundo.body).not.toBeNull();
+    await segundo.responder(201, { data: { product: { id: 'p1' }, stock: 5 } });
+    now.mockRestore();
+  });
+
+  it('ENTRY_AMBIGUOUS sigue siendo un bloqueo visible, sin espera', async () => {
+    const { responder } = await enviar();
+    await responder(409, {
+      error: {
+        code: 'CONFLICT',
+        message: 'Esta entrada quedó a medio registrar en un intento anterior.',
+        details: { code: 'ENTRY_AMBIGUOUS', retryable: false },
+      },
+    });
+
+    expect(catalog.markStockEntryPushFailed).toHaveBeenCalledWith(
+      'b-1',
+      'Esta entrada quedó a medio registrar en un intento anterior. [ENTRY_AMBIGUOUS]',
+    );
   });
 });
 
