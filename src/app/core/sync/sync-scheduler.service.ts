@@ -488,8 +488,16 @@ export class SyncScheduler {
     // 1) Catálogo y entradas primero: una venta de un producto recién dado de
     //    alta necesita que ese producto exista arriba, y una que consumió
     //    mercancía recién recibida necesita su entrada de stock.
-    await this.productCatalogService.flushQueueAsync();
-    await this.stockEntryService.flushQueueAsync();
+    //
+    //    **Aislados.** Un fallo local aquí (en 1.0.12, un lote cuyo producto ya
+    //    no existía hacía tronar la consulta de entradas) cortaba la corrida
+    //    entera y ninguna venta volvía a subir. Se registra y se sigue: en el
+    //    peor caso una venta que consumió esa entrada vuelve "stock
+    //    insuficiente" y va a no conciliadas, que es mejor que no subir nada.
+    //    Los pasos 2 en adelante NO se aíslan: si fallan movimientos o ventas,
+    //    los cierres no deben salir antes que sus hijos.
+    await this.pasoAislado('catalogo', () => this.productCatalogService.flushQueueAsync());
+    await this.pasoAislado('entradas', () => this.stockEntryService.flushQueueAsync());
 
     // 2) Hijos de los turnos que **ya existen** en el servidor. Van antes que
     //    los cierres: un turno cerrado no acepta movimientos ni ventas.
@@ -509,6 +517,25 @@ export class SyncScheduler {
     //    paso 4 no tenían `remoteId` cuando corrió el paso 2.
     await this.cashMovementService.flushQueueAsync(owner);
     await this.saleService.flushQueueAsync();
+  }
+
+  /** Corre un paso del empuje sin dejar que su fallo corte los siguientes. */
+  private async pasoAislado(nombre: string, paso: () => Promise<void>): Promise<void> {
+    try {
+      await paso();
+    } catch (error) {
+      console.error(`[sync] falló el paso "${nombre}"; se sigue con el resto`, error);
+      try {
+        await window.electronAPI?.syncLog?.append({
+          level: 'error',
+          entity: 'sync',
+          message: `Falló la subida de ${nombre}: ${getApiErrorMessage(error)}`.slice(0, 500),
+          ref: null,
+        });
+      } catch {
+        // La bitácora es de apoyo: si no se puede escribir, se sigue.
+      }
+    }
   }
 
 
