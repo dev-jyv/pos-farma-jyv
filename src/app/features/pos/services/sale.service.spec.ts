@@ -7,7 +7,7 @@ import { AuthService } from '../../../core/auth/auth.service';
 import { environment } from '../../../../environments/environment';
 import { CartLine, Product, Sale } from '../../../shared/models';
 import { PendingSale } from '../../../core/electron/window.d';
-import { SaleService, SaleTotals, newIdempotencyKey } from './sale.service';
+import { BULK_MAX_ITEMS, SaleService, SaleTotals, newIdempotencyKey } from './sale.service';
 
 const SALES_URL = `${environment.apiUrl}/sales`;
 
@@ -1059,11 +1059,11 @@ describe('SaleService', () => {
     });
 
     /**
-     * El backend rechaza el arreglo completo si pasa de 200
-     * (`bulkCreateSalesSchema`). Un fin de semana sin red con 210 ventas en cola
-     * devolvía 400 y las condenaba todas — y reintentar volvía a mandar las 210.
+     * El backend rechaza el arreglo completo si pasa de 50
+     * (`bulkCreateSalesSchema`, SPEC 48). Un fin de semana sin red con 210 ventas
+     * en cola devolvía 400 y las condenaba todas — y reintentar volvía a mandar las 210.
      */
-    it('trocea la cola: 210 ventas se mandan en peticiones de 100', async () => {
+    it('trocea la cola: 210 ventas se mandan en peticiones de 50 como máximo (SPEC 48)', async () => {
       sales.getPendingPush.mockResolvedValue(
         Array.from({ length: 210 }, (_, indice) =>
           localSale({ id: `local-${indice}`, payload: { idempotencyKey: `key-${indice}` } }),
@@ -1074,7 +1074,7 @@ describe('SaleService', () => {
       await flushMicrotasks();
 
       const tamanos: number[] = [];
-      for (let peticion = 0; peticion < 3; peticion += 1) {
+      for (let peticion = 0; peticion < 5; peticion += 1) {
         const req = http.expectOne(BULK_URL);
         const items = (req.request.body as { items: unknown[] }).items;
         tamanos.push(items.length);
@@ -1087,8 +1087,109 @@ describe('SaleService', () => {
         await flushMicrotasks();
       }
 
-      expect(tamanos).toEqual([100, 100, 10]);
+      expect(tamanos).toEqual([50, 50, 50, 50, 10]);
+      expect(BULK_MAX_ITEMS).toBe(50);
       expect(sales.markSynced).toHaveBeenCalledTimes(210);
+    });
+
+    describe('lote tolerante (SPEC 48)', () => {
+      it('DEFERRED queda pendiente: sin pushError, sin conciliación y sin contar intento', async () => {
+        sales.getPendingPush.mockResolvedValue([
+          localSale({ id: 'a', payload: { idempotencyKey: 'k1' } }),
+          localSale({ id: 'b', payload: { idempotencyKey: 'k2' } }),
+        ]);
+        const antes = service.deferredCount();
+
+        service.flushQueue();
+        await flushMicrotasks();
+        http.expectOne(BULK_URL).flush({
+          data: [
+            { ok: true, sale: { id: 'remote-a', folio: 'V-A' } },
+            { ok: false, code: 'DEFERRED', error: 'Se reintentará', retryable: true },
+          ],
+        });
+        await flushMicrotasks();
+
+        expect(sales.markSynced).toHaveBeenCalledWith('a', 'remote-a', 'V-A');
+        expect(sales.markSynced).not.toHaveBeenCalledWith('b', expect.anything(), expect.anything());
+        expect(sales.markPushFailed).not.toHaveBeenCalled();
+        expect(sales.markUnreconciled).not.toHaveBeenCalled();
+        http.expectNone(`${SALES_URL}/unreconciled`);
+        // El envío automático lo lee para no contar el intento como fallido.
+        expect(service.deferredCount()).toBe(antes + 1);
+      });
+
+      it('DEFERRED sin la marca retryable tampoco bloquea', async () => {
+        sales.getPendingPush.mockResolvedValue([localSale({ id: 'a', payload: { idempotencyKey: 'k1' } })]);
+
+        service.flushQueue();
+        await flushMicrotasks();
+        http.expectOne(BULK_URL).flush({ data: [{ ok: false, code: 'DEFERRED', error: 'x' }] });
+        await flushMicrotasks();
+
+        expect(sales.markPushFailed).not.toHaveBeenCalled();
+        expect(service.deferredCount()).toBe(1);
+      });
+
+      it('tras un trozo diferido, los trozos siguientes esperan al próximo envío (orden de folios)', async () => {
+        sales.getPendingPush.mockResolvedValue(
+          Array.from({ length: 60 }, (_, indice) =>
+            localSale({ id: `local-${indice}`, payload: { idempotencyKey: `key-${indice}` } }),
+          ),
+        );
+
+        service.flushQueue();
+        await flushMicrotasks();
+        const primero = http.expectOne(BULK_URL);
+        const items = (primero.request.body as { items: unknown[] }).items;
+        expect(items).toHaveLength(50);
+        primero.flush({
+          data: items.map((_, indice) =>
+            indice < 40
+              ? { ok: true, sale: { id: `r-${indice}`, folio: `V-${indice}` } }
+              : { ok: false, code: 'DEFERRED', error: 'Se reintentará', retryable: true },
+          ),
+        });
+        await flushMicrotasks();
+
+        http.expectNone(BULK_URL);
+        expect(sales.markSynced).toHaveBeenCalledTimes(40);
+        expect(sales.markPushFailed).not.toHaveBeenCalled();
+      });
+
+      it('VALIDATION por índice se bloquea visible con el mensaje del servidor; las demás suben', async () => {
+        sales.getPendingPush.mockResolvedValue([
+          localSale({ id: 'uno', payload: { idempotencyKey: 'k1' } }),
+          localSale({ id: 'dos', payload: { idempotencyKey: 'k2' } }),
+          localSale({ id: 'tres', payload: { idempotencyKey: 'k3' } }),
+        ]);
+
+        service.flushQueue();
+        await flushMicrotasks();
+        http.expectOne(BULK_URL).flush({
+          data: [
+            { ok: true, sale: { id: 'r1', folio: 'V-1' } },
+            {
+              ok: false,
+              code: 'VALIDATION',
+              error: 'items.0.quantity: debe ser mayor a 0',
+              retryable: false,
+            },
+            { ok: true, sale: { id: 'r3', folio: 'V-3' } },
+          ],
+        });
+        await flushMicrotasks();
+
+        // Sin bisección: el lote nuevo ya separa la venta mala por índice.
+        http.expectNone(BULK_URL);
+        expect(sales.markSynced).toHaveBeenCalledWith('uno', 'r1', 'V-1');
+        expect(sales.markSynced).toHaveBeenCalledWith('tres', 'r3', 'V-3');
+        expect(sales.markPushFailed).toHaveBeenCalledWith(
+          'dos',
+          'items.0.quantity: debe ser mayor a 0 [VALIDATION]',
+        );
+        http.expectNone(`${SALES_URL}/unreconciled`);
+      });
     });
 
     it('un 5xx del lote deja las ventas en cola para reintentar', async () => {

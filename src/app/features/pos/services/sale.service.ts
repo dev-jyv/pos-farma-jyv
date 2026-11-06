@@ -321,11 +321,13 @@ function mapRemoteSale(dto: SaleDto): Sale {
  * único que de verdad manda `POST /sales`.
  */
 /**
- * Tope de ventas por petición. El backend rechaza el arreglo completo si pasa de
- * 200 (`bulkCreateSalesSchema`), así que se manda con margen: un lote de 100
- * también acota lo que hay que bisecar cuando una venta viene mal formada.
+ * Tope de ventas por petición (SPEC 48). El backend acepta como máximo 50
+ * (`bulkCreateSalesSchema`) y responde 400 al arreglo entero si pasa; además
+ * procesa el lote en serie con un presupuesto de 40 s, así que un lote chico
+ * también acota lo que queda diferido (`DEFERRED`) y lo que hay que bisecar
+ * cuando un backend viejo rechaza el lote por una venta mal formada.
  */
-const BULK_MAX_ITEMS = 100;
+export const BULK_MAX_ITEMS = 50;
 
 /**
  * Por qué una venta de la cola todavía no se puede enviar. En español y en
@@ -361,6 +363,21 @@ export class SaleService {
   private readonly apiUrl = environment.apiUrl;
 
   private flushing = false;
+
+  /**
+   * Ventas que el servidor dejó `DEFERRED` (SPEC 48): se le acabó el presupuesto
+   * de tiempo del lote antes de llegar a ellas. Contador monotónico: el envío
+   * automático lo lee antes y después de empujar para no contar ese intento como
+   * fallido (no hubo rechazo, el servidor solo pidió que se reintente).
+   */
+  private deferredTotal = 0;
+  /** En el empuje en curso ya hubo un `DEFERRED`: los trozos siguientes esperan. */
+  private deferredInFlush = false;
+
+  /** Cuántas ventas ha diferido el servidor desde que arrancó la app. */
+  deferredCount(): number {
+    return this.deferredTotal;
+  }
 
   /** Cuántas ventas locales siguen sin subir (sin contar las bloqueadas). */
   readonly pendingCount = signal(0);
@@ -723,6 +740,7 @@ flushQueueAsync(): Promise<void> {
 
   private flush$(): Observable<unknown> {
     this.flushing = true;
+    this.deferredInFlush = false;
     // `contarIntentos`: este es el push real. Las lecturas de la UI
     // (`refreshPending`, el conteo del shell) NO deben gastar el cupo.
     return from(
@@ -742,13 +760,18 @@ flushQueueAsync(): Promise<void> {
             return of(null);
           }
           // En trozos y **en serie**: el backend rechaza el arreglo entero si pasa
-          // de 200 (`bulkCreateSalesSchema`), así que un fin de semana sin red con
-          // 210 ventas en cola devolvía 400 y las condenaba todas — y reintentar
-          // volvía a mandar las mismas 210. En serie, además, el orden de folios
-          // sigue el de cobro.
+          // de 50 (`bulkCreateSalesSchema`, SPEC 48), así que un fin de semana sin
+          // red con 210 ventas en cola devolvía 400 y las condenaba todas — y
+          // reintentar volvía a mandar las mismas 210. En serie, además, el orden
+          // de folios sigue el de cobro.
+          //
+          // Si el servidor difirió ventas de un trozo (`DEFERRED`, SPEC 48), los
+          // trozos siguientes no salen en esta pasada: van detrás de las
+          // diferidas, y mandarlos ahora desordenaría los folios. Sin cargar
+          // intento: el siguiente envío los toma en orden.
           const trozos = chunk(pending, BULK_MAX_ITEMS);
           return from(trozos).pipe(
-            concatMap((trozo) => this.pushBatch$(trozo)),
+            concatMap((trozo) => (this.deferredInFlush ? of(null) : this.pushBatch$(trozo))),
             defaultIfEmpty(null),
             last(null, null),
           );
@@ -886,9 +909,16 @@ flushQueueAsync(): Promise<void> {
             if (!result) {
               return of(undefined);
             }
-            return result.ok
-              ? from(this.api().sales.markSynced(item.id, result.sale.id, result.sale.folio))
-              : this.handleRejected(item, syncFailureFromResult(result));
+            if (result.ok) {
+              return from(this.api().sales.markSynced(item.id, result.sale.id, result.sale.folio));
+            }
+            if (result.code === 'DEFERRED') {
+              // Pendiente sin contar intento ni bloquear (SPEC 48).
+              this.deferredTotal += 1;
+              this.deferredInFlush = true;
+              return of(undefined);
+            }
+            return this.handleRejected(item, syncFailureFromResult(result));
           });
           return forkJoin(marks).pipe(defaultIfEmpty([] as unknown[]));
         }),

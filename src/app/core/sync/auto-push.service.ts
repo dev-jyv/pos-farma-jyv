@@ -22,6 +22,12 @@ export const AUTO_PUSH_PAUSE_MS = 15 * 60_000;
 export interface PushOnlyFlusher {
   flush: () => Promise<void>;
   countPending: () => Promise<number>;
+  /**
+   * Contador monotónico de ventas que el servidor dejó `DEFERRED` (SPEC 48:
+   * se le acabó el presupuesto de tiempo del lote). Si sube durante un envío sin
+   * avance, ese envío no cuenta como intento fallido: no hubo rechazo.
+   */
+  deferredCount?: () => number;
 }
 
 /**
@@ -124,14 +130,17 @@ export class AutoPushService {
         return;
       }
       let after = before;
+      const deferredBefore = flusher.deferredCount?.() ?? 0;
+      let deferred = false;
       try {
         await flusher.flush();
+        deferred = (flusher.deferredCount?.() ?? 0) > deferredBefore;
         after = await flusher.countPending();
       } catch (error) {
         this.log.warn('auto-push-error', { message: (error as Error)?.message });
       }
-      this.log.info('auto-push', { before, after });
-      this.afterAttempt(before, after, wasPaused);
+      this.log.info('auto-push', { before, after, deferred });
+      this.afterAttempt(before, after, wasPaused, deferred);
     } catch (error) {
       this.log.warn('auto-push-error', { message: (error as Error)?.message });
     } finally {
@@ -143,7 +152,7 @@ export class AutoPushService {
     }
   }
 
-  private afterAttempt(before: number, after: number, wasPaused: boolean): void {
+  private afterAttempt(before: number, after: number, wasPaused: boolean, deferred = false): void {
     if (after === 0) {
       this.resetFailures();
       return;
@@ -156,6 +165,14 @@ export class AutoPushService {
       // Avanzó pero queda cola: se sigue sin espera creciente.
       this.resetFailures();
       this.arm(AUTO_PUSH_DEBOUNCE_MS);
+      return;
+    }
+    if (deferred) {
+      // El servidor difirió el lote (SPEC 48): pendiente, no fallo. Se reintenta
+      // con la espera del escalón actual, sin subirlo ni entrar en pausa.
+      const base = AUTO_PUSH_BACKOFF_MS[Math.max(0, this.failures - 1)];
+      this.log.info('auto-push-deferred', { pending: after });
+      this.arm(Math.round(base * (0.8 + Math.random() * 0.4)));
       return;
     }
     if (wasPaused) {

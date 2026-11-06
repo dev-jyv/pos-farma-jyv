@@ -194,6 +194,45 @@ describe('AutoPushService', () => {
     expect(flush).not.toHaveBeenCalled();
   });
 
+  describe('lote diferido por el servidor (SPEC 48)', () => {
+    let deferred: number;
+
+    beforeEach(() => {
+      deferred = 0;
+      flusher.deferredCount = () => deferred;
+      // El servidor difiere todo: nada avanza, pero no es un rechazo.
+      flush.mockImplementation(async () => {
+        deferred += 1;
+      });
+    });
+
+    it('un envío diferido sin avance no cuenta como intento fallido ni lleva a la pausa', async () => {
+      pending = 3;
+      service.notifyChange();
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+      expect(flush).toHaveBeenCalledTimes(1);
+
+      // Muchos más envíos que el tope de fallos: si contaran, ya estaría en pausa
+      // y la espera crecería. Con DEFERRED se reintenta siempre al primer escalón.
+      for (let intento = 2; intento <= AUTO_PUSH_MAX_FAILURES + 3; intento += 1) {
+        await vi.advanceTimersByTimeAsync(AUTO_PUSH_BACKOFF_MS[0] + 500);
+        expect(flush).toHaveBeenCalledTimes(intento);
+      }
+    });
+
+    it('un fallo real sin DEFERRED sí escala la espera', async () => {
+      flush.mockImplementation(async () => undefined);
+      pending = 3;
+      service.notifyChange();
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_BACKOFF_MS[0] + 500);
+      expect(flush).toHaveBeenCalledTimes(2);
+      // Segundo escalón: con la espera del primero todavía no sale.
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_BACKOFF_MS[0] + 500);
+      expect(flush).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('el contrato solo permite subir: no existe ningún pull en la interfaz', () => {
     expect(Object.keys(flusher).sort()).toEqual(['countPending', 'flush']);
   });
