@@ -161,6 +161,13 @@ function toCashSessionDto(row) {
     adjustmentReviewedAt: row.adjustmentReviewedAt ?? null,
     adjustmentNote: row.adjustmentNote ?? null,
     autoClosedByExpiry: row.autoClosedByExpiry,
+    // SPEC 63: mismo nombre que el backend (`autoClosed`), además del de siempre.
+    autoClosed: row.autoClosedByExpiry ?? false,
+    needsReview: row.needsReview ?? false,
+    openingCounted: row.openingCounted ?? null,
+    inheritedFloat: row.inheritedFloat ?? null,
+    openingDifference: row.openingDifference ?? null,
+    openingNote: row.openingNote ?? null,
   };
 }
 
@@ -209,7 +216,43 @@ function createLocal(prisma, input) {
   return actual;
 }
 
-async function createLocalSerializado(prisma, { openedBy, openedByLabel, openingAmount }) {
+function isNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/**
+ * Arqueo de apertura (SPEC 63). El fondo del turno es **lo contado**, no lo
+ * heredado: el Z del turno nuevo parte de ahí, y la diferencia contra el cierre
+ * anterior queda registrada en vez de cargarse al corte de quien abre.
+ *
+ * Sin `openingCounted` (llamada de antes) se abre como siempre, con
+ * `openingAmount` y sin arqueo. Sin `inheritedFloat` (primer turno de la caja)
+ * no hay contra qué comparar: sin diferencia ni nota.
+ */
+function openingCount({ openingAmount, openingCounted, inheritedFloat, openingNote }) {
+  if (!isNumber(openingCounted)) {
+    return { openingAmount };
+  }
+  const heredado = isNumber(inheritedFloat) ? inheritedFloat : null;
+  const diferencia = heredado === null ? null : round(openingCounted - heredado);
+  const nota = typeof openingNote === 'string' && openingNote.trim() ? openingNote.trim() : null;
+  if (diferencia !== null && Math.abs(diferencia) >= 0.01 && !nota) {
+    throw new Error('El efectivo contado no coincide con el fondo del cierre anterior: escribe una nota.');
+  }
+  return {
+    openingAmount: openingCounted,
+    openingCounted,
+    inheritedFloat: heredado,
+    openingDifference: diferencia,
+    // Contado igual a lo heredado: sin nota (SPEC 63, edge case).
+    openingNote: diferencia !== null && Math.abs(diferencia) >= 0.01 ? nota : null,
+  };
+}
+
+async function createLocalSerializado(prisma, input) {
+  const { openedBy, openedByLabel } = input;
+  // Validar antes de tocar nada: un arqueo sin nota no abre turno.
+  const apertura = openingCount(input);
   // Defensa contra doble apertura en el mismo equipo: dos turnos abiertos del
   // mismo cajero repartirían las ventas entre dos cortes y, al sincronizar,
   // los dos pelearían por el único turno abierto que admite el backend.
@@ -223,7 +266,7 @@ async function createLocalSerializado(prisma, { openedBy, openedByLabel, opening
     data: {
       openedBy,
       openedByLabel: openedByLabel ?? null,
-      openingAmount,
+      ...apertura,
       pendingPush: true,
     },
   });
@@ -243,7 +286,9 @@ async function getLiveSummary(prisma, cashSessionId) {
   }
   const [sales, movements] = await Promise.all([
     prisma.sale.findMany({
-      where: { cashSessionId },
+      // Una venta descartada (SPEC 62) nunca existió para el corte: antes se
+      // borraba la fila; ahora queda como rastro y aquí no cuenta.
+      where: { cashSessionId, discardedAt: null },
       select: {
         paymentMethod: true,
         amountReceived: true,
@@ -277,7 +322,9 @@ async function getLiveSummary(prisma, cashSessionId) {
  * auto-cierre, es igual al esperado — ver `autoClosedByExpiry`). El ajuste
  * pendiente NUNCA se marca en un auto-cierre: no hay cajero presente para
  * explicar una diferencia que, además, el propio auto-cierre ya evita al
- * mandar `countedCashAmount = expectedCashAmount`.
+ * mandar `countedCashAmount = expectedCashAmount`. En su lugar el turno queda
+ * con `needsReview` (SPEC 63): un admin debe verlo, y el que abre después
+ * cuenta el fondo heredado.
  */
 async function closeLocal(prisma, sessionId, { countedCashAmount, closedBy, closedByLabel, autoClosedByExpiry = false }) {
   const { summary, expectedCashAmount, expectedServicesCashAmount } = await getLiveSummary(
@@ -308,6 +355,9 @@ async function closeLocal(prisma, sessionId, { countedCashAmount, closedBy, clos
       hasPendingAdjustment,
       adjustmentStatus: hasPendingAdjustment ? 'pending' : null,
       autoClosedByExpiry,
+      // Un autocierre nadie lo arqueó (contado = esperado): queda para revisión
+      // de un admin en vez de pasar como un corte que cuadró (SPEC 63).
+      needsReview: autoClosedByExpiry,
       // El create ya pudo haber subido (remoteId no null); si es así, este
       // cierre necesita su propio push aparte (ver `pendingClosePush` en el
       // schema). Si el create SIGUE pendiente, `markCreateSynced` es quien
@@ -431,7 +481,10 @@ async function getPendingClosePush(prisma, { ownerUid, sinHijosPendientes = fals
        * firmado) y el cajero se queda sin poder aplicarla: el servidor conserva
        * como buena una venta que en la caja no existe.
        */
-      prisma.sale.count({ where: { cashSessionId: row.id, needsRemoteVoid: true } }),
+      // Solo las recuperables, igual que arriba: una anulación que el servidor
+      // rechazó (`voidError`, SPEC 62) espera a un admin y no puede dejar el
+      // turno abierto allá para siempre.
+      prisma.sale.count({ where: { cashSessionId: row.id, needsRemoteVoid: true, voidError: null } }),
     ]);
     if (ventas > 0 || movimientos > 0 || anulacionesRemotas > 0) {
       conHijos.add(row.id);

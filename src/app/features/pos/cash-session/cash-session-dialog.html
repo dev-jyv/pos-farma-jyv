@@ -58,19 +58,36 @@
       </div>
     </div>
   } @else if (mode() === 'open') {
-    <label for="openingAmount" class="mb-1.5 block text-sm font-medium text-slate-700">{{ 'cashCut.openingAmount' | translate }}</label>
-    <output
-      id="openingAmount"
-      class="block rounded-lg bg-slate-50 px-3 py-2 text-xl font-semibold tabular-nums text-slate-900"
-    >
-      @if (canOpen()) {
-        ${{ openingAmount() | number: '1.2-2' }}
-      } @else {
-        —
-      }
-    </output>
+    @if (clockBlocked()) {
+      <div data-testid="cut-clock-blocked" class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+        {{ 'cashCut.clockBlockedOpen' | translate: { minutes: clockSkewMinutes(), serverTime: serverTimeLabel() } }}
+      </div>
+    }
+    <!--
+      SPEC 63: el fondo heredado es referencia, no el fondo del turno. El cajero
+      cuenta el cajón (campo vacío, obligatorio) y, si no coincide, explica la
+      diferencia: así el faltante del turno anterior no acaba en su corte.
+    -->
+    @if (hasInherited() || cashOnHandLoading() || cashOnHandError()) {
+      <div class="mb-3 rounded-lg bg-slate-50 px-3 py-2">
+        <div class="text-xs text-slate-500" id="inheritedFloatLabel">
+          {{ 'cashCut.inheritedFloat' | translate }}
+        </div>
+        <output
+          id="inheritedFloat"
+          aria-labelledby="inheritedFloatLabel"
+          class="block text-lg font-semibold tabular-nums text-slate-900"
+        >
+          @if (!cashOnHandLoading() && !cashOnHandError()) {
+            ${{ inheritedAmount() | number: '1.2-2' }}
+          } @else {
+            —
+          }
+        </output>
+      </div>
+    }
     @if (cashOnHandError()) {
-      <div class="mt-2 flex items-center justify-between gap-2 text-xs text-red-700" role="alert">
+      <div class="mb-3 flex items-center justify-between gap-2 text-xs text-red-700" role="alert">
         <span>{{ 'cashCut.cashOnHandError' | translate }}</span>
         <p-button
           data-testid="cut-open-retry"
@@ -81,10 +98,54 @@
           (onClick)="loadCashOnHand()"
         />
       </div>
-    } @else if (!cashOnHandLoading()) {
+    }
+
+    <label for="openingCounted" class="mb-1.5 block text-sm font-medium text-slate-700">
+      {{ 'cashCut.openingCounted' | translate }}
+    </label>
+    <p-inputnumber
+      inputId="openingCounted"
+      [ngModel]="openingCounted()"
+      (ngModelChange)="setOpeningCounted($event)"
+      mode="currency"
+      currency="MXN"
+      locale="es-MX"
+      [min]="0"
+      [minFractionDigits]="2"
+      inputStyleClass="!text-xl !font-semibold !tabular-nums"
+      styleClass="w-full"
+    />
+    @if (!cashOnHandLoading() && !cashOnHandError()) {
       <p class="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
         <i class="pi pi-info-circle"></i>
-        {{ (hasPreviousClose() ? 'cashCut.cashOnHandHint' : 'cashCut.cashOnHandNoClose') | translate }}
+        {{ (hasInherited() ? 'cashCut.inheritedFloatHint' : 'cashCut.openingCountedNoClose') | translate }}
+      </p>
+    }
+
+    @if (needsOpeningNote()) {
+      <div
+        data-testid="cut-open-difference"
+        class="mt-3 flex items-center justify-between rounded-xl bg-amber-50 px-3 py-2"
+      >
+        <span class="text-sm font-medium text-amber-800">{{ 'cashCut.openingDifference' | translate }}</span>
+        <span class="text-lg font-bold tabular-nums text-amber-700">
+          ${{ openingDifference() | number: '1.2-2' }}
+        </span>
+      </div>
+      <label for="openingNote" class="mb-1.5 mt-3 block text-sm font-medium text-slate-700">
+        {{ 'cashCut.openingNote' | translate }}
+      </label>
+      <textarea
+        id="openingNote"
+        data-testid="cut-open-note"
+        rows="2"
+        class="w-full rounded-lg border border-slate-300 p-2 text-sm"
+        [attr.maxlength]="openingNoteMaxLength"
+        [value]="openingNote()"
+        (input)="onOpeningNoteInput($event)"
+      ></textarea>
+      <p class="mt-1 text-xs" [class.text-slate-500]="openingNoteValid()" [class.text-amber-700]="!openingNoteValid()">
+        {{ 'cashCut.openingNoteHint' | translate }}
       </p>
     }
   } @else {
@@ -231,6 +292,11 @@
       }
 
       @if (mode() === 'close') {
+        @if (clockBlocked()) {
+          <div data-testid="cut-clock-blocked" class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+            {{ 'cashCut.clockBlockedClose' | translate: { minutes: clockSkewMinutes(), serverTime: serverTimeLabel() } }}
+          </div>
+        }
         @if (!confirmingDifference()) {
           <label for="countedCash" class="mb-1.5 block text-sm font-medium text-slate-700">{{ 'cashCut.countedCash' | translate }}</label>
           <p-inputnumber
@@ -314,7 +380,7 @@
             [label]="'cashCut.close' | translate"
             styleClass="flex-[1.4]"
             [loading]="submitting()"
-            [disabled]="!summaryReady()"
+            [disabled]="!summaryReady() || clockBlocked()"
             (onClick)="requestClose()"
           />
         } @else {
@@ -331,6 +397,7 @@
             severity="warn"
             styleClass="flex-[1.4]"
             [loading]="submitting()"
+            [disabled]="clockBlocked()"
             (onClick)="confirmClose()"
           />
         }

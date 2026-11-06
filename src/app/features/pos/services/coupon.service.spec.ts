@@ -1,7 +1,9 @@
+import { TestBed } from '@angular/core/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CartLine, CartProductLine, CartServiceLine, CouponDto, Product } from '../../../shared/models';
 import { CouponService } from './coupon.service';
+import { ClockSkewService } from '../../../core/time/clock-skew.service';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date('2026-11-03T18:00:00Z');
@@ -46,7 +48,7 @@ describe('CouponService.apply', () => {
   let service: CouponService;
 
   beforeEach(() => {
-    service = new CouponService();
+    service = TestBed.runInInjectionContext(() => new CouponService());
   });
 
   it('cupón de producto: entra en el discountAmount de la línea y reemplaza al manual', () => {
@@ -170,5 +172,18 @@ describe('CouponService.apply', () => {
     expect(service.maybeExhausted(coupon({ maxUses: 5, usedCount: 5 }))).toBe(true);
     expect(service.maybeExhausted(coupon({ maxUses: 5, usedCount: 4 }))).toBe(false);
     expect(service.maybeExhausted(coupon({ maxUses: null, usedCount: 900 }))).toBe(false);
+  });
+
+  it('sin fecha explícita la vigencia usa la hora corregida: un reloj atrasado no aplica un cupón vencido (SPEC 65)', () => {
+    // La caja va 1 h atrasada: para el servidor el cupón venció hace 30 min.
+    const vence = coupon({ endsAt: new Date(Date.now() + 30 * 60_000).toISOString() });
+    expect(service.windowIssue(vence)).toBeNull();
+
+    const clock = TestBed.inject(ClockSkewService);
+    const ahora = Date.now();
+    clock.record(new Date(ahora + 60 * 60_000).toUTCString(), ahora, ahora);
+
+    expect(service.windowIssue(vence)?.code).toBe('expired');
+    expect(service.apply([line(3)], vence).issue?.code).toBe('expired');
   });
 });

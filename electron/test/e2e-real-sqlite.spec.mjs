@@ -228,7 +228,9 @@ describe('el esquema real impide lo que el diseño prohíbe', () => {
     });
     expect(await prisma.saleItem.count({ where: { saleId: venta.id } })).toBe(2);
 
-    await ventas.discard(prisma, venta.id);
+    // El descarte ya no borra (SPEC 62): la cascada se comprueba con el borrado
+    // directo, que sigue siendo lo que hace la purga de filas viejas.
+    await prisma.sale.delete({ where: { id: venta.id } });
 
     expect(await prisma.saleItem.count()).toBe(0);
     expect(await prisma.saleMovement.count()).toBe(0);
@@ -425,10 +427,17 @@ describe('jornada completa contra SQLite real', () => {
     await ventas.voidLocal(prisma, venta.id, ADMIN);
     expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(20);
 
-    await ventas.discard(prisma, venta.id);
+    await ventas.discard(prisma, venta.id, { discardedBy: ADMIN, reason: 'Venta de prueba' });
 
     expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(20);
-    expect(await prisma.sale.count({ where: { id: venta.id } })).toBe(0);
+    // Descarte lógico (SPEC 62): la fila queda como rastro, fuera del historial.
+    const fila = await prisma.sale.findUnique({ where: { id: venta.id } });
+    expect(fila.discardedAt).toBeInstanceOf(Date);
+    expect(fila).toMatchObject({ discardedBy: ADMIN, discardReason: 'Venta de prueba', pendingPush: false });
+    expect(await ventas.list(prisma, {})).toEqual([]);
+    const [renglon] = await bitacora.listRecent(prisma);
+    expect(renglon).toMatchObject({ entity: 'sale', ref: venta.id, level: 'warn' });
+    expect(renglon.message).toContain('Venta de prueba');
   });
 
   it('descartar una venta que ya subió no la borra: el servidor la tiene viva', async () => {
@@ -440,7 +449,9 @@ describe('jornada completa contra SQLite real', () => {
     });
     await ventas.markSynced(prisma, venta.id, 'fs-venta-1', 'V-000001');
 
-    await ventas.discard(prisma, venta.id);
+    await expect(ventas.discard(prisma, venta.id, { discardedBy: ADMIN, reason: 'Venta de prueba' })).rejects.toThrow(
+      'Ya está en el servidor; anúlala.',
+    );
 
     // Sigue en la caja y el stock no se repone: la venta existe en el servidor.
     expect(await prisma.sale.count({ where: { id: venta.id } })).toBe(1);
@@ -455,7 +466,10 @@ describe('jornada completa contra SQLite real', () => {
       cashSessionId: turno.id,
     });
 
-    await Promise.all([ventas.discard(prisma, venta.id), ventas.discard(prisma, venta.id)]);
+    await Promise.all([
+      ventas.discard(prisma, venta.id, { discardedBy: ADMIN, reason: 'Venta de prueba' }),
+      ventas.discard(prisma, venta.id, { discardedBy: ADMIN, reason: 'Venta de prueba' }),
+    ]);
 
     expect((await prisma.product.findUnique({ where: { id: 'p-1' } })).totalStock).toBe(20);
   });

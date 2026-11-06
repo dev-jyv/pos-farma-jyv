@@ -573,6 +573,27 @@ export interface SaleBilling {
   email?: string;
 }
 
+/** Partida con faltante tal como la midió el servidor (`Sale.stockReview.items`, SPEC 52). */
+export interface SaleStockShortfall {
+  productId: string;
+  requested: number;
+  allocated: number;
+  shortfall: number;
+}
+
+/**
+ * Marcas de revisión de una venta aceptada por `/sales/bulk` (SPEC 52). Se
+ * guardan en la venta local al marcarla subida para que el historial las muestre.
+ */
+export interface SaleSyncReview {
+  /** `Sale.stockReview`: se descontó lo disponible; el resto quedó como faltante. */
+  stock: { items: SaleStockShortfall[] } | null;
+  /** `Sale.catalogReview`: ids de productos o servicios vendidos estando inactivos. */
+  catalog: { inactive: string[] } | null;
+  /** `Sale.lateSync`: llegó después del cierre del turno en que se cobró. */
+  late: boolean;
+}
+
 export interface Sale {
   id: string;
   folio: string;
@@ -610,6 +631,17 @@ export interface Sale {
   coupon?: SaleCoupon | null;
   voidedAt: Date | null;
   voidedBy?: string | null;
+  /** Motivo de la anulación (SPEC 62); `null` en anulaciones anteriores al motivo. */
+  voidReason?: string | null;
+  /**
+   * El servidor rechazó la anulación remota con un 4xx (SPEC 62): aquí está
+   * anulada y allá sigue activa hasta que un admin la reintente.
+   */
+  voidError?: string | null;
+  /** Descarte lógico (SPEC 62): la venta nunca llegó al servidor y se retiró. */
+  discardedAt?: Date | null;
+  discardedBy?: string | null;
+  discardReason?: string | null;
   /**
    * El servidor no pudo registrar la venta (stock, producto) y quedó guardada
    * en `unreconciledSales`: el dinero entró y el movimiento está, pero el
@@ -617,6 +649,12 @@ export interface Sale {
    */
   unreconciledAt?: Date | null;
   unreconciledReason?: string | null;
+  /**
+   * Marcas de revisión con las que el servidor **aceptó** la venta offline
+   * (SPEC 52): faltante de stock, catálogo inactivo o turno ya cerrado. La
+   * venta está registrada; el gerente la revisa. Ausente o `null` sin marcas.
+   */
+  syncReview?: SaleSyncReview | null;
   createdAt: Date;
   /**
    * Totales denormalizados por rama. El corte y los reportes los leen sin
@@ -762,6 +800,19 @@ export interface CashSession {
   adjustmentNote?: string | null;
   /** `true` si el turno se cerró solo por expiración de sesión (24:00 CDMX). */
   autoClosedByExpiry?: boolean;
+  /** Nombre del backend para lo mismo (SPEC 63). */
+  autoClosed?: boolean;
+  /** Autocierre sin arqueo: un admin debe revisarlo (SPEC 63). */
+  needsReview?: boolean;
+  /** Efectivo contado al abrir; es el fondo del turno (SPEC 63). `null` en turnos de antes. */
+  openingCounted?: number | null;
+  /** Fondo que dejó el cierre anterior; `null` sin cierre previo. */
+  inheritedFloat?: number | null;
+  /** `openingCounted − inheritedFloat`. */
+  openingDifference?: number | null;
+  openingNote?: string | null;
+  /** Diferencia que encontró al abrir el turno **siguiente** (la pone el backend). */
+  followingOpeningDifference?: number | null;
   /** Solo tiene sentido en el POS local-first; el admin-web (100% online) no lo usa. */
   remoteId?: string | null;
   pendingPush?: boolean;
@@ -1010,6 +1061,11 @@ export interface PosDiagnosticsInput {
    * o `null` si no hay ninguna (SPEC 37). Opcional en el backend.
    */
   lastLocalBackupAt?: string | null;
+  /**
+   * Desfase del reloj de la caja contra el servidor (ms, `servidor − local`;
+   * SPEC 65). Se omite sin medición. El panel lo pinta en rojo con más de 5 min.
+   */
+  clockSkewMs?: number;
 }
 
 export type PosCommandType = 'retrySale' | 'retryCashSession' | 'retryProduct' | 'sendSaleToUnreconciled';

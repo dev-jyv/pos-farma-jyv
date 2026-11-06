@@ -61,8 +61,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPendingPush: (filters) => ipcRenderer.invoke('sales:getPendingPush', filters),
     listBlocked: (filters) => ipcRenderer.invoke('sales:listBlocked', filters),
     getPendingVoided: (filters) => ipcRenderer.invoke('sales:getPendingVoided', filters),
-    markSynced: (localId, remoteId, remoteFolio) =>
-      ipcRenderer.invoke('sales:markSynced', localId, remoteId, remoteFolio),
+    markSynced: (localId, remoteId, remoteFolio, review) =>
+      ipcRenderer.invoke('sales:markSynced', localId, remoteId, remoteFolio, review ?? null),
     markUnreconciled: (localId, reason) =>
       ipcRenderer.invoke('sales:markUnreconciled', localId, reason),
     markPushFailed: (localId, message) => ipcRenderer.invoke('sales:markPushFailed', localId, message),
@@ -72,7 +72,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('sales:voidLocal', localId, voidedBy, voidedByLabel, reason),
     listMovements: (saleId) => ipcRenderer.invoke('sales:listMovements', saleId),
     clearPushError: (localId) => ipcRenderer.invoke('sales:clearPushError', localId),
-    discard: (localId) => ipcRenderer.invoke('sales:discard', localId),
+    discard: (localId, options) => ipcRenderer.invoke('sales:discard', localId, options),
+    getByIdempotencyKey: (idempotencyKey) =>
+      ipcRenderer.invoke('sales:getByIdempotencyKey', idempotencyKey),
+    markVoidFailed: (localId, message) => ipcRenderer.invoke('sales:markVoidFailed', localId, message),
+    clearVoidError: (localId) => ipcRenderer.invoke('sales:clearVoidError', localId),
     getNeedingRemoteVoid: (filters) => ipcRenderer.invoke('sales:getNeedingRemoteVoid', filters),
     markNeedsRemoteVoid: (localId) => ipcRenderer.invoke('sales:markNeedsRemoteVoid', localId),
     markRemoteVoided: (localId) => ipcRenderer.invoke('sales:markRemoteVoided', localId),

@@ -9,10 +9,11 @@ import { AuthService } from '../../../core/auth/auth.service';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { CashOnHand } from '../../../core/electron/window.d';
 import { CashSession, CashSessionSummary } from '../../../shared/models';
-import { CashSessionService } from '../services/cash-session.service';
+import { CashSessionService, OpeningCountInput } from '../services/cash-session.service';
 import { TicketPrintService } from '../ticket/ticket-print.service';
 import { CashSessionDialog } from './cash-session-dialog';
 import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
+import { ClockSkewService } from '../../../core/time/clock-skew.service';
 
 const session = {
   id: 's1',
@@ -36,7 +37,10 @@ const ES = {
   cashCut: {
     openTitle: 'Abrir turno de caja',
     closeTitle: 'Cerrar turno de caja',
-    openingAmount: 'Monto inicial en caja',
+    inheritedFloat: 'Fondo del cierre anterior',
+    openingCounted: 'Efectivo contado',
+    openingDifference: 'Diferencia contra el cierre anterior',
+    openingNote: 'Nota de la diferencia',
     countedCash: 'Efectivo contado',
     difference: 'Diferencia',
     open: 'Abrir turno',
@@ -51,6 +55,10 @@ const ES = {
     expectedCash: 'Efectivo esperado',
     expectedCashTotal: 'Total esperado en cajón',
     loading: 'Cargando resumen…',
+    clockBlockedOpen:
+      'El reloj de esta caja está desfasado {{minutes}} min. Corrige la fecha y hora del equipo antes de abrir el turno (hora del servidor: {{serverTime}}).',
+    clockBlockedClose:
+      'El reloj de esta caja está desfasado {{minutes}} min. Corrige la fecha y hora del equipo antes de cerrar el turno (hora del servidor: {{serverTime}}).',
   },
 };
 
@@ -82,7 +90,12 @@ function summary(overrides: Partial<CashSessionSummary> = {}): CashSessionSummar
 describe('CashSessionDialog (local-first)', () => {
   let fixture: ComponentFixture<CashSessionDialog>;
   let component: CashSessionDialog;
-  let openLocal: (userId: string, label: string | undefined, amount: number) => Observable<CashSession>;
+  let openLocal: (
+    userId: string,
+    label: string | undefined,
+    amount: number,
+    opening?: OpeningCountInput,
+  ) => Observable<CashSession>;
   let closeLocal: (id: string, counted: number, closedBy: string, closedByLabel?: string) => Observable<CashSession>;
   let syncAfterShiftClose: ReturnType<typeof vi.fn>;
   let syncAfterShiftCloseAsync: ReturnType<typeof vi.fn>;
@@ -133,7 +146,12 @@ describe('CashSessionDialog (local-first)', () => {
           // Envueltos en cierres: cada prueba puede reemplazar el doble antes de
           // llamar al componente sin volver a construir el TestBed.
           useValue: {
-            openLocal: (userId: string, label: string | undefined, amount: number) => openLocal(userId, label, amount),
+            openLocal: (
+              userId: string,
+              label: string | undefined,
+              amount: number,
+              opening?: OpeningCountInput,
+            ) => openLocal(userId, label, amount, opening),
             closeLocal: (id: string, counted: number, closedBy: string, closedByLabel?: string) =>
               closeLocal(id, counted, closedBy, closedByLabel),
             liveSummary: () => liveSummary(),
@@ -195,9 +213,9 @@ describe('CashSessionDialog (local-first)', () => {
   describe('apertura', () => {
     beforeEach(() => build(null));
 
-    it('sin turno el diálogo abre en modo apertura', () => {
+    it('sin turno el diálogo abre en modo apertura, con el contado vacío', () => {
       expect(component.mode()).toBe('open');
-      expect(component.openingAmount()).toBe(0);
+      expect(component.openingCounted()).toBeNull();
     });
 
     /**
@@ -231,48 +249,120 @@ describe('CashSessionDialog (local-first)', () => {
     });
 
     /**
-     * El dinero no desaparece al cerrar el turno: sigue en el cajón. El fondo es
-     * el de ese cierre, no algo que se teclea.
+     * SPEC 63: el fondo heredado es la referencia; el fondo del turno es lo que
+     * el cajero cuenta. Si no coincide, explica la diferencia y queda registrada
+     * en vez de cargarse a su corte.
      */
-    describe('fondo tomado del cierre anterior', () => {
-      it('muestra el monto heredado y abre con él, sin campo editable', async () => {
+    describe('arqueo del fondo heredado', () => {
+      it('muestra el fondo del cierre anterior como referencia y pide el contado vacío', async () => {
         cashOnHand = () => of(detalle(780));
         await build(null);
 
-        expect(host().querySelector('input')).toBeNull();
-        expect(host().querySelector('#openingAmount')?.textContent).toContain('780.00');
-
-        component.confirmOpen();
-        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 780);
+        expect(host().querySelector('#inheritedFloat')?.textContent).toContain('780.00');
+        const campo = host().querySelector<HTMLInputElement>('#openingCounted');
+        expect(campo).not.toBeNull();
+        expect(campo!.value).toBe('');
+        expect(host().querySelector('label[for="openingCounted"]')?.textContent).toContain(
+          'Efectivo contado',
+        );
       });
 
-      it('sin cierres previos abre en $0.00, sin inventar un fondo', async () => {
+      it('sin capturar el contado el botón no se habilita', async () => {
+        cashOnHand = () => of(detalle(780));
+        await build(null);
+
+        expect(component.canOpen()).toBe(false);
+        expect(boton('cut-open')!.disabled).toBe(true);
+        component.confirmOpen();
+        expect(openLocal).not.toHaveBeenCalled();
+      });
+
+      it('contado igual a lo heredado: abre sin nota y con el contado como fondo', async () => {
+        cashOnHand = () => of(detalle(780));
+        await build(null);
+
+        component.setOpeningCounted(780);
+        fixture.detectChanges();
+
+        expect(component.needsOpeningNote()).toBe(false);
+        expect(host().querySelector('[data-testid="cut-open-note"]')).toBeNull();
+        expect(boton('cut-open')!.disabled).toBe(false);
+        boton('cut-open')!.click();
+        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 780, {
+          counted: true,
+          inheritedFloat: 780,
+          openingNote: null,
+        });
+      });
+
+      it('si difiere pide nota: sin ella no abre, con ella manda contado, heredado y nota', async () => {
+        cashOnHand = () => of(detalle(780));
+        await build(null);
+
+        component.setOpeningCounted(700);
+        fixture.detectChanges();
+
+        expect(component.openingDifference()).toBe(-80);
+        expect(host().querySelector('[data-testid="cut-open-difference"]')?.textContent).toContain(
+          '-80.00',
+        );
+        expect(host().querySelector('[data-testid="cut-open-note"]')).not.toBeNull();
+        expect(boton('cut-open')!.disabled).toBe(true);
+        component.confirmOpen();
+        expect(openLocal).not.toHaveBeenCalled();
+
+        const nota = host().querySelector<HTMLTextAreaElement>('[data-testid="cut-open-note"]')!;
+        nota.value = 'Faltan 80 del turno de la noche';
+        nota.dispatchEvent(new Event('input'));
+        fixture.detectChanges();
+
+        expect(boton('cut-open')!.disabled).toBe(false);
+        boton('cut-open')!.click();
+        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 700, {
+          counted: true,
+          inheritedFloat: 780,
+          openingNote: 'Faltan 80 del turno de la noche',
+        });
+      });
+
+      it('primer turno de la caja: sin heredado se captura el fondo, sin diferencia ni nota', async () => {
         cashOnHand = () => of(detalle(0, null));
         await build(null);
 
         expect(component.hasPreviousClose()).toBe(false);
-        expect(component.openingAmount()).toBe(0);
+        expect(component.hasInherited()).toBe(false);
+        expect(host().querySelector('#inheritedFloat')).toBeNull();
+
+        component.setOpeningCounted(300);
+        expect(component.needsOpeningNote()).toBe(false);
+        component.confirmOpen();
+        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 300, {
+          counted: true,
+          inheritedFloat: null,
+          openingNote: null,
+        });
       });
 
       /**
        * El saldo heredado queda en rojo si se retiró más efectivo del que había.
-       * Recortarlo a cero no hacía aparecer el dinero: abría el turno con un
-       * fondo falso y el faltante reaparecía en el arqueo del cierre siguiente,
-       * sin que nadie pudiera explicarlo.
+       * Se muestra tal cual y la diferencia contra lo contado lo refleja.
        */
-      it('un saldo heredado en rojo se usa tal cual, no se recorta a cero', async () => {
+      it('un heredado en rojo se compara tal cual, no se recorta a cero', async () => {
         cashOnHand = () => of(detalle(-150));
         await build(null);
 
-        component.confirmOpen();
-        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', -150);
+        component.setOpeningCounted(0);
+        expect(component.openingDifference()).toBe(150);
+        expect(component.needsOpeningNote()).toBe(true);
       });
 
-      it('si la lectura falla no abre en $0.00 y deja reintentar', async () => {
+      it('si la lectura falla no abre y deja reintentar', async () => {
         cashOnHand = () => throwError(() => new Error('SQLite ocupada'));
         await build(null);
+        component.setOpeningCounted(780);
 
         expect(component.canOpen()).toBe(false);
+        fixture.detectChanges();
         expect(boton('cut-open')!.disabled).toBe(true);
         component.confirmOpen();
         expect(openLocal).not.toHaveBeenCalled();
@@ -283,13 +373,14 @@ describe('CashSessionDialog (local-first)', () => {
         await fixture.whenStable();
 
         component.confirmOpen();
-        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 780);
+        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 780, expect.anything());
       });
 
-      it('mientras carga no se puede abrir: aún no hay monto real', async () => {
+      it('mientras carga el heredado no se puede abrir', async () => {
         const enVuelo = new Subject<CashOnHand>();
         cashOnHand = () => enVuelo.asObservable();
         await build(null);
+        component.setOpeningCounted(780);
 
         component.confirmOpen();
         expect(openLocal).not.toHaveBeenCalled();
@@ -297,7 +388,17 @@ describe('CashSessionDialog (local-first)', () => {
         enVuelo.next(detalle(780));
         enVuelo.complete();
         component.confirmOpen();
-        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 780);
+        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 780, expect.anything());
+      });
+
+      it('borrar el contado vuelve a deshabilitar el botón', async () => {
+        cashOnHand = () => of(detalle(780));
+        await build(null);
+
+        component.setOpeningCounted(780);
+        expect(component.canOpen()).toBe(true);
+        component.setOpeningCounted(null);
+        expect(component.canOpen()).toBe(false);
       });
 
       it('el modo cierre no consulta el efectivo heredado: ese turno ya tiene fondo', async () => {
@@ -311,10 +412,60 @@ describe('CashSessionDialog (local-first)', () => {
 
     it('un fallo al abrir se avisa y deja reintentar', () => {
       openLocal = vi.fn(() => throwError(() => new Error('500')));
+      component.setOpeningCounted(0);
       component.confirmOpen();
 
       expect(notifyError).toHaveBeenCalled();
       expect(component.submitting()).toBe(false);
+    });
+  });
+
+  /** SPEC 65: con más de 2 h de desfase no se abre ni se cierra turno. */
+  describe('reloj desfasado', () => {
+    function desfasar(ms: number): void {
+      const clock = TestBed.inject(ClockSkewService);
+      const ahora = Date.now();
+      clock.record(new Date(ahora + ms).toUTCString(), ahora, ahora);
+      fixture.detectChanges();
+    }
+
+    it('con 10 min de desfase se abre normalmente', async () => {
+      cashOnHand = () => of(detalle(780));
+      await build(null);
+      desfasar(10 * 60_000);
+      component.setOpeningCounted(780);
+
+      expect(component.clockBlocked()).toBe(false);
+      expect(component.canOpen()).toBe(true);
+    });
+
+    it('con 3 h de desfase bloquea la apertura y pide corregir el reloj con la hora del servidor', async () => {
+      cashOnHand = () => of(detalle(780));
+      await build(null);
+      desfasar(3 * 3_600_000);
+      component.setOpeningCounted(780);
+      fixture.detectChanges();
+
+      expect(component.clockBlocked()).toBe(true);
+      expect(component.canOpen()).toBe(false);
+      expect(boton('cut-open')!.disabled).toBe(true);
+      const aviso = host().querySelector('[data-testid="cut-clock-blocked"]');
+      expect(aviso?.textContent).toContain('180 min');
+      expect(aviso?.textContent).toContain(component.serverTimeLabel());
+      component.confirmOpen();
+      expect(openLocal).not.toHaveBeenCalled();
+    });
+
+    it('con 3 h de desfase tampoco se cierra el turno', async () => {
+      await build(session);
+      desfasar(-3 * 3_600_000);
+
+      expect(boton('cut-close')!.disabled).toBe(true);
+      expect(host().querySelector('[data-testid="cut-clock-blocked"]')).not.toBeNull();
+      component.requestClose();
+      component.confirmClose();
+      await esperarSubida();
+      expect(closeLocal).not.toHaveBeenCalled();
     });
   });
 
@@ -702,11 +853,11 @@ describe('CashSessionDialog (local-first)', () => {
     describe('apertura', () => {
       beforeEach(() => build(null));
 
-      it('el campo del fondo tiene etiqueta asociada', () => {
-        expect(host().querySelector('label[for="openingAmount"]')?.textContent).toContain(
-          'Monto inicial en caja',
+      it('el campo del contado tiene etiqueta asociada', () => {
+        expect(host().querySelector('label[for="openingCounted"]')?.textContent).toContain(
+          'Efectivo contado',
         );
-        expect(host().querySelector('#openingAmount')).not.toBeNull();
+        expect(host().querySelector('#openingCounted')).not.toBeNull();
       });
 
       it('sin permiso de salirse no ofrece el botón de "ahora no"', () => {
@@ -723,14 +874,18 @@ describe('CashSessionDialog (local-first)', () => {
       });
 
       it('el clic en "abrir turno" abre el turno de verdad', () => {
+        component.setOpeningCounted(0);
+        fixture.detectChanges();
         boton('cut-open')!.click();
 
-        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 0);
+        expect(openLocal).toHaveBeenCalledWith('u1', 'cajero@test.com', 0, expect.anything());
       });
 
       it('un doble clic no abre dos turnos', () => {
         const enVuelo = new Subject<CashSession>();
         openLocal = vi.fn(() => enVuelo.asObservable());
+        component.setOpeningCounted(0);
+        fixture.detectChanges();
 
         boton('cut-open')!.click();
         boton('cut-open')!.click();
@@ -743,6 +898,8 @@ describe('CashSessionDialog (local-first)', () => {
       it('mientras se abre, el botón queda deshabilitado en el DOM', async () => {
         const enVuelo = new Subject<CashSession>();
         openLocal = vi.fn(() => enVuelo.asObservable());
+        component.setOpeningCounted(0);
+        fixture.detectChanges();
 
         boton('cut-open')!.click();
         fixture.detectChanges();

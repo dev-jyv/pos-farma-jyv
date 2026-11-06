@@ -18,6 +18,12 @@ export interface StoredCart {
   manualDiscounts: Record<string, number>;
   /** Código del cupón aplicado (SPEC 47); se revalida al recuperar el ticket. */
   couponCode: string | null;
+  /**
+   * Llave de idempotencia del último cobro abierto para este ticket (SPEC 66).
+   * Si al recuperar el borrador ya hay una venta local con ella, el ticket ya
+   * se cobró (la luz se fue entre el cobro y el borrado) y no se restaura.
+   */
+  idempotencyKey: string | null;
   savedAt: Date;
 }
 
@@ -31,6 +37,8 @@ interface StoredCartDto {
   manualDiscounts: Record<string, number>;
   /** Ausente en tickets guardados antes de los cupones. */
   couponCode?: string | null;
+  /** Ausente si nunca se abrió el cobro (o en tickets anteriores a SPEC 66). */
+  idempotencyKey?: string | null;
   savedAt: string;
 }
 
@@ -63,6 +71,8 @@ export class CartStorageService {
         lines,
         manualDiscounts: parsed.manualDiscounts ?? {},
         couponCode: typeof parsed.couponCode === 'string' && parsed.couponCode ? parsed.couponCode : null,
+        idempotencyKey:
+          typeof parsed.idempotencyKey === 'string' && parsed.idempotencyKey ? parsed.idempotencyKey : null,
         savedAt: new Date(parsed.savedAt),
       };
     } catch {
@@ -76,6 +86,7 @@ export class CartStorageService {
     lines: CartLine[],
     manualDiscounts: Record<string, number>,
     couponCode: string | null = null,
+    idempotencyKey: string | null = null,
   ): void {
     if (!uid) {
       return;
@@ -88,6 +99,7 @@ export class CartStorageService {
       lines,
       manualDiscounts,
       ...(couponCode ? { couponCode } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
       savedAt: new Date().toISOString(),
     };
     /**

@@ -118,7 +118,7 @@ describe('AutoPushService', () => {
       expect(flush).toHaveBeenCalledTimes(calls);
     }
 
-    // Tras el último intento sin avance: pausa. El tiempo solo no la despierta.
+    // Tras el último intento sin avance: pausa, sin reintentos mientras dura.
     await vi.advanceTimersByTimeAsync(AUTO_PUSH_PAUSE_MS - 60_000);
     expect(flush).toHaveBeenCalledTimes(calls);
 
@@ -127,9 +127,83 @@ describe('AutoPushService', () => {
     await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
     expect(flush).toHaveBeenCalledTimes(calls + 1);
 
-    // No avanzó: sigue en pausa, sin reintentos nuevos.
-    await vi.advanceTimersByTimeAsync(AUTO_PUSH_PAUSE_MS);
+    // No avanzó: sigue en pausa, sin reintentos nuevos hasta que termine.
+    await vi.advanceTimersByTimeAsync(60_000 - AUTO_PUSH_DEBOUNCE_MS - 1);
     expect(flush).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  describe('fin de la pausa (SPEC 66)', () => {
+    /** Lleva el servicio hasta la pausa: 5 intentos seguidos sin avance. */
+    async function hastaLaPausa(): Promise<number> {
+      pending = 2;
+      flush.mockImplementation(async () => undefined);
+      service.notifyChange();
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+      for (const wait of AUTO_PUSH_BACKOFF_MS.slice(0, AUTO_PUSH_MAX_FAILURES - 1)) {
+        await vi.advanceTimersByTimeAsync(wait);
+      }
+      expect(flush).toHaveBeenCalledTimes(AUTO_PUSH_MAX_FAILURES);
+      return AUTO_PUSH_MAX_FAILURES;
+    }
+
+    it('tras la pausa, el auto-push vuelve a enviar sin intervención', async () => {
+      const enPausa = await hastaLaPausa();
+
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_PAUSE_MS - 1);
+      expect(flush).toHaveBeenCalledTimes(enPausa);
+
+      // Termina la pausa: se rearma solo y sale tras el debounce.
+      flush.mockImplementation(async () => {
+        pending = 0;
+      });
+      await vi.advanceTimersByTimeAsync(1 + AUTO_PUSH_DEBOUNCE_MS);
+      expect(flush).toHaveBeenCalledTimes(enPausa + 1);
+      expect(pending).toBe(0);
+    });
+
+    it('un cambio sin avance dentro de la pausa no se come el rearme del final', async () => {
+      const enPausa = await hastaLaPausa();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      service.notifyChange();
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+      expect(flush).toHaveBeenCalledTimes(enPausa + 1);
+
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_PAUSE_MS - 60_000 - AUTO_PUSH_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+      expect(flush).toHaveBeenCalledTimes(enPausa + 2);
+    });
+
+    it('si la pausa termina sin red, se rearma cuando vuelve online', async () => {
+      const enPausa = await hastaLaPausa();
+
+      online = false;
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_PAUSE_MS + AUTO_PUSH_DEBOUNCE_MS);
+      expect(flush).toHaveBeenCalledTimes(enPausa);
+
+      online = true;
+      window.dispatchEvent(new Event('online'));
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+      expect(flush).toHaveBeenCalledTimes(enPausa + 1);
+    });
+
+    it('un avance antes del final cancela el rearme pendiente de la pausa', async () => {
+      const enPausa = await hastaLaPausa();
+
+      // Avanza: sale de la pausa y vacía la cola.
+      flush.mockImplementation(async () => {
+        pending = 0;
+      });
+      service.notifyChange();
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+      expect(flush).toHaveBeenCalledTimes(enPausa + 1);
+
+      // Más tarde hay algo nuevo en cola, pero nadie lo avisó: el temporizador
+      // de la pausa ya no existe y no dispara un envío fantasma.
+      pending = 1;
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_PAUSE_MS + AUTO_PUSH_DEBOUNCE_MS);
+      expect(flush).toHaveBeenCalledTimes(enPausa + 1);
+    });
   });
 
   it('un cambio nuevo durante el backoff no espera al backoff: sube tras el debounce', async () => {
@@ -192,6 +266,45 @@ describe('AutoPushService', () => {
     service.notifyChange();
     await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS + 100);
     expect(flush).not.toHaveBeenCalled();
+  });
+
+  describe('lote diferido por el servidor (SPEC 48)', () => {
+    let deferred: number;
+
+    beforeEach(() => {
+      deferred = 0;
+      flusher.deferredCount = () => deferred;
+      // El servidor difiere todo: nada avanza, pero no es un rechazo.
+      flush.mockImplementation(async () => {
+        deferred += 1;
+      });
+    });
+
+    it('un envío diferido sin avance no cuenta como intento fallido ni lleva a la pausa', async () => {
+      pending = 3;
+      service.notifyChange();
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+      expect(flush).toHaveBeenCalledTimes(1);
+
+      // Muchos más envíos que el tope de fallos: si contaran, ya estaría en pausa
+      // y la espera crecería. Con DEFERRED se reintenta siempre al primer escalón.
+      for (let intento = 2; intento <= AUTO_PUSH_MAX_FAILURES + 3; intento += 1) {
+        await vi.advanceTimersByTimeAsync(AUTO_PUSH_BACKOFF_MS[0] + 500);
+        expect(flush).toHaveBeenCalledTimes(intento);
+      }
+    });
+
+    it('un fallo real sin DEFERRED sí escala la espera', async () => {
+      flush.mockImplementation(async () => undefined);
+      pending = 3;
+      service.notifyChange();
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_BACKOFF_MS[0] + 500);
+      expect(flush).toHaveBeenCalledTimes(2);
+      // Segundo escalón: con la espera del primero todavía no sale.
+      await vi.advanceTimersByTimeAsync(AUTO_PUSH_BACKOFF_MS[0] + 500);
+      expect(flush).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('el contrato solo permite subir: no existe ningún pull en la interfaz', () => {

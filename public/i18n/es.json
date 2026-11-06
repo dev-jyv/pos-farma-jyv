@@ -241,7 +241,9 @@
   "shell": {
     "banner": {
       "offline": "Sin conexión a internet — las ventas se guardarán y sincronizarán al reconectar",
-      "apiDown": "El servidor no responde — operando en modo degradado"
+      "apiDown": "El servidor no responde — operando en modo degradado",
+      "clockSkew": "El reloj de esta caja está desfasado {{minutes}} min",
+      "clockUnverified": "Reloj sin verificar"
     }
   },
   "reports": {
@@ -353,7 +355,27 @@
       "sale": "Cobrada por",
       "void": "Anulada por"
     },
-    "unreconciled": "No conciliada"
+    "unreconciled": "No conciliada",
+    "review": {
+      "stock": "Revisión: faltante de stock",
+      "late": "Revisión: cobrada con turno cerrado",
+      "catalog": "Revisión: producto inactivo"
+    },
+    "voidRejected": "Anulación rechazada en el servidor",
+    "voidDialog": {
+      "title": "Anular venta",
+      "description": "El stock se repone y la venta queda anulada también en el servidor. El motivo queda en la bitácora.",
+      "reasonLabel": "Motivo de la anulación",
+      "placeholder": "Escribe el motivo o agrega un detalle…",
+      "hint": "Obligatorio, mínimo 5 caracteres.",
+      "cancel": "Cancelar",
+      "options": {
+        "typo": "Error de captura",
+        "desisted": "Cliente desistió",
+        "wrongProduct": "Producto equivocado",
+        "other": "Otro"
+      }
+    }
   },
   "payment": {
     "cash": "Efectivo",
@@ -365,11 +387,10 @@
     "title": "Corte de caja",
     "print": "Imprimir corte",
     "openTitle": "Abrir turno de caja",
-    "openHint": "Revisa el efectivo que quedó en caja antes de vender",
+    "openHint": "Cuenta el efectivo del cajón antes de vender",
     "closeTitle": "Cerrar turno de caja",
     "closeHint": "Revisa el desglose y cuenta el efectivo",
     "resultHint": "Turno cerrado — puedes imprimir el corte",
-    "openingAmount": "Monto inicial en caja",
     "loading": "Cargando resumen…",
     "sales": "Ventas",
     "voided": "Anuladas",
@@ -419,14 +440,15 @@
       "filterAll": "Todos",
       "filterPending": "Pendientes",
       "filterApproved": "Aprobados",
-      "filterRejected": "Rechazados"
+      "filterRejected": "Rechazados",
+      "filterAutoClosed": "Autocerrados",
+      "openingDifference": "Diferencia al abrir",
+      "followingOpeningDifference": "El turno siguiente encontró"
     },
     "logoutPromptTitle": "Turno de caja abierto",
     "logoutPromptBody": "Tienes un turno de caja abierto. Si sales sin cerrarlo, podrás retomarlo hoy; al cambiar el día se cerrará solo con el efectivo que hubiera hasta ese momento.",
     "logoutCloseShift": "Cerrar turno antes de salir",
     "logoutKeepShift": "Salir sin cerrar turno",
-    "cashOnHandHint": "Efectivo con el que cerró el turno anterior, más los movimientos de caja posteriores.",
-    "cashOnHandNoClose": "Este equipo no tiene cierres previos; el turno abre sin fondo.",
     "cashOnHandError": "No se pudo leer el efectivo del último cierre.",
     "retry": "Reintentar",
     "openLater": "Ahora no",
@@ -447,7 +469,16 @@
     "syncingPre": "Sincronizando antes del corte…",
     "syncingPreHint": "Se están enviando gastos, ventas, productos nuevos y entradas con el turno aún abierto. No cierres esta ventana.",
     "settlingStale": "Cerrando el turno anterior…",
-    "settlingStaleHint": "Se están enviando los movimientos y las ventas del turno que quedó abierto, y después su cierre. No cierres esta ventana."
+    "settlingStaleHint": "Se están enviando los movimientos y las ventas del turno que quedó abierto, y después su cierre. No cierres esta ventana.",
+    "inheritedFloat": "Fondo del cierre anterior",
+    "inheritedFloatHint": "Es lo que dejó el turno anterior. Cuenta el efectivo del cajón y captúralo.",
+    "openingCounted": "Efectivo contado",
+    "openingCountedNoClose": "Este equipo no tiene cierres previos: captura el efectivo con el que abres.",
+    "openingDifference": "Diferencia contra el cierre anterior",
+    "openingNote": "Nota de la diferencia",
+    "openingNoteHint": "El contado no coincide con lo que dejó el turno anterior. Explica la diferencia: quedará registrada y no se cargará a tu corte.",
+    "clockBlockedOpen": "El reloj de esta caja está desfasado {{minutes}} min. Corrige la fecha y hora del equipo antes de abrir el turno (hora del servidor: {{serverTime}}).",
+    "clockBlockedClose": "El reloj de esta caja está desfasado {{minutes}} min. Corrige la fecha y hora del equipo antes de cerrar el turno (hora del servidor: {{serverTime}})."
   },
   "checkout": {
     "activatePdv": "Activar PDV"

@@ -26,6 +26,8 @@ import { SaleService } from '../../features/pos/services/sale.service';
 import { SyncScheduler } from '../sync/sync-scheduler.service';
 import { environment } from '../../../environments/environment';
 import { NAV_ITEMS, NavItem } from './nav.config';
+import { ReasonDialog } from '../../shared/ui/reason-dialog/reason-dialog';
+import { ClockSkewService } from '../time/clock-skew.service';
 
 @Component({
   selector: 'app-shell',
@@ -42,6 +44,7 @@ import { NAV_ITEMS, NavItem } from './nav.config';
     ProgressSpinnerModule,
     TooltipModule,
     CashSessionDialog,
+    ReasonDialog,
   ],
   templateUrl: './shell.html',
   host: {
@@ -240,6 +243,53 @@ export class Shell {
     return this.blockedSync.canDiscard(record);
   }
 
+  canRetryBlocked(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.canRetry(record);
+  }
+
+  /** Anulación rechazada vista por un cajero: solo un admin la resuelve (SPEC 62). */
+  needsAdminBlocked(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.needsAdmin(record);
+  }
+
+  askAdmin(record: BlockedSyncRecord): void {
+    this.notifications.warn(
+      'Pide a un administrador que entre en esta caja y pulse Reintentar en este registro: ' +
+        'con su sesión la anulación se vuelve a enviar al servidor.',
+      `${record.label}: necesita a un administrador`,
+    );
+  }
+
+  /** Venta que se va a descartar: espera el motivo (SPEC 62). */
+  readonly discardTarget = signal<BlockedSyncRecord | null>(null);
+  readonly discarding = signal(false);
+
+  cancelDiscard(): void {
+    if (!this.discarding()) {
+      this.discardTarget.set(null);
+    }
+  }
+
+  async confirmDiscard(reason: string): Promise<void> {
+    const record = this.discardTarget();
+    if (!record || this.discarding()) {
+      return;
+    }
+    this.discarding.set(true);
+    try {
+      await this.blockedSync.discard(record, reason);
+      this.discardTarget.set(null);
+      this.notifications.success('Venta descartada; el motivo quedó en la bitácora.');
+    } catch (error: unknown) {
+      this.notifications.error(
+        error instanceof Error ? error.message : 'No se pudo descartar el registro.',
+      );
+    } finally {
+      this.discarding.set(false);
+    }
+    this.closeBlockedIfEmpty();
+  }
+
   /** Abre el gasto o el producto en su pantalla, ya cargado para corregirlo. */
   fixBlocked(record: BlockedSyncRecord): void {
     this.blockedDialogVisible.set(false);
@@ -255,6 +305,12 @@ export class Shell {
    * el registro, no con un "¿estás seguro?" genérico.
    */
   async discardBlocked(record: BlockedSyncRecord): Promise<void> {
+    if (this.blockedSync.needsDiscardReason(record)) {
+      // Una venta se descarta con motivo (SPEC 62): el diálogo explica la
+      // consecuencia y no deja confirmar sin él.
+      this.discardTarget.set(record);
+      return;
+    }
     const consecuencia =
       record.kind === 'stockEntry'
         ? 'Se borra de este equipo, nunca llegará al servidor y se descuentan esas piezas del stock de esta caja.'
@@ -365,6 +421,15 @@ export class Shell {
   readonly isAdmin = this.authService.isAdmin;
   readonly browserOnline = this.health.browserOnline;
   readonly degraded = this.health.degraded;
+  /**
+   * Reloj de la caja contra el del servidor (SPEC 65). Más de 5 min de desfase
+   * se avisa en la barra; sin medición (sin red desde el arranque) la barra de
+   * "sin red" lo dice: la caja va con su reloj sin verificar.
+   */
+  private readonly clock = inject(ClockSkewService);
+  readonly clockWarning = this.clock.warning;
+  readonly clockMeasured = this.clock.measured;
+  readonly clockSkewMinutes = this.clock.skewMinutes;
   readonly appVersion = environment.version;
   /**
    * `environment.isElectron` solo cambia con `ng build --configuration electron`;

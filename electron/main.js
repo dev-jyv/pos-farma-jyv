@@ -524,8 +524,8 @@ function registrarIPCHandlers() {
     salesDb.getPendingPush(await getPrisma(), filters));
   ipcMain.handle('sales:listBlocked', async (_event, filters) =>
     salesDb.listBlocked(await getPrisma(), filters));
-  ipcMain.handle('sales:markSynced', async (_event, localId, remoteId, remoteFolio) =>
-    salesDb.markSynced(await getPrisma(), localId, remoteId, remoteFolio));
+  ipcMain.handle('sales:markSynced', async (_event, localId, remoteId, remoteFolio, review) =>
+    salesDb.markSynced(await getPrisma(), localId, remoteId, remoteFolio, review));
   ipcMain.handle('sales:markUnreconciled', async (_event, localId, reason) =>
     salesDb.markUnreconciled(await getPrisma(), localId, reason),
   );
@@ -545,7 +545,17 @@ function registrarIPCHandlers() {
     salesDb.voidLocal(await getPrisma(), localId, voidedBy, voidedByLabel, reason));
   ipcMain.handle('sales:clearPushError', async (_event, localId) =>
     salesDb.clearPushError(await getPrisma(), localId));
-  ipcMain.handle('sales:discard', async (_event, localId) => salesDb.discard(await getPrisma(), localId));
+  ipcMain.handle('sales:discard', async (_event, localId, options) =>
+    salesDb.discard(await getPrisma(), localId, options));
+  ipcMain.handle('sales:getByIdempotencyKey', async (_event, idempotencyKey) =>
+    salesDb.getByIdempotencyKey(await getPrisma(), idempotencyKey));
+  ipcMain.handle('sales:markVoidFailed', async (_event, localId, message) => {
+    const prisma = await getPrisma();
+    await salesDb.markVoidFailed(prisma, localId, message);
+    await bitacoraFallo(prisma, 'sale', localId, `Anulación rechazada por el servidor: ${message}`);
+  });
+  ipcMain.handle('sales:clearVoidError', async (_event, localId) =>
+    salesDb.clearVoidError(await getPrisma(), localId));
   ipcMain.handle('sales:getPendingVoided', async (_event, filters) =>
     salesDb.getPendingVoided(await getPrisma(), filters));
   ipcMain.handle('sales:getNeedingRemoteVoid', async (_event, filters) =>

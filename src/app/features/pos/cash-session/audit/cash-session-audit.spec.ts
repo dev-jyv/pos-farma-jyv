@@ -26,6 +26,9 @@ const ES = {
       status: 'Ajuste',
       filterAll: 'Todos',
       filterPending: 'Pendientes',
+      filterAutoClosed: 'Autocerrados',
+      autoClosed: 'Auto-cierre',
+      followingOpeningDifference: 'El turno siguiente encontró',
       reviewNote: 'Nota (opcional)',
       approve: 'Aprobar',
       reject: 'Rechazar',
@@ -118,6 +121,45 @@ describe('CashSessionAudit (solo admin)', () => {
   it.each(['pending', 'approved', 'rejected'] as const)('filtra por estado "%s"', (status) => {
     component.onStatusChange(status);
     expect(listAudit).toHaveBeenLastCalledWith({ adjustmentStatus: status, page: 1, limit: 50 });
+  });
+
+  /** SPEC 63: los autocerrados (nadie los arqueó) se listan aparte para revisarlos. */
+  describe('filtro "Autocerrados"', () => {
+    it('se ofrece en el filtro', () => {
+      expect(component.statusOptions().map((option) => option.value)).toContain('autoClosed');
+    });
+
+    it('pide al servidor los marcados para revisión, sin estado de ajuste', () => {
+      component.onStatusChange('autoClosed');
+      expect(listAudit).toHaveBeenLastCalledWith({ needsReview: true, page: 1, limit: 50 });
+    });
+
+    it('pinta el autocierre y la diferencia que encontró el turno siguiente', async () => {
+      listAudit.mockReturnValue(
+        of({
+          items: [
+            session({
+              autoClosedByExpiry: true,
+              autoClosed: true,
+              needsReview: true,
+              hasPendingAdjustment: false,
+              adjustmentStatus: null,
+              cashDifference: 0,
+              followingOpeningDifference: -80,
+            }),
+          ],
+          meta: { page: 1, limit: 50, total: 1, totalPages: 1 },
+        }),
+      );
+      component.onStatusChange('autoClosed');
+      fixture.detectChanges();
+
+      const host = fixture.nativeElement as HTMLElement;
+      expect(host.querySelector('tbody tr')?.textContent).toContain('Auto-cierre');
+      expect(
+        host.querySelector('[data-testid="audit-following-difference"]')?.textContent,
+      ).toContain('-80.00');
+    });
   });
 
   describe('datos del corte', () => {

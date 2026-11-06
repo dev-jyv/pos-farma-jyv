@@ -40,7 +40,9 @@
   "shell": {
     "banner": {
       "offline": "No internet connection — sales will be saved and synced on reconnect",
-      "apiDown": "The server is not responding — running in degraded mode"
+      "apiDown": "The server is not responding — running in degraded mode",
+      "clockSkew": "This register's clock is off by {{minutes}} min",
+      "clockUnverified": "Clock not verified"
     }
   },
   "reports": {
@@ -152,7 +154,27 @@
       "sale": "Charged by",
       "void": "Voided by"
     },
-    "unreconciled": "Unreconciled"
+    "unreconciled": "Unreconciled",
+    "review": {
+      "stock": "Review: stock shortfall",
+      "late": "Review: charged after shift close",
+      "catalog": "Review: inactive product"
+    },
+    "voidRejected": "Void rejected by the server",
+    "voidDialog": {
+      "title": "Void sale",
+      "description": "Stock is restored and the sale is voided on the server too. The reason is logged.",
+      "reasonLabel": "Void reason",
+      "placeholder": "Type the reason or add a detail…",
+      "hint": "Required, at least 5 characters.",
+      "cancel": "Cancel",
+      "options": {
+        "typo": "Entry error",
+        "desisted": "Customer changed their mind",
+        "wrongProduct": "Wrong product",
+        "other": "Other"
+      }
+    }
   },
   "payment": {
     "cash": "Cash",
@@ -164,11 +186,10 @@
     "title": "Cash cut",
     "print": "Print cut",
     "openTitle": "Open cash shift",
-    "openHint": "Check the cash left in the drawer before selling",
+    "openHint": "Count the cash in the drawer before selling",
     "closeTitle": "Close cash shift",
     "closeHint": "Review the breakdown and count the cash",
     "resultHint": "Shift closed — you can print the cut",
-    "openingAmount": "Opening cash amount",
     "loading": "Loading summary…",
     "sales": "Sales",
     "voided": "Voided",
@@ -218,14 +239,15 @@
       "filterAll": "All",
       "filterPending": "Pending",
       "filterApproved": "Approved",
-      "filterRejected": "Rejected"
+      "filterRejected": "Rejected",
+      "filterAutoClosed": "Auto-closed",
+      "openingDifference": "Difference at opening",
+      "followingOpeningDifference": "Next shift found"
     },
     "logoutPromptTitle": "Cash shift open",
     "logoutPromptBody": "You have an open cash shift. If you leave without closing it, you can pick it up again today; when the day changes it closes on its own with the cash on hand at that moment.",
     "logoutCloseShift": "Close shift before leaving",
     "logoutKeepShift": "Leave without closing the shift",
-    "cashOnHandHint": "Cash the previous shift closed with, plus later cash movements.",
-    "cashOnHandNoClose": "This device has no previous closes; the shift opens with no float.",
     "cashOnHandError": "Could not read the cash from the last close.",
     "retry": "Retry",
     "openLater": "Not now",
@@ -246,7 +268,16 @@
     "syncingPre": "Syncing before the cash cut…",
     "syncingPreHint": "Sending expenses, sales, new products and stock entries while the shift is still open. Do not close this window.",
     "settlingStale": "Closing the previous shift…",
-    "settlingStaleHint": "Sending the movements and sales of the shift left open, then its closing. Do not close this window."
+    "settlingStaleHint": "Sending the movements and sales of the shift left open, then its closing. Do not close this window.",
+    "inheritedFloat": "Float from the previous close",
+    "inheritedFloatHint": "This is what the previous shift left. Count the cash in the drawer and enter it.",
+    "openingCounted": "Counted cash",
+    "openingCountedNoClose": "This device has no previous closes: enter the cash you are opening with.",
+    "openingDifference": "Difference against the previous close",
+    "openingNote": "Note about the difference",
+    "openingNoteHint": "The count does not match what the previous shift left. Explain the difference: it will be recorded and not charged to your cut.",
+    "clockBlockedOpen": "This register's clock is off by {{minutes}} min. Fix the computer's date and time before opening the shift (server time: {{serverTime}}).",
+    "clockBlockedClose": "This register's clock is off by {{minutes}} min. Fix the computer's date and time before closing the shift (server time: {{serverTime}})."
   },
   "checkout": {
     "activatePdv": "Activate PDV"

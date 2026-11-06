@@ -1,6 +1,7 @@
-import { Injectable, inject, signal } from '@angular/core';
+import { Injectable, Injector, inject, signal } from '@angular/core';
 
 import { AuthService } from '../auth/auth.service';
+import { SaleService } from '../../features/pos/services/sale.service';
 import { BlockedSyncRecord } from '../electron/window.d';
 import { pushOwnerFilter } from './push-owner';
 
@@ -18,6 +19,11 @@ import { pushOwnerFilter } from './push-owner';
 @Injectable({ providedIn: 'root' })
 export class BlockedSyncService {
   private readonly auth = inject(AuthService);
+  /**
+   * `SaleService` se pide al descartar, no al construir: su constructor lee la
+   * cola de la caja y el panel no necesita eso para listar los rechazados.
+   */
+  private readonly injector = inject(Injector);
 
   readonly records = signal<BlockedSyncRecord[]>([]);
   readonly count = signal(0);
@@ -86,6 +92,10 @@ export class BlockedSyncService {
    * huérfanos. Para ese caso la salida es corregir la causa y reintentar.
    */
   canDiscard(record: BlockedSyncRecord): boolean {
+    if (record.kind === 'saleVoid') {
+      // La venta ya está en el servidor: no hay nada que descartar, hay que anularla allá.
+      return false;
+    }
     if (record.kind === 'sale') {
       // Descartar una venta cobrada la saca del efectivo esperado y del libro de
       // control sin dejar rastro: igual que en la cola normal, solo el admin.
@@ -100,17 +110,36 @@ export class BlockedSyncService {
   }
 
   /**
-   * Borra el registro **de este equipo**. Solo para lo que nunca llegó al
-   * servidor: la venta repone el stock que había descontado; el gasto solo deja
-   * de restar del efectivo esperado.
+   * Una anulación que el servidor rechazó (SPEC 62) la reintenta un **admin**,
+   * desde su sesión: el rechazo casi siempre es de permiso (turno ajeno o cerrado,
+   * anular no es del cajero) y con la sesión del cajero se volvería a rechazar.
    */
-  async discard(record: BlockedSyncRecord): Promise<void> {
+  canRetry(record: BlockedSyncRecord): boolean {
+    return record.kind !== 'saleVoid' || this.auth.isAdmin();
+  }
+
+  /** El cajero no puede resolver la anulación rechazada: "Pedir a un admin". */
+  needsAdmin(record: BlockedSyncRecord): boolean {
+    return record.kind === 'saleVoid' && !this.auth.isAdmin();
+  }
+
+  /** Descartar una venta exige motivo (SPEC 62); el resto se confirma sin él. */
+  needsDiscardReason(record: BlockedSyncRecord): boolean {
+    return record.kind === 'sale';
+  }
+
+  /**
+   * Retira el registro **de este equipo**. Solo para lo que nunca llegó al
+   * servidor: la venta repone el stock que había descontado (descarte lógico con
+   * motivo y rastro, SPEC 62); el gasto solo deja de restar del efectivo esperado.
+   */
+  async discard(record: BlockedSyncRecord, reason = ''): Promise<void> {
     const api = window.electronAPI;
     if (!api || !this.canDiscard(record)) {
       return;
     }
     if (record.kind === 'sale') {
-      await api.sales.discard(record.id);
+      await this.injector.get(SaleService).discardSale(record.id, reason);
     } else if (record.kind === 'stockEntry') {
       await api.catalog.discardStockEntry(record.id);
     } else {
@@ -131,6 +160,11 @@ export class BlockedSyncService {
     }
     if (record.kind === 'sale') {
       await api.sales.clearPushError(record.id);
+    } else if (record.kind === 'saleVoid') {
+      if (!this.canRetry(record)) {
+        return;
+      }
+      await api.sales.clearVoidError(record.id);
     } else if (record.kind === 'cashMovement') {
       await api.cashMovements.clearPushError(record.id);
     } else if (record.kind === 'stockEntry') {

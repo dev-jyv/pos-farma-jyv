@@ -167,7 +167,21 @@
       <i class="pi pi-exclamation-triangle text-xs"></i>
       <span>
         {{ (browserOnline() ? 'shell.banner.apiDown' : 'shell.banner.offline') | translate }}
+        @if (!clockMeasured()) {
+          <span data-testid="clock-unverified"> · {{ 'shell.banner.clockUnverified' | translate }}</span>
+        }
       </span>
+    </div>
+  }
+
+  @if (clockWarning()) {
+    <div
+      data-testid="clock-skew-banner"
+      class="flex shrink-0 items-center justify-center gap-2 bg-(--pos-warn) px-4 py-1.5 text-sm font-semibold text-white"
+      role="alert"
+    >
+      <i class="pi pi-clock text-xs"></i>
+      <span>{{ 'shell.banner.clockSkew' | translate: { minutes: clockSkewMinutes() } }}</span>
     </div>
   }
 
@@ -359,16 +373,29 @@
                 (onClick)="repairBlocked(record)"
               />
             }
-            <p-button
-              label="Reintentar"
-              icon="pi pi-refresh"
-              size="small"
-              [severity]="recomendado === 'reintentar' ? 'primary' : 'secondary'"
-              [outlined]="recomendado !== 'reintentar'"
-              [loading]="retryingBlockedId() === record.id"
-              [disabled]="retryingBlockedId() !== null || repairingId() !== null"
-              (onClick)="retryBlocked(record)"
-            />
+            @if (needsAdminBlocked(record)) {
+              <!-- SPEC 62: la anulación rechazada la reintenta un admin desde su sesión. -->
+              <p-button
+                label="Pedir a un admin"
+                icon="pi pi-user"
+                size="small"
+                severity="warn"
+                data-testid="blocked-ask-admin"
+                (onClick)="askAdmin(record)"
+              />
+            }
+            @if (canRetryBlocked(record)) {
+              <p-button
+                label="Reintentar"
+                icon="pi pi-refresh"
+                size="small"
+                [severity]="recomendado === 'reintentar' ? 'primary' : 'secondary'"
+                [outlined]="recomendado !== 'reintentar'"
+                [loading]="retryingBlockedId() === record.id"
+                [disabled]="retryingBlockedId() !== null || repairingId() !== null"
+                (onClick)="retryBlocked(record)"
+              />
+            }
             @if (canSendBlockedToUnreconciled(record)) {
               <p-button
                 label="Mandar a conciliación"
@@ -410,3 +437,22 @@
     }
   </ul>
 </p-dialog>
+
+<!-- Descartar una venta pide motivo (SPEC 62): queda en la caja y, si hay red, en el servidor. -->
+@if (discardTarget(); as target) {
+  <app-reason-dialog
+    [visible]="true"
+    [header]="'Descartar ' + target.label"
+    [description]="
+      'Se retira de esta caja y nunca subirá como venta; el stock se repone. Queda el rastro ' +
+      'de quién, cuándo y por qué, y se avisa al servidor como venta no conciliada.'
+    "
+    reasonLabel="Motivo del descarte"
+    placeholder="Por ejemplo: venta de prueba, ticket capturado dos veces…"
+    hint="Obligatorio, mínimo 5 caracteres."
+    confirmLabel="Descartar"
+    [busy]="discarding()"
+    (confirmed)="confirmDiscard($event)"
+    (dismissed)="cancelDiscard()"
+  />
+}

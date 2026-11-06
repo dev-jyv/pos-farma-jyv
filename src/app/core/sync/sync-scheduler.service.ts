@@ -164,6 +164,8 @@ export class SyncScheduler {
     this.autoPush.register({
       flush: () => this.flushPendingNow(),
       countPending: () => this.countPending(),
+      // SPEC 48: un lote diferido por el servidor no es un intento fallido.
+      deferredCount: () => this.saleService.deferredCount(),
     });
     this.destroyRef.onDestroy(() => {
       this.clearCooldownTimer();

@@ -7,8 +7,8 @@ import { SyncErrorCode, isSyncErrorCode } from '../../shared/models';
  * Qué hace la caja con un rechazo de sincronización (SPEC 49).
  *
  * - `retry`: se queda pendiente **sin** `pushError`; el siguiente envío la vuelve a mandar.
- * - `reconcile`: inventario remoto (stock, lote, producto). Va al camino de
- *   conciliación (`POST /sales/unreconciled`, o la aceptación con revisión de SPEC 52).
+ * - `reconcile`: el servidor no puede registrar la venta nunca (un producto que
+ *   **no existe**). Va a conciliación (`POST /sales/unreconciled`).
  * - `block`: visible en "Rechazados"; alguien tiene que leerlo y decidir.
  * - `done`: lo que se pedía ya ocurrió en el servidor (anular algo ya anulado).
  */
@@ -19,11 +19,20 @@ export type SyncErrorAction = 'retry' | 'reconcile' | 'block' | 'done';
  * (`StockEntryService`) la consultan; ningún servicio decide por su cuenta con
  * el texto del mensaje cuando el backend manda código.
  */
+/**
+ * Desde SPEC 52 el lote offline (`/sales/bulk`) **acepta** la venta con faltante
+ * de stock, con producto inactivo o con el turno ya cerrado, y la devuelve
+ * `ok: true` con su marca de revisión. Si aun así llega `STOCK_INSUFFICIENT`,
+ * `BATCH_EXPIRED` o `PRODUCT_INACTIVE` (un backend con SPEC 49 sin SPEC 52), se
+ * bloquea visible y **no** se manda a conciliación: `unreconciledSales` no
+ * descuenta ninguna partida y el inventario de todas las cajas quedaba inflado.
+ * Solo lo que el servidor jamás podrá registrar (`PRODUCT_NOT_FOUND`) concilia.
+ */
 export const SYNC_ERROR_ACTIONS: Readonly<Record<SyncErrorCode, SyncErrorAction>> = {
-  STOCK_INSUFFICIENT: 'reconcile',
-  BATCH_EXPIRED: 'reconcile',
+  STOCK_INSUFFICIENT: 'block',
+  BATCH_EXPIRED: 'block',
   PRODUCT_NOT_FOUND: 'reconcile',
-  PRODUCT_INACTIVE: 'reconcile',
+  PRODUCT_INACTIVE: 'block',
   SESSION_CLOSED: 'block',
   SESSION_FORBIDDEN: 'block',
   IDEMPOTENCY_CONFLICT: 'block',

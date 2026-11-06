@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthService } from '../auth/auth.service';
 import { PosCommand, PosDiagnosticsInput } from '../../shared/models';
 import { environment } from '../../../environments/environment';
+import { ClockSkewService } from '../time/clock-skew.service';
 import { PosDiagnosticsService } from './pos-diagnostics.service';
 import { SyncRepairService } from './sync-repair.service';
 
@@ -118,6 +119,20 @@ describe('PosDiagnosticsService', () => {
     http.expectNone(`${api}/pos/commands/cmd-3/result`);
     // Recibido + resultado de cada uno quedan en la bitácora.
     expect(append).toHaveBeenCalledWith(expect.objectContaining({ entity: 'command', ref: 'cmd-1' }));
+  });
+
+  it('manda el desfase del reloj medido (SPEC 65); sin medición lo omite', async () => {
+    const clock = TestBed.inject(ClockSkewService);
+    const ahora = Date.now();
+    clock.record(new Date(ahora + 7 * 60_000).toUTCString(), ahora, ahora);
+
+    const done = service.report();
+    await flush();
+    const post = http.expectOne(`${api}/pos/diagnostics`);
+    expect(post.request.body).toEqual({ ...snapshot, clockSkewMs: clock.skewMs() });
+    expect(Math.abs(post.request.body.clockSkewMs - 7 * 60_000)).toBeLessThan(1_500);
+    post.flush({ data: { commands: [] } });
+    await done;
   });
 
   it('ignora comandos de otro equipo', async () => {

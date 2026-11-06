@@ -1,8 +1,10 @@
+import { TestBed } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CartLine, CartProductLine, Product, PromotionDto } from '../../../shared/models';
 import { PromoService, closedPromotionFromError } from './promo.service';
+import { ClockSkewService } from '../../../core/time/clock-skew.service';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -39,7 +41,7 @@ describe('PromoService', () => {
   let service: PromoService;
 
   beforeEach(() => {
-    service = new PromoService();
+    service = TestBed.runInInjectionContext(() => new PromoService());
     service.setPromotions([promotion()]);
   });
 
@@ -95,6 +97,20 @@ describe('PromoService', () => {
       promotion({ id: 'promo-2', endsAt: new Date(Date.now() - 1000).toISOString() }),
     ]);
     expect(service.promoOnlyDiscount(line(2))).toBe(0);
+  });
+
+  it('la vigencia se mide con la hora corregida: un reloj atrasado no aplica una promo vencida (SPEC 65)', () => {
+    // La caja va 1 h atrasada: para el servidor la promo cerró hace 30 min.
+    service.setPromotions([promotion({ endsAt: new Date(Date.now() + 30 * 60_000).toISOString() })]);
+    expect((service.apply([line(2)]) as CartProductLine[])[0].promotion).not.toBeNull();
+
+    const clock = TestBed.inject(ClockSkewService);
+    const ahora = Date.now();
+    clock.record(new Date(ahora + 60 * 60_000).toUTCString(), ahora, ahora);
+
+    expect((service.apply([line(2)]) as CartProductLine[])[0].promotion ?? null).toBeNull();
+    const cobrada = { ...line(2), promotion: { id: 'promo-1', name: 'Paracetamol 2x60', discountAmount: 10 } };
+    expect(service.findClosedPromotion([cobrada])).toBe('Paracetamol 2x60');
   });
 
   it('entre varias gana la de mayor descuento, sin acumular', () => {
@@ -179,7 +195,7 @@ describe('PromoService.nextStepHint', () => {
   const a10 = (qty: number) => line(qty, { salePrice: 10 });
 
   beforeEach(() => {
-    service = new PromoService();
+    service = TestBed.runInInjectionContext(() => new PromoService());
   });
 
   it('tiered 2x$17: con 1 sugiere llevar 1 más; con 2 nada; con 3 otra vez', () => {
@@ -243,7 +259,7 @@ describe('PromoService.hasPromotion', () => {
   let service: PromoService;
 
   beforeEach(() => {
-    service = new PromoService();
+    service = TestBed.runInInjectionContext(() => new PromoService());
   });
 
   it('marca el producto con una promo vigente, por su id remoto', () => {
@@ -266,7 +282,7 @@ describe('PromoService.findClosedPromotion', () => {
   let service: PromoService;
 
   beforeEach(() => {
-    service = new PromoService();
+    service = TestBed.runInInjectionContext(() => new PromoService());
     service.setPromotions([promotion()]);
   });
 
