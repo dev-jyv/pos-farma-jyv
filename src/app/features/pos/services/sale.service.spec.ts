@@ -785,6 +785,58 @@ describe('SaleService', () => {
       });
     });
 
+    describe('deviceId en la conciliación (SPEC 53)', () => {
+      it('manda el id del equipo para que el servidor arme `<deviceId>:<localId>`', async () => {
+        vi.mocked(window.electronAPI!.getDeviceInfo).mockResolvedValue({
+          id: 'caja-1-a1b2c3',
+          hostname: 'caja-1',
+        });
+        await flushBulkWithProductNotFound();
+
+        const request = http.expectOne(`${SALES_URL}/unreconciled`);
+        expect(request.request.body).toMatchObject({ localId: 'local-1', deviceId: 'caja-1-a1b2c3' });
+        request.flush({ data: {} });
+        await flushMicrotasks();
+        expect(sales.markUnreconciled).toHaveBeenCalled();
+      });
+
+      it('sin id del equipo no manda deviceId: el servidor usa al cajero', async () => {
+        vi.mocked(window.electronAPI!.getDeviceInfo).mockRejectedValue(new Error('sin IPC'));
+        await flushBulkWithProductNotFound();
+
+        const request = http.expectOne(`${SALES_URL}/unreconciled`);
+        expect(request.request.body).not.toHaveProperty('deviceId');
+        request.flush({ data: {} });
+        await flushMicrotasks();
+      });
+
+      it('"Mandar a conciliación" del panel también lo manda', async () => {
+        vi.mocked(window.electronAPI!.getDeviceInfo).mockResolvedValue({ id: 'caja-2' });
+        (sales as Record<string, unknown>)['prepareUnreconciled'] = vi.fn().mockResolvedValue({
+          ...localSale({ id: 'local-9' }),
+          unreconciledAt: null,
+          payload: { items: [] },
+        });
+
+        const enviado = service.sendToUnreconciled('local-9', 'Turno rechazado');
+        await flushMicrotasks();
+        const request = http.expectOne(`${SALES_URL}/unreconciled`);
+        expect(request.request.body).toMatchObject({ localId: 'local-9', deviceId: 'caja-2' });
+        request.flush({ data: {} });
+        await enviado;
+        expect(sales.markUnreconciled).toHaveBeenCalledWith('local-9', 'Turno rechazado');
+      });
+
+      async function flushBulkWithProductNotFound(): Promise<void> {
+        rejectWith('');
+        await flushMicrotasks();
+        http.expectOne(`${SALES_URL}/bulk`).flush({
+          data: [{ ok: false, code: 'PRODUCT_NOT_FOUND', error: 'Producto no encontrado', retryable: false }],
+        });
+        await flushMicrotasks();
+      }
+    });
+
     describe('venta aceptada con marcas de revisión (SPEC 52)', () => {
       it('faltante de stock: se marca subida con su marca y nunca va a conciliación', async () => {
         rejectWith('');

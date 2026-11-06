@@ -435,6 +435,9 @@ export class SaleService {
   /** En el empuje en curso ya hubo un `DEFERRED`: los trozos siguientes esperan. */
   private deferredInFlush = false;
 
+  /** Petición en curso o resuelta del id del equipo (`deviceId()`). */
+  private deviceIdRequest: Promise<string | null> | null = null;
+
   /** Cuántas ventas ha diferido el servidor desde que arrancó la app. */
   deferredCount(): number {
     return this.deferredTotal;
@@ -910,15 +913,51 @@ flushQueueAsync(): Promise<void> {
     reason: string,
     payload: unknown = (item as { payload?: unknown }).payload,
   ): Observable<unknown> {
-    return this.http.post<unknown>(`${this.apiUrl}/sales/unreconciled`, {
-      localId: item.id,
-      localFolio: item.folio,
-      reason,
-      total: item.total,
-      occurredAt: new Date(item.createdAt).toISOString(),
-      ...(item.cashSessionId ? { cashSessionId: item.cashSessionId } : {}),
-      payload,
-    });
+    // `deviceId` (SPEC 53): el servidor arma el id del registro como
+    // `<deviceId>:<localId>`, así dos cajas con el mismo id local no se pisan.
+    // Sin él (fuera de Electron, o si falla) el servidor usa al cajero.
+    return from(this.deviceId()).pipe(
+      switchMap((deviceId) =>
+        this.http.post<unknown>(`${this.apiUrl}/sales/unreconciled`, {
+          localId: item.id,
+          localFolio: item.folio,
+          reason,
+          total: item.total,
+          occurredAt: new Date(item.createdAt).toISOString(),
+          ...(item.cashSessionId ? { cashSessionId: item.cashSessionId } : {}),
+          ...(deviceId ? { deviceId } : {}),
+          payload,
+        }),
+      ),
+    );
+  }
+
+  /**
+   * Id del equipo: el mismo `id` de `get-device-info` que viaja en el
+   * diagnóstico remoto (hostname + MAC). Se pide una vez; un fallo no se queda
+   * en caché, el siguiente envío lo vuelve a intentar.
+   */
+  private deviceId(): Promise<string | null> {
+    if (!this.deviceIdRequest) {
+      const request = (async () => {
+        try {
+          const info = (await window.electronAPI?.getDeviceInfo?.()) as
+            | { id?: unknown }
+            | null
+            | undefined;
+          return typeof info?.id === 'string' && info.id.trim() ? info.id : null;
+        } catch {
+          return null;
+        }
+      })();
+      this.deviceIdRequest = request;
+      void request.then((id) => {
+        if (!id && this.deviceIdRequest === request) {
+          this.deviceIdRequest = null;
+        }
+      });
+    }
+    return this.deviceIdRequest;
   }
 
   /**
