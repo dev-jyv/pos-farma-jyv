@@ -102,6 +102,12 @@ async function unsyncedProductsOf(prisma) {
     name: row.name,
     pushError: row.pushError ?? batchErrors.get(row.id) ?? null,
     catalogPushError: row.catalogPushError ?? null,
+    // Para que el panel distinga dos altas con el mismo nombre y vea cuánto
+    // stock no ha subido. El backend los acepta opcionales.
+    sku: row.sku ?? null,
+    barcode: row.barcode ?? null,
+    stock: Math.max(0, row.totalStock ?? 0),
+    createdAt: iso(row.createdAt),
   }));
 }
 

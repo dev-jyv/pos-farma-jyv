@@ -983,6 +983,11 @@ export interface PosDiagnosticsInput {
     name: string;
     pushError: string | null;
     catalogPushError: string | null;
+    sku: string | null;
+    barcode: string | null;
+    /** Existencias locales: lo que no ha subido al servidor. */
+    stock: number;
+    createdAt: string | null;
   }>;
   /** Máx. 50. */
   recentSyncRuns: Array<{
