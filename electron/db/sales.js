@@ -875,7 +875,7 @@ async function getPendingPush(prisma, { ownerUid, contarIntentos = false } = {})
     if (contarIntentos && row.payloadResolveAttempts) {
       await prisma.sale.update({ where: { id: row.id }, data: { payloadResolveAttempts: 0 } });
     }
-    pending.push({ ...toSaleDto(row), payload });
+    pending.push({ ...toSaleDto(row), payload: conAutor(payload, row.cashierId) });
   }
   return pending;
 }
@@ -913,12 +913,33 @@ async function getPendingVoided(prisma, { ownerUid } = {}) {
     }
     pending.push({
       ...toSaleDto(row),
-      payload,
+      // También sube por `/sales/bulk` (se crea y luego se anula): mismo autor.
+      payload: conAutor(payload, row.cashierId),
       voidedAt: row.voidedAt ? row.voidedAt.toISOString() : null,
       voidedBy: row.voidedBy ?? null,
     });
   }
   return pending;
+}
+
+/**
+ * Agrega `soldBy` (SPEC 54) al payload: el uid de Firebase de quien **cobró**,
+ * que es el `cashierId` con que se guardó la venta local (`auth.user().uid`).
+ * Cuando otro usuario sube la cola de esta caja, el servidor atribuye la venta
+ * al que cobró y no al que sincroniza, y la llave de idempotencia deja de
+ * depender de quien sube (un reintento por otro usuario no la duplica).
+ *
+ * Se agrega al enviar y no al cobrar para que las ventas que ya estaban en la
+ * cola también lo lleven. Un `soldBy` que ya traiga el payload se respeta; sin
+ * cajero (venta vieja sin uid) no se manda y el servidor usa al llamante.
+ */
+function conAutor(payload, cashierId) {
+  if (!payload || typeof payload !== 'object' || payload.soldBy) {
+    return payload;
+  }
+  return typeof cashierId === 'string' && cashierId.trim()
+    ? { ...payload, soldBy: cashierId }
+    : payload;
 }
 
 /**
@@ -951,7 +972,7 @@ async function prepareUnreconciled(prisma, localId) {
     // Sin fila local el id ya es remoto (misma regla que `resolvePayloadCashSession`).
     cashSessionId = session ? session.remoteId ?? null : payload.cashSessionId;
   }
-  const sinTurno = { ...(payload ?? {}), items };
+  const sinTurno = conAutor({ ...(payload ?? {}), items }, row.cashierId);
   delete sinTurno.cashSessionId;
   return {
     ...toSaleDto(row),

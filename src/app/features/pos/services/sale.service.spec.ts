@@ -1155,6 +1155,21 @@ describe('SaleService', () => {
       expect(sales.markSynced).toHaveBeenCalledTimes(210);
     });
 
+    it('manda el soldBy que trae el payload de la caja, tal cual (SPEC 54)', async () => {
+      sales.getPendingPush.mockResolvedValue([
+        localSale({ id: 'a', payload: { idempotencyKey: 'k1', soldBy: 'uid-cajera-a' } }),
+      ]);
+
+      service.flushQueue();
+      await flushMicrotasks();
+      const req = http.expectOne(BULK_URL);
+      expect((req.request.body as { items: Array<{ soldBy?: string }> }).items[0].soldBy).toBe(
+        'uid-cajera-a',
+      );
+      req.flush({ data: [{ ok: true, sale: { id: 'r-a', folio: 'V-A' } }] });
+      await flushMicrotasks();
+    });
+
     describe('lote tolerante (SPEC 48)', () => {
       it('DEFERRED queda pendiente: sin pushError, sin conciliación y sin contar intento', async () => {
         sales.getPendingPush.mockResolvedValue([

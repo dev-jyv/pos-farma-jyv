@@ -139,6 +139,13 @@ export interface CreateSalePayload {
   /** Constancia de retención de la receta; obligatoria en grupos I a III. */
   prescriptionRetained?: boolean;
   billing?: SaleBilling | null;
+  /**
+   * Uid de quien **cobró** (SPEC 54). No se llena al cobrar: lo agrega
+   * `electron/db/sales.js#conAutor` al subir, desde el `cashierId` de la venta
+   * local, para que otro usuario pueda subir la cola sin quedarse con la venta
+   * ni cambiar su llave de idempotencia.
+   */
+  soldBy?: string;
 }
 
 /** Totales del ticket más el reparto de cobro resuelto (ver `resolveTender`). */

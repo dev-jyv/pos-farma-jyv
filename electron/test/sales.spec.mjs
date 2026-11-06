@@ -612,3 +612,63 @@ describe('marcas de revisión de una venta aceptada (SPEC 52)', () => {
     expect(listada.syncReview).toEqual({ stock: null, catalog: { inactive: ['r-1'] }, late: false });
   });
 });
+
+describe('autor original al sincronizar (SPEC 54)', () => {
+  async function ventaDeOtroTurno(cashierId, payloadExtra = {}) {
+    await producto('p1', { remoteId: 'P-REMOTO' });
+    await prisma.cashSession.create({
+      data: { id: 'cs-local', openedBy: cashierId || CAJERO, remoteId: 'REMOTO-1' },
+    });
+    return createLocal(prisma, venta([partidaProducto('p1')], {
+      cashierId,
+      cashSessionId: 'cs-local',
+      payload: { items: [partidaProducto('p1')], cashSessionId: 'cs-local', ...payloadExtra },
+    }));
+  }
+
+  it('el payload que sube lleva soldBy = uid del cajero que cobró, aunque suba otro', async () => {
+    await ventaDeOtroTurno('uid-cajera-a');
+
+    // Sube un admin sin filtro de dueño: el autor sigue siendo quien cobró.
+    const [pendiente] = await getPendingPush(prisma);
+    expect(pendiente.payload.soldBy).toBe('uid-cajera-a');
+    expect(pendiente.payload.cashSessionId).toBe('REMOTO-1');
+  });
+
+  it('no pisa un soldBy que ya trae el payload', async () => {
+    await ventaDeOtroTurno('uid-cajera-a', { soldBy: 'uid-original' });
+
+    const [pendiente] = await getPendingPush(prisma);
+    expect(pendiente.payload.soldBy).toBe('uid-original');
+  });
+
+  it('venta vieja sin cajero: no manda soldBy y el servidor usa al llamante', async () => {
+    await ventaDeOtroTurno('');
+
+    const [pendiente] = await getPendingPush(prisma);
+    expect(pendiente.payload).not.toHaveProperty('soldBy');
+  });
+
+  it('la anulada que nunca subió también lleva al autor (se crea por el lote)', async () => {
+    const creada = await ventaDeOtroTurno('uid-cajera-a');
+    await voidLocal(prisma, creada.id, 'uid-admin');
+
+    const [anulada] = await sales.getPendingVoided(prisma);
+    expect(anulada.payload.soldBy).toBe('uid-cajera-a');
+  });
+
+  it('el payload para conciliación también lleva al autor', async () => {
+    const creada = await ventaDeOtroTurno('uid-cajera-a');
+
+    const preparada = await sales.prepareUnreconciled(prisma, creada.id);
+    expect(preparada.payload.soldBy).toBe('uid-cajera-a');
+  });
+
+  it('el payload guardado en la caja no cambia: soldBy se agrega solo al enviar', async () => {
+    const creada = await ventaDeOtroTurno('uid-cajera-a');
+    await getPendingPush(prisma);
+
+    const fila = await prisma.sale.findUnique({ where: { id: creada.id } });
+    expect(JSON.parse(fila.payloadJson)).not.toHaveProperty('soldBy');
+  });
+});
