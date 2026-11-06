@@ -189,7 +189,8 @@ function createModel(db, name, defaults) {
           }
           continue;
         }
-        found[key] = value;
+        // `increment`/`decrement` también en `update`, como Prisma real.
+        applyData(found, { [key]: value });
       }
       return model.attachIncludes({ ...found }, include);
     },
@@ -273,6 +274,12 @@ export function createFakePrisma() {
     remoteFolio: null,
     voidedAt: null,
     voidedBy: null,
+    voidReason: null,
+    voidError: null,
+    discardedAt: null,
+    discardedBy: null,
+    discardReason: null,
+    pushAttempts: 0,
     cashAmount: null,
     amountReceived: null,
     change: null,

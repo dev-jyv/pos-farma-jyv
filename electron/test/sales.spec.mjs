@@ -201,9 +201,9 @@ describe('anulación', () => {
     await producto('p-1', { stock: 10 });
     const creada = await createLocal(prisma, venta([partidaProducto('p-1'), partidaServicio()]));
 
-    await discard(prisma, creada.id);
+    await discard(prisma, creada.id, { discardedBy: 'uid-admin', reason: 'Venta de prueba' });
 
-    expect(prisma.sale.rows).toHaveLength(0);
+    expect(prisma.sale.rows[0].discardedAt).toBeInstanceOf(Date);
     expect(prisma.product.rows[0].totalStock).toBe(10);
   });
 });
@@ -551,5 +551,290 @@ describe('markSynced y anulación local en carrera', () => {
 
     expect(await getNeedingRemoteVoid(prisma)).toHaveLength(0);
     expect(await getPendingPush(prisma)).toHaveLength(0);
+  });
+});
+
+describe('marcas de revisión de una venta aceptada (SPEC 52)', () => {
+  async function ventaPendiente() {
+    await producto('p-1');
+    return createLocal(prisma, {
+      folio: 'PENDIENTE-1',
+      idempotencyKey: 'k-1',
+      cashierId: CAJERO,
+      total: 200,
+      items: [partidaProducto('p-1')],
+    });
+  }
+
+  it('la venta aceptada con faltante queda subida y conserva su marca para el historial', async () => {
+    const venta = await ventaPendiente();
+    await markSynced(prisma, venta.id, 'remote-1', 'F-1', {
+      stock: { items: [{ productId: 'r-1', requested: 5, allocated: 3, shortfall: 2 }] },
+      catalog: null,
+      late: false,
+    });
+
+    expect(await getPendingPush(prisma)).toHaveLength(0);
+    const [listada] = await list(prisma, {});
+    expect(listada.remoteId).toBe('remote-1');
+    expect(listada.pendingPush).toBe(false);
+    expect(listada.syncReview).toEqual({
+      stock: { items: [{ productId: 'r-1', requested: 5, allocated: 3, shortfall: 2 }] },
+      catalog: null,
+      late: false,
+    });
+  });
+
+  it('turno cerrado: la marca late llega al historial', async () => {
+    const venta = await ventaPendiente();
+    await markSynced(prisma, venta.id, 'remote-1', 'F-1', { stock: null, catalog: null, late: true });
+
+    const [listada] = await list(prisma, {});
+    expect(listada.syncReview).toEqual({ stock: null, catalog: null, late: true });
+  });
+
+  it('sin marcas no guarda nada: syncReview es null', async () => {
+    const venta = await ventaPendiente();
+    await markSynced(prisma, venta.id, 'remote-1', 'F-1', { stock: null, catalog: null, late: false });
+
+    const [listada] = await list(prisma, {});
+    expect(listada.syncReview).toBeNull();
+  });
+
+  it('una anulada en carrera también guarda la marca y encola el void remoto', async () => {
+    const venta = await ventaPendiente();
+    await voidLocal(prisma, venta.id, CAJERO);
+    await markSynced(prisma, venta.id, 'remote-1', 'F-1', { stock: null, catalog: { inactive: ['r-1'] }, late: false });
+
+    const [pendiente] = await getNeedingRemoteVoid(prisma);
+    expect(pendiente.remoteId).toBe('remote-1');
+    const [listada] = await list(prisma, { includeVoided: true });
+    expect(listada.syncReview).toEqual({ stock: null, catalog: { inactive: ['r-1'] }, late: false });
+  });
+});
+
+describe('autor original al sincronizar (SPEC 54)', () => {
+  async function ventaDeOtroTurno(cashierId, payloadExtra = {}) {
+    await producto('p1', { remoteId: 'P-REMOTO' });
+    await prisma.cashSession.create({
+      data: { id: 'cs-local', openedBy: cashierId || CAJERO, remoteId: 'REMOTO-1' },
+    });
+    return createLocal(prisma, venta([partidaProducto('p1')], {
+      cashierId,
+      cashSessionId: 'cs-local',
+      payload: { items: [partidaProducto('p1')], cashSessionId: 'cs-local', ...payloadExtra },
+    }));
+  }
+
+  it('el payload que sube lleva soldBy = uid del cajero que cobró, aunque suba otro', async () => {
+    await ventaDeOtroTurno('uid-cajera-a');
+
+    // Sube un admin sin filtro de dueño: el autor sigue siendo quien cobró.
+    const [pendiente] = await getPendingPush(prisma);
+    expect(pendiente.payload.soldBy).toBe('uid-cajera-a');
+    expect(pendiente.payload.cashSessionId).toBe('REMOTO-1');
+  });
+
+  it('no pisa un soldBy que ya trae el payload', async () => {
+    await ventaDeOtroTurno('uid-cajera-a', { soldBy: 'uid-original' });
+
+    const [pendiente] = await getPendingPush(prisma);
+    expect(pendiente.payload.soldBy).toBe('uid-original');
+  });
+
+  it('venta vieja sin cajero: no manda soldBy y el servidor usa al llamante', async () => {
+    await ventaDeOtroTurno('');
+
+    const [pendiente] = await getPendingPush(prisma);
+    expect(pendiente.payload).not.toHaveProperty('soldBy');
+  });
+
+  it('la anulada que nunca subió también lleva al autor (se crea por el lote)', async () => {
+    const creada = await ventaDeOtroTurno('uid-cajera-a');
+    await voidLocal(prisma, creada.id, 'uid-admin');
+
+    const [anulada] = await sales.getPendingVoided(prisma);
+    expect(anulada.payload.soldBy).toBe('uid-cajera-a');
+  });
+
+  it('el payload para conciliación también lleva al autor', async () => {
+    const creada = await ventaDeOtroTurno('uid-cajera-a');
+
+    const preparada = await sales.prepareUnreconciled(prisma, creada.id);
+    expect(preparada.payload.soldBy).toBe('uid-cajera-a');
+  });
+
+  it('el payload guardado en la caja no cambia: soldBy se agrega solo al enviar', async () => {
+    const creada = await ventaDeOtroTurno('uid-cajera-a');
+    await getPendingPush(prisma);
+
+    const fila = await prisma.sale.findUnique({ where: { id: creada.id } });
+    expect(JSON.parse(fila.payloadJson)).not.toHaveProperty('soldBy');
+  });
+});
+
+describe('anulación con motivo y descarte con rastro (SPEC 62)', () => {
+  /** Con producto y turno ya subidos: el payload se puede resolver para enviar. */
+  async function ventaPendiente(id = 'p-1') {
+    await producto(id, { stock: 10, remoteId: `R-${id}` });
+    await prisma.cashSession.create({ data: { id: 'cs-62', openedBy: CAJERO, remoteId: 'REMOTO-62' } });
+    return createLocal(
+      prisma,
+      venta([partidaProducto(id)], {
+        cashSessionId: 'cs-62',
+        payload: { items: [partidaProducto(id)], cashSessionId: 'cs-62' },
+      }),
+    );
+  }
+
+  it('la anulación guarda el motivo en la venta y en la bitácora de movimientos', async () => {
+    const creada = await ventaPendiente();
+
+    const anulada = await voidLocal(prisma, creada.id, CAJERO, 'caja@x', '  Cliente desistió  ');
+
+    expect(anulada.voidReason).toBe('Cliente desistió');
+    expect(prisma.sale.rows[0].voidReason).toBe('Cliente desistió');
+    const movimientos = await sales.listMovements(prisma, creada.id);
+    expect(movimientos.find((m) => m.type === 'void')).toMatchObject({ reason: 'Cliente desistió' });
+  });
+
+  it('la anulada que nunca subió lleva el motivo en el alta y al segundo paso', async () => {
+    const creada = await ventaPendiente();
+    await voidLocal(prisma, creada.id, CAJERO, null, 'Producto equivocado');
+
+    const [pendiente] = await sales.getPendingVoided(prisma);
+
+    expect(pendiente.voidReason).toBe('Producto equivocado');
+    expect(pendiente.payload.voidReason).toBe('Producto equivocado');
+  });
+
+  it('la anulación remota pendiente viaja con su motivo', async () => {
+    const creada = await ventaPendiente();
+    await markSynced(prisma, creada.id, 'remote-1', 'V-1');
+    await voidLocal(prisma, creada.id, CAJERO, null, 'Error de captura');
+
+    const [pendiente] = await getNeedingRemoteVoid(prisma);
+    expect(pendiente).toMatchObject({ remoteId: 'remote-1', voidReason: 'Error de captura' });
+  });
+
+  it('alta OK y anulación fallida: markSynced la deja subida y pendiente de anular, sin pushError', async () => {
+    const creada = await ventaPendiente();
+    await voidLocal(prisma, creada.id, CAJERO, null, 'Cliente desistió');
+
+    await markSynced(prisma, creada.id, 'remote-1', 'V-1');
+
+    const fila = prisma.sale.rows[0];
+    expect(fila).toMatchObject({
+      remoteId: 'remote-1',
+      pendingPush: false,
+      pushError: null,
+      needsRemoteVoid: true,
+    });
+    expect(await sales.getPendingVoided(prisma)).toEqual([]);
+    expect((await getNeedingRemoteVoid(prisma)).map((row) => row.id)).toEqual([creada.id]);
+  });
+
+  it('un 4xx en la anulación remota deja voidError, sale de la cola y aparece en Rechazados', async () => {
+    const creada = await ventaPendiente();
+    await markSynced(prisma, creada.id, 'remote-1', 'V-1');
+    await voidLocal(prisma, creada.id, CAJERO, null, 'Cliente desistió');
+
+    await sales.markVoidFailed(prisma, creada.id, 'Solo un administrador puede anular [VOID_FORBIDDEN]');
+
+    expect(await getNeedingRemoteVoid(prisma)).toEqual([]);
+    const registros = await sales.listBlocked(prisma);
+    expect(registros).toEqual([
+      expect.objectContaining({
+        kind: 'saleVoid',
+        id: creada.id,
+        reason: 'Solo un administrador puede anular [VOID_FORBIDDEN]',
+        diagnosis: { code: 'anulacion-rechazada' },
+      }),
+    ]);
+
+    // "Reintentar" de un admin: vuelve a la cola; al cumplirse se limpia todo.
+    await sales.clearVoidError(prisma, creada.id);
+    expect(await getNeedingRemoteVoid(prisma)).toHaveLength(1);
+    await sales.markRemoteVoided(prisma, creada.id);
+    expect(prisma.sale.rows[0]).toMatchObject({ needsRemoteVoid: false, voidError: null });
+  });
+
+  it('descartar exige motivo de al menos 5 caracteres', async () => {
+    const creada = await ventaPendiente();
+
+    await expect(discard(prisma, creada.id, { discardedBy: 'uid-admin', reason: ' ab ' })).rejects.toThrow(
+      /motivo/i,
+    );
+    expect(prisma.sale.rows[0].discardedAt).toBeNull();
+  });
+
+  it('descartar deja discardedAt, repone stock, sale del historial y escribe en SyncLog', async () => {
+    const creada = await ventaPendiente();
+
+    const descartada = await discard(prisma, creada.id, {
+      discardedBy: 'uid-admin',
+      reason: 'Ticket capturado dos veces',
+    });
+
+    expect(descartada).toMatchObject({ discardedBy: 'uid-admin', discardReason: 'Ticket capturado dos veces' });
+    expect(prisma.sale.rows[0]).toMatchObject({
+      discardedBy: 'uid-admin',
+      discardReason: 'Ticket capturado dos veces',
+      pendingPush: false,
+    });
+    expect(prisma.sale.rows[0].discardedAt).toBeInstanceOf(Date);
+    expect(prisma.product.rows[0].totalStock).toBe(10);
+    expect(await list(prisma, {})).toEqual([]);
+    expect(await getPendingPush(prisma)).toEqual([]);
+    expect(prisma.syncLog.rows).toEqual([
+      expect.objectContaining({ entity: 'sale', ref: creada.id, level: 'warn' }),
+    ]);
+    expect(prisma.syncLog.rows[0].message).toContain('Ticket capturado dos veces');
+  });
+
+  it('descartar una venta con remoteId se rechaza: ya está en el servidor', async () => {
+    const creada = await ventaPendiente();
+    await markSynced(prisma, creada.id, 'remote-1', 'V-1');
+
+    await expect(
+      discard(prisma, creada.id, { discardedBy: 'uid-admin', reason: 'Venta de prueba' }),
+    ).rejects.toThrow('Ya está en el servidor; anúlala.');
+    expect(prisma.sale.rows[0].discardedAt).toBeNull();
+    expect(prisma.product.rows[0].totalStock).toBe(8);
+  });
+
+  it('descartar una venta que ya salió hacia el servidor se rechaza: pudo llegar', async () => {
+    const creada = await ventaPendiente();
+    // El envío real cuenta el intento; la lectura de la UI no.
+    await getPendingPush(prisma);
+    expect(prisma.sale.rows[0].pushAttempts).toBe(0);
+    await getPendingPush(prisma, { contarIntentos: true });
+    expect(prisma.sale.rows[0].pushAttempts).toBe(1);
+
+    await expect(
+      discard(prisma, creada.id, { discardedBy: 'uid-admin', reason: 'Venta de prueba' }),
+    ).rejects.toThrow(/pudo registrarse/);
+    expect(prisma.sale.rows[0].discardedAt).toBeNull();
+  });
+
+  it('el conteo de pendientes no marca como enviada la anulada que nunca subió', async () => {
+    const creada = await ventaPendiente();
+    await voidLocal(prisma, creada.id, CAJERO, null, 'Cliente desistió');
+
+    await sales.getPendingVoided(prisma);
+    expect(prisma.sale.rows[0].pushAttempts).toBe(0);
+    await sales.getPendingVoided(prisma, { contarIntentos: true });
+    expect(prisma.sale.rows[0].pushAttempts).toBe(1);
+  });
+});
+
+describe('venta por llave de cobro (SPEC 66)', () => {
+  it('devuelve la venta local con esa llave, o null', async () => {
+    await producto('p-1');
+    const creada = await createLocal(prisma, venta([partidaProducto('p-1')], { idempotencyKey: 'llave-66' }));
+
+    expect((await sales.getByIdempotencyKey(prisma, 'llave-66'))?.id).toBe(creada.id);
+    expect(await sales.getByIdempotencyKey(prisma, 'otra')).toBeNull();
+    expect(await sales.getByIdempotencyKey(prisma, '')).toBeNull();
   });
 });

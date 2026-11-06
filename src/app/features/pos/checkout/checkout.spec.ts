@@ -116,6 +116,27 @@ describe('Checkout', () => {
     fixture.componentRef.setInput('visible', true);
   }
 
+  /** SPEC 66: el borrador del ticket guarda la llave del cobro abierto. */
+  describe('llave del cobro', () => {
+    it('cada apertura emite una llave nueva para el borrador del ticket', () => {
+      const llaves: string[] = [];
+      // El componente del `beforeEach` ya está abierto: se suscribe y se reabre.
+      component.chargeKeyIssued.subscribe((key) => llaves.push(key));
+      fixture.componentRef.setInput('visible', false);
+      TestBed.tick();
+      fixture.componentRef.setInput('visible', true);
+      TestBed.tick();
+      fixture.componentRef.setInput('visible', false);
+      TestBed.tick();
+      fixture.componentRef.setInput('visible', true);
+      TestBed.tick();
+
+      expect(llaves).toHaveLength(2);
+      expect(llaves[0]).not.toBe(llaves[1]);
+      expect(llaves[0]).toMatch(/^[A-Za-z0-9_:-]{8,64}$/);
+    });
+  });
+
   describe('efectivo', () => {
     it('al abrir arranca en efectivo con el total ya capturado', () => {
       expect(component.paymentMethod()).toBe('cash');

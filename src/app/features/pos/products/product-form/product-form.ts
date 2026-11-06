@@ -12,6 +12,7 @@ import { SelectModule } from 'primeng/select';
 import { finalize } from 'rxjs';
 
 import { getApiErrorMessage } from '../../../../core/api/api.utils';
+import { CatalogPushFields } from '../../../../core/electron/window.d';
 import { NotificationService } from '../../../../core/notifications/notification.service';
 import { Category, ControlledGroup, Product, ProductFieldsPayload } from '../../../../shared/models';
 import { CONTROLLED_GROUPS, CONTROLLED_GROUP_RULES } from '../../../../shared/utils/controlled';
@@ -230,54 +231,57 @@ export class ProductForm {
    * auditoría por campo que nadie tocó. Si no hay `existing` (no debería pasar
    * en modo edición), se manda todo como respaldo.
    */
-  private changesOrFull(): Partial<ProductFieldsPayload> {
+  private changesOrFull(): CatalogPushFields {
     const fields = this.productFields();
-    const existing = this.existing;
-    if (!existing) {
-      return fields;
-    }
-    const changes: Partial<ProductFieldsPayload> = {};
-    if (fields.name !== existing.name) changes.name = fields.name;
-    if (fields.sku !== existing.sku) changes.sku = fields.sku;
-    if (fields.salePrice !== existing.salePrice) changes.salePrice = fields.salePrice;
-    if (fields.categoryId !== (existing.categoryId ?? null)) changes.categoryId = fields.categoryId;
-    if (fields.unit !== (existing.unit ?? DEFAULT_UNIT)) changes.unit = fields.unit;
-    if (fields.minStock !== (existing.minStock ?? 0)) changes.minStock = fields.minStock;
-    if (fields.barcode !== existing.barcode && (fields.barcode || existing.barcode)) {
-      changes.barcode = fields.barcode ?? '';
-    }
-    if (
-      fields.activeIngredient !== existing.activeIngredient &&
-      (fields.activeIngredient || existing.activeIngredient)
-    ) {
-      changes.activeIngredient = fields.activeIngredient ?? '';
-    }
-    if (
-      fields.concentration !== existing.concentration &&
-      (fields.concentration || existing.concentration)
-    ) {
-      changes.concentration = fields.concentration ?? '';
-    }
-    if (fields.hasIva !== (existing.hasIva === true)) changes.hasIva = fields.hasIva;
-    if (fields.hasIvaZero !== (existing.hasIvaZero === true)) changes.hasIvaZero = fields.hasIvaZero;
-    if (fields.hasIeps !== (existing.hasIeps === true)) {
-      changes.hasIeps = fields.hasIeps;
-      if (fields.hasIeps) {
-        changes.iepsRate = fields.iepsRate;
-      }
-    } else if (fields.hasIeps && fields.iepsRate !== existing.iepsRate) {
-      changes.hasIeps = true;
+    return this.existing ? productChanges(fields, this.existing) : fields;
+  }
+}
+
+/** Campos del formulario que difieren del producto local (ver `changesOrFull`). */
+export function productChanges(fields: ProductFieldsPayload, existing: Product): CatalogPushFields {
+  const changes: CatalogPushFields = {};
+  if (fields.name !== existing.name) changes.name = fields.name;
+  if (fields.sku !== existing.sku) changes.sku = fields.sku;
+  if (fields.salePrice !== existing.salePrice) changes.salePrice = fields.salePrice;
+  if (fields.categoryId !== (existing.categoryId ?? null)) changes.categoryId = fields.categoryId;
+  if (fields.unit !== (existing.unit ?? DEFAULT_UNIT)) changes.unit = fields.unit;
+  if (fields.minStock !== (existing.minStock ?? 0)) changes.minStock = fields.minStock;
+  if (fields.barcode !== existing.barcode && (fields.barcode || existing.barcode)) {
+    changes.barcode = fields.barcode ?? '';
+  }
+  if (
+    fields.activeIngredient !== existing.activeIngredient &&
+    (fields.activeIngredient || existing.activeIngredient)
+  ) {
+    changes.activeIngredient = fields.activeIngredient ?? '';
+  }
+  if (
+    fields.concentration !== existing.concentration &&
+    (fields.concentration || existing.concentration)
+  ) {
+    changes.concentration = fields.concentration ?? '';
+  }
+  if (fields.hasIva !== (existing.hasIva === true)) changes.hasIva = fields.hasIva;
+  if (fields.hasIvaZero !== (existing.hasIvaZero === true)) changes.hasIvaZero = fields.hasIvaZero;
+  if (fields.hasIeps !== (existing.hasIeps === true)) {
+    changes.hasIeps = fields.hasIeps;
+    if (fields.hasIeps) {
       changes.iepsRate = fields.iepsRate;
     }
-    if ((fields.controlledGroup ?? null) !== (existing.controlledGroup ?? null)) {
-      changes.controlledGroup = fields.controlledGroup;
-    }
-    if (fields.requiresPrescription !== (existing.requiresPrescription === true)) {
-      changes.requiresPrescription = fields.requiresPrescription;
-    }
-    if (fields.isActive !== (existing.isActive !== false)) {
-      changes.isActive = fields.isActive;
-    }
-    return changes;
+  } else if (fields.hasIeps && fields.iepsRate !== existing.iepsRate) {
+    changes.hasIeps = true;
+    changes.iepsRate = fields.iepsRate;
   }
+  if ((fields.controlledGroup ?? null) !== (existing.controlledGroup ?? null)) {
+    // `null` explícito al quitar el grupo (SPEC 64): con `undefined` la clave se
+    // ignoraba al guardar en SQLite y la desclasificación ni siquiera quedaba en local.
+    changes.controlledGroup = fields.controlledGroup ?? null;
+  }
+  if (fields.requiresPrescription !== (existing.requiresPrescription === true)) {
+    changes.requiresPrescription = fields.requiresPrescription;
+  }
+  if (fields.isActive !== (existing.isActive !== false)) {
+    changes.isActive = fields.isActive;
+  }
+  return changes;
 }

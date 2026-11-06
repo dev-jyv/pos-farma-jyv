@@ -56,6 +56,17 @@ model Product {
   /// siguiente sync.
   pendingCatalogPush   Boolean  @default(false)
   catalogPushError     String?
+  /// Foto `{ updatedAt, fields }` (JSON) de los campos de catálogo tal como los
+  /// tiene el servidor: se toma en el pull y al confirmar un push (SPEC 56). El
+  /// PATCH manda solo lo que difiere de ella y `baseUpdatedAt = updatedAt`.
+  /// `null` en filas anteriores a la migración: suben completas, como antes.
+  baseFields           String?
+  /// `updatedAt` remoto más nuevo visto por el pull, aunque la fila tenga una
+  /// edición pendiente y el pull no le toque el catálogo.
+  remoteUpdatedAt      DateTime?
+  /// `{ salePrice, isActive }` (JSON) del panel cuando el PATCH respondió 409
+  /// `CATALOG_CONFLICT`: lo que aplica "Usar el del panel".
+  catalogConflict      String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
   batches              Batch[]
@@ -123,6 +134,22 @@ model Sale {
   invoiceStatus          String?
   voidedAt               DateTime?
   voidedBy               String?
+  /// Motivo de la anulación (SPEC 62): obligatorio desde esta versión, viaja en
+  /// el `POST /sales/:id/void`. Null en ventas anuladas antes de pedir motivo.
+  voidReason             String?
+  /// El servidor rechazó la anulación remota con un 4xx (SPEC 62): la venta ya
+  /// está anulada aquí y activa allá. Visible en "Rechazados"; no se reintenta
+  /// sola hasta que un admin pulse "Reintentar" (`clearVoidError`).
+  voidError              String?
+  /// Descarte lógico (SPEC 62): la venta sale de la cola, del historial y del
+  /// corte, pero la fila queda como rastro de quién, cuándo y por qué.
+  discardedAt            DateTime?
+  discardedBy            String?
+  discardReason          String?
+  /// Veces que la venta salió hacia el servidor (alta por `/sales/bulk`). Con
+  /// un intento la venta **pudo** llegar aunque se perdiera la respuesta, así
+  /// que ya no se puede descartar (SPEC 62).
+  pushAttempts           Int            @default(0)
   pendingPush            Boolean        @default(true)
   pushError              String?
   /// Se anuló en local justo mientras el push seguía en vuelo: el servidor ya
@@ -153,6 +180,9 @@ model Sale {
   /// Cupón aplicado (SPEC 47): `{ code, name, scope, discountAmount }` (JSON).
   /// El backend recalcula el monto; esto es lo que se imprimió en el ticket.
   couponJson             String?
+  /// Marcas con las que el servidor aceptó la venta offline (SPEC 52):
+  /// `{ stock, catalog, late }` (JSON). Null si subió sin marcas o no ha subido.
+  syncReviewJson         String?
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
   items                  SaleItem[]
@@ -315,6 +345,17 @@ model CashSession {
   adjustmentNote             String?
   /// `true` si el auto-cierre a las 24:00 (expiración de sesión) fue quien cerró este turno.
   autoClosedByExpiry         Boolean        @default(false)
+  /// Un autocierre nadie lo arqueó: queda para revisión (SPEC 63).
+  needsReview                Boolean        @default(false)
+  /// Arqueo del fondo heredado al abrir (SPEC 63). `openingCounted` es lo que el
+  /// cajero contó y es también `openingAmount`; `inheritedFloat`, lo que dejó el
+  /// cierre anterior (null sin cierre previo). `null` en turnos de antes.
+  openingCounted             Float?
+  inheritedFloat             Float?
+  /// `openingCounted − inheritedFloat`, redondeada a centavos.
+  openingDifference          Float?
+  /// Nota obligatoria cuando el contado difiere de lo heredado.
+  openingNote                String?
   /// Cola de alta: sigue `true` hasta que `POST /cash-sessions` responde con éxito.
   pendingPush                Boolean        @default(true)
   pushError                  String?

@@ -16,6 +16,9 @@ import { NotificationService } from '../../../../core/notifications/notification
 import { CashAdjustmentStatus, CashSession } from '../../../../shared/models';
 import { CashSessionService } from '../../services/cash-session.service';
 
+/** Filtro del listado: estado del ajuste, todos, o los autocerrados (SPEC 63). */
+export type AuditFilter = CashAdjustmentStatus | '' | 'autoClosed';
+
 /**
  * Auditoría de cortes de caja (solo admin): todas las cajas, no solo la de
  * este equipo — por eso usa `listAudit()` (backend) y no `listLocal()` (SQLite
@@ -58,20 +61,22 @@ export class CashSessionAudit {
   readonly loaded = signal(false);
   readonly initialLoading = computed(() => this.loading() && !this.loaded());
 
-  readonly statusFilter = signal<CashAdjustmentStatus | ''>('pending');
+  readonly statusFilter = signal<AuditFilter>('pending');
   /**
    * Rótulos del filtro. `p-select` exige la cadena resuelta, así que se traduce
    * con `instant()` dentro de un `computed` que lee `currentLang()`: el rótulo
    * se recalcula si cambia el idioma. Antes estaban a fuego en español y el
    * filtro se veía en español con la app en inglés.
    */
-  readonly statusOptions = computed<{ label: string; value: CashAdjustmentStatus | '' }[]>(() => {
+  readonly statusOptions = computed<{ label: string; value: AuditFilter }[]>(() => {
     this.translate.currentLang();
     return [
       { label: this.translate.instant('cashCut.audit.filterAll') as string, value: '' as const },
       { label: this.translate.instant('cashCut.audit.filterPending') as string, value: 'pending' as const },
       { label: this.translate.instant('cashCut.audit.filterApproved') as string, value: 'approved' as const },
       { label: this.translate.instant('cashCut.audit.filterRejected') as string, value: 'rejected' as const },
+      // SPEC 63: los turnos que cerró la expiración, sin arqueo de nadie.
+      { label: this.translate.instant('cashCut.audit.filterAutoClosed') as string, value: 'autoClosed' as const },
     ];
   });
 
@@ -97,7 +102,7 @@ export class CashSessionAudit {
     const status = this.statusFilter();
     this.cashSessionService
       .listAudit({
-        ...(status ? { adjustmentStatus: status } : {}),
+        ...(status === 'autoClosed' ? { needsReview: true } : status ? { adjustmentStatus: status } : {}),
         page: Math.floor(this.first() / this.pageSize) + 1,
         limit: this.pageSize,
       })
@@ -137,7 +142,7 @@ export class CashSessionAudit {
     this.reload();
   }
 
-  onStatusChange(status: CashAdjustmentStatus | ''): void {
+  onStatusChange(status: AuditFilter): void {
     this.statusFilter.set(status);
     this.reload(true);
   }

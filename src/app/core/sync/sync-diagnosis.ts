@@ -1,4 +1,5 @@
 import { BlockedCode, BlockedSyncRecord } from '../electron/window.d';
+import { SyncErrorCode, isSyncErrorCode } from '../../shared/models';
 
 /** Qué conviene hacer primero. Nunca "descartar": puede ser dinero ya cobrado. */
 export type BlockedAction = 'reintentar' | 'corregir' | 'avisar-admin';
@@ -62,6 +63,13 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
             'el cobro ya se hizo.',
           recommended: 'avisar-admin',
         },
+  'entrada-en-curso': () => ({
+    title: 'El servidor todavía está registrando esta entrada',
+    explanation:
+      'Un intento anterior de subir esta entrada sigue en curso en el servidor. No es un rechazo: ' +
+      'espera unos minutos y pulsa Reintentar. No la captures de nuevo, se duplicaría el stock.',
+    recommended: 'reintentar',
+  }),
   'entrada-a-medias': () => ({
     title: 'El servidor dejó esta entrada a medias',
     explanation:
@@ -69,6 +77,15 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
       'hasta que alguien la revise. No la reintentes: avisa al administrador para que revise el ' +
       'lote en inventario. Si ya está registrado ahí, esta copia se puede descartar.',
     recommended: 'avisar-admin',
+  }),
+  'entrada-posible-duplicada': () => ({
+    title: '¿Factura capturada dos veces?',
+    explanation:
+      'Esta factura ya tiene en el servidor una entrada con el mismo producto, lote y cantidad. ' +
+      'Si de verdad son dos partidas iguales, pulsa "Sí, es otra partida". Si es la misma ' +
+      'mercancía capturada otra vez (otra foto, el PDF o en otra caja), pulsa "Descartar": se ' +
+      'quitan esas piezas del stock de esta caja.',
+    recommended: 'corregir',
   }),
   'listo-para-reintentar': () => ({
     title: 'Ya se puede enviar',
@@ -133,6 +150,30 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
       'administrador: decide si se respeta el precio cobrado.',
     recommended: 'avisar-admin',
   }),
+  'anulacion-rechazada': () => ({
+    title: 'El servidor rechazó la anulación',
+    explanation:
+      'La venta está anulada en esta caja, pero en el servidor sigue activa. Pide a un ' +
+      'administrador que entre en esta caja y pulse Reintentar: con su sesión la anulación se ' +
+      'vuelve a enviar. No la cobres de nuevo.',
+    recommended: 'avisar-admin',
+  }),
+  'catalogo-en-conflicto': () => ({
+    title: 'El producto cambió en el panel',
+    explanation:
+      'Mientras esta caja guardaba su cambio, en el panel cambiaron el precio o el estado del ' +
+      'producto. Elige "Usar el del panel" para quedarte con lo del panel, o "Forzar el mío" si ' +
+      'el valor de esta caja es el correcto. Lo demás que corregiste se sube igual.',
+    recommended: 'corregir',
+  }),
+  'producto-duplicado': () => ({
+    title: 'Ya existe otro producto con ese SKU o nombre',
+    explanation:
+      'Otra caja o el panel dio de alta un producto distinto con el mismo SKU o nombre, y no ' +
+      'coinciden el código de barras ni el nombre con su concentración, así que la caja no lo ' +
+      'adopta. Corrige el SKU o el nombre en Productos y reintenta, o avisa al administrador.',
+    recommended: 'corregir',
+  }),
   desconocido: (_dep, record) => ({
     title: 'Motivo no reconocido',
     explanation:
@@ -143,9 +184,41 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
   }),
 };
 
+/**
+ * Código de sincronización del servidor (SPEC 49) → causa del panel. Manda sobre
+ * el código por texto: un `pushError` guardado con un IPC viejo, o un texto que
+ * cambió en el backend, no confunde el diagnóstico cuando la caja tiene el código.
+ */
+const POR_CODIGO_DE_SERVIDOR: Partial<Record<SyncErrorCode, BlockedCode>> = {
+  STOCK_INSUFFICIENT: 'sin-stock',
+  BATCH_EXPIRED: 'sin-stock',
+  PRODUCT_NOT_FOUND: 'producto-no-encontrado',
+  PRODUCT_DUPLICATE: 'producto-duplicado',
+  PRODUCT_SKU_TAKEN: 'producto-duplicado',
+  PRODUCT_NAME_TAKEN: 'producto-duplicado',
+  SESSION_CLOSED: 'turno-cerrado',
+  SESSION_FORBIDDEN: 'turno-ajeno',
+  ENTRY_IN_PROGRESS: 'entrada-en-curso',
+  ENTRY_AMBIGUOUS: 'entrada-a-medias',
+  ENTRY_POSSIBLE_DUPLICATE: 'entrada-posible-duplicada',
+  CATALOG_CONFLICT: 'catalogo-en-conflicto',
+};
+
+/** Causa del panel para un registro: primero el código del servidor, luego el diagnóstico por texto. */
+export function blockedCodeOf(record: BlockedSyncRecord): BlockedCode {
+  // Una anulación rechazada se explica igual cualquiera que sea el código
+  // (`VOID_FORBIDDEN`, `SESSION_FORBIDDEN`…): el remedio siempre es el admin.
+  if (record.kind === 'saleVoid') {
+    return 'anulacion-rechazada';
+  }
+  const syncCode = record.diagnosis?.syncCode;
+  const porServidor = isSyncErrorCode(syncCode) ? POR_CODIGO_DE_SERVIDOR[syncCode] : undefined;
+  return porServidor ?? record.diagnosis?.code ?? 'desconocido';
+}
+
 /** Ayuda para un registro bloqueado; sin diagnóstico (versión vieja del IPC) cae en `desconocido`. */
 export function describeBlocked(record: BlockedSyncRecord): BlockedHelp {
-  const code = record.diagnosis?.code ?? 'desconocido';
+  const code = blockedCodeOf(record);
   const ayuda = AYUDA[code] ?? AYUDA.desconocido;
   return ayuda(record.diagnosis?.dependency?.label ?? '', record);
 }

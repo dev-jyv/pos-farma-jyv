@@ -5,7 +5,7 @@ import sales from '../db/sales.js';
 import cashMovements from '../db/cash-movements.js';
 import { createFakePrisma } from './fake-prisma.mjs';
 
-const { codeFromReason } = diagnosis;
+const { codeFromReason, diagnoseReason, syncCodeFromReason } = diagnosis;
 
 describe('codeFromReason: textos reales del backend y de la caja', () => {
   it.each([
@@ -33,6 +33,38 @@ describe('codeFromReason: textos reales del backend y de la caja', () => {
   it('lo que no reconoce cae en desconocido, no en un código equivocado', () => {
     expect(codeFromReason('Internal error 0x55')).toBe('desconocido');
     expect(codeFromReason(null)).toBe('desconocido');
+  });
+});
+
+describe('código de sincronización del servidor (SPEC 49)', () => {
+  it('el código al final del motivo manda sobre el texto', () => {
+    expect(codeFromReason('Faltan 2 piezas [STOCK_INSUFFICIENT]')).toBe('sin-stock');
+    expect(codeFromReason('Producto abc no encontrado [PRODUCT_NOT_FOUND]')).toBe('producto-no-encontrado');
+    expect(codeFromReason('Otro texto [SESSION_CLOSED]')).toBe('turno-cerrado');
+    expect(codeFromReason('Otro texto [SESSION_FORBIDDEN]')).toBe('turno-ajeno');
+    expect(codeFromReason('quedó a medio registrar [ENTRY_IN_PROGRESS]')).toBe('entrada-en-curso');
+    expect(codeFromReason('quedó a medio registrar [ENTRY_AMBIGUOUS]')).toBe('entrada-a-medias');
+    expect(codeFromReason('La factura ya tiene una entrada igual [ENTRY_POSSIBLE_DUPLICATE]')).toBe(
+      'entrada-posible-duplicada',
+    );
+  });
+
+  it('un código sin traducción cae al texto', () => {
+    expect(codeFromReason('Stock insuficiente [CODIGO_NUEVO]')).toBe('sin-stock');
+    expect(codeFromReason('algo raro [VALIDATION]')).toBe('desconocido');
+  });
+
+  it('diagnoseReason lleva el código del servidor solo si vino', () => {
+    expect(diagnoseReason('Faltan 2 [STOCK_INSUFFICIENT]')).toEqual({
+      code: 'sin-stock',
+      syncCode: 'STOCK_INSUFFICIENT',
+    });
+    expect(diagnoseReason('Stock insuficiente')).toEqual({ code: 'sin-stock' });
+    expect(syncCodeFromReason(null)).toBeNull();
+  });
+
+  it('el motivo de un bloqueo por espera no se confunde con un código', () => {
+    expect(syncCodeFromReason('Espera al turno de Ana del 25/09 13:02')).toBeNull();
   });
 });
 
@@ -154,6 +186,29 @@ describe('listBlocked: diagnóstico en vivo de ventas bloqueadas por intentos', 
 
     expect(registro.diagnosis).toEqual({ code: 'sin-stock' });
   });
+
+  it('un rechazo con código del servidor lleva el código al panel', async () => {
+    const creada = await sales.createLocal(prisma, {
+      folio: 'PENDIENTE-3',
+      idempotencyKey: 'k-3',
+      subtotal: 100,
+      discountTotal: 0,
+      total: 100,
+      paymentMethod: 'cash',
+      amountReceived: 100,
+      change: 0,
+      cashAmount: 100,
+      cashSessionId: 'cs-1',
+      cashierId: 'uid',
+      items: [partida('p-1')],
+      payload: { items: [partida('p-1')] },
+    });
+    await sales.markPushFailed(prisma, creada.id, 'El turno ya no admite ventas [SESSION_CLOSED]');
+
+    const [registro] = await sales.listBlocked(prisma);
+
+    expect(registro.diagnosis).toEqual({ code: 'turno-cerrado', syncCode: 'SESSION_CLOSED' });
+  });
 });
 
 describe('listBlocked de gastos', () => {
@@ -166,5 +221,21 @@ describe('listBlocked de gastos', () => {
     const [registro] = await cashMovements.listBlocked(prisma);
 
     expect(registro.diagnosis).toEqual({ code: 'turno-cerrado' });
+  });
+});
+
+describe('conflicto de catálogo (SPEC 56)', () => {
+  it('un alta que choca con otro producto (SPEC 60) da producto-duplicado, por código o por texto', () => {
+    expect(codeFromReason('Ya existe otro producto con ese SKU: Ibuprofeno [PRODUCT_DUPLICATE]')).toBe(
+      'producto-duplicado',
+    );
+    expect(codeFromReason('Ya existe otro producto con ese nombre: X [PRODUCT_NAME_TAKEN]')).toBe(
+      'producto-duplicado',
+    );
+    expect(codeFromReason('Ya existe otro producto con ese SKU: Ibuprofeno')).toBe('producto-duplicado');
+  });
+
+  it('el código CATALOG_CONFLICT del motivo da catalogo-en-conflicto', () => {
+    expect(codeFromReason('El precio cambió en el panel: $58.00 [CATALOG_CONFLICT]')).toBe('catalogo-en-conflicto');
   });
 });

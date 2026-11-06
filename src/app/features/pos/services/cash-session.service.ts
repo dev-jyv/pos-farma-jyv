@@ -27,6 +27,7 @@ import {
 import {
   CashOnHand,
   LocalCashSessionCloseInput,
+  LocalCashSessionInput,
   PendingCashSession,
   PendingCashSessionClose,
 } from '../../../core/electron/window.d';
@@ -34,6 +35,7 @@ import { CashAdjustmentStatus, CashSession, CashSessionSummary } from '../../../
 import { isSessionExpired } from '../../../shared/utils/session-expiry';
 import { environment } from '../../../../environments/environment';
 import { PushOwner } from '../../../core/sync/push-owner';
+import { ClockSkewService } from '../../../core/time/clock-skew.service';
 
 /**
  * Corte tal como llega de `GET /cash-sessions`, con las fechas todavía en el
@@ -56,6 +58,13 @@ interface AuditCashSessionDto {
   adjustmentReviewedAt?: unknown;
   adjustmentNote?: string | null;
   autoClosedByExpiry?: boolean;
+  autoClosed?: boolean;
+  needsReview?: boolean;
+  openingCounted?: number | null;
+  inheritedFloat?: number | null;
+  openingDifference?: number | null;
+  openingNote?: string | null;
+  followingOpeningDifference?: number | null;
   openedAt: unknown;
   closedAt?: unknown;
 }
@@ -66,6 +75,29 @@ export interface AuditCashSession extends CashSession {
   /** Nombre o correo de quien abrió/cerró; `null` si el perfil ya no existe. */
   openedByLabel: string | null;
   closedByLabel: string | null;
+}
+
+/**
+ * Cuerpo de `POST /cash-sessions`. El arqueo de apertura (SPEC 63) solo viaja si
+ * el turno lo tiene: un turno en cola desde antes de la actualización sube como
+ * siempre, y el backend lo trata como un POS viejo.
+ */
+export function openingBody(session: CashSession): {
+  openingAmount: number;
+  openingCounted?: number;
+  inheritedFloat?: number;
+  openingNote?: string;
+} {
+  const counted = session.openingCounted;
+  if (counted == null) {
+    return { openingAmount: session.openingAmount };
+  }
+  return {
+    openingAmount: counted,
+    openingCounted: counted,
+    ...(session.inheritedFloat != null ? { inheritedFloat: session.inheritedFloat } : {}),
+    ...(session.openingNote ? { openingNote: session.openingNote } : {}),
+  };
 }
 
 /**
@@ -92,9 +124,31 @@ function toAuditCashSession(dto: AuditCashSessionDto): AuditCashSession {
     adjustmentReviewedBy: dto.adjustmentReviewedBy ?? null,
     adjustmentReviewedAt: dto.adjustmentReviewedAt ? toDate(dto.adjustmentReviewedAt) : null,
     adjustmentNote: dto.adjustmentNote ?? null,
-    autoClosedByExpiry: dto.autoClosedByExpiry ?? false,
+    // Backend con SPEC 63 manda `autoClosed`; uno anterior, solo `autoClosedByExpiry`.
+    autoClosedByExpiry: dto.autoClosedByExpiry ?? dto.autoClosed ?? false,
+    autoClosed: dto.autoClosed ?? dto.autoClosedByExpiry ?? false,
+    needsReview: dto.needsReview ?? false,
+    openingCounted: dto.openingCounted ?? null,
+    inheritedFloat: dto.inheritedFloat ?? null,
+    openingDifference: dto.openingDifference ?? null,
+    openingNote: dto.openingNote ?? null,
+    followingOpeningDifference: dto.followingOpeningDifference ?? null,
     remoteId: dto.id,
   };
+}
+
+/** Autocerrado o marcado para revisión (SPEC 63): lo que lista el filtro "Autocerrados". */
+export function isAutoClosedForReview(session: CashSession): boolean {
+  return Boolean(session.needsReview || session.autoClosed || session.autoClosedByExpiry);
+}
+
+/** Arqueo de apertura (SPEC 63). */
+export interface OpeningCountInput {
+  /** El monto se contó en el diálogo (no es un alta de antes de SPEC 63). */
+  counted?: boolean;
+  /** Fondo del cierre anterior; `null`/omitido sin cierre previo. */
+  inheritedFloat?: number | null;
+  openingNote?: string | null;
 }
 
 interface CashSessionSummaryDto {
@@ -118,6 +172,7 @@ interface CashSessionSummaryDto {
 @Injectable({ providedIn: 'root' })
 export class CashSessionService {
   private readonly http = inject(HttpClient);
+  private readonly clock = inject(ClockSkewService);
   private readonly apiUrl = environment.apiUrl;
 
   private flushing = false;
@@ -146,8 +201,30 @@ export class CashSessionService {
     );
   }
 
-  openLocal(userId: string, userLabel: string | undefined, openingAmount: number): Observable<CashSession> {
-    return from(this.api().createLocal({ openedBy: userId, openedByLabel: userLabel, openingAmount })).pipe(
+  /**
+   * `openingAmount` es el efectivo **contado** al abrir (SPEC 63): es el fondo
+   * del turno. `opening` lleva lo heredado del cierre anterior y la nota; con
+   * él el turno guarda el arqueo de apertura y lo sube al servidor.
+   */
+  openLocal(
+    userId: string,
+    userLabel: string | undefined,
+    openingAmount: number,
+    opening: OpeningCountInput = {},
+  ): Observable<CashSession> {
+    const input: LocalCashSessionInput = {
+      openedBy: userId,
+      openedByLabel: userLabel,
+      openingAmount,
+      ...(opening.counted ? { openingCounted: openingAmount } : {}),
+      ...(opening.counted && opening.inheritedFloat != null
+        ? { inheritedFloat: opening.inheritedFloat }
+        : {}),
+      ...(opening.counted && opening.openingNote?.trim()
+        ? { openingNote: opening.openingNote.trim() }
+        : {}),
+    };
+    return from(this.api().createLocal(input)).pipe(
       map((session) => {
         this.setCurrent(session);
         return session;
@@ -236,7 +313,9 @@ export class CashSessionService {
     }
     try {
       const open = await api.cashSessions.getOpenLocal(userId);
-      if (!open || !isSessionExpired(new Date(open.openedAt).getTime())) {
+      // Hora corregida contra el servidor (SPEC 65): un reloj adelantado un día
+      // autocerraba el turno vivo sin arqueo.
+      if (!open || !isSessionExpired(new Date(open.openedAt).getTime(), this.clock.now())) {
         return false;
       }
       await this.closeWithExpectedCash(open, userId, userLabel);
@@ -484,7 +563,7 @@ flushQueueAsync(owner: PushOwner = {}): Promise<void> {
           return from(this.api().markCreateSynced(item.id, existing.id));
         }
         return this.http
-          .post<unknown>(`${this.apiUrl}/cash-sessions`, { openingAmount: item.openingAmount })
+          .post<unknown>(`${this.apiUrl}/cash-sessions`, openingBody(item))
           .pipe(
             switchMap((created) => {
               const session = unwrapEntity<{ id: string }>(created);
@@ -597,6 +676,12 @@ flushQueueAsync(owner: PushOwner = {}): Promise<void> {
     to?: string;
     openedBy?: string;
     adjustmentStatus?: 'pending' | 'approved' | 'rejected';
+    /**
+     * Solo autocerrados / para revisión (SPEC 63). Se pide al servidor con
+     * `needsReview=true`; un backend que no conoce el filtro lo ignora (Zod lo
+     * descarta) y entonces se filtra la página aquí, con su total.
+     */
+    needsReview?: boolean;
     page?: number;
     /** Máximo 100: es el tope de la API. */
     limit?: number;
@@ -606,6 +691,7 @@ flushQueueAsync(owner: PushOwner = {}): Promise<void> {
     if (filters.to) params = { ...params, to: filters.to };
     if (filters.openedBy) params = { ...params, openedBy: filters.openedBy };
     if (filters.adjustmentStatus) params = { ...params, adjustmentStatus: filters.adjustmentStatus };
+    if (filters.needsReview) params = { ...params, needsReview: 'true' };
     if (filters.page !== undefined) params = { ...params, page: String(filters.page) };
     if (filters.limit !== undefined) params = { ...params, limit: String(filters.limit) };
     return this.http
@@ -613,7 +699,13 @@ flushQueueAsync(owner: PushOwner = {}): Promise<void> {
       .pipe(
         map((response) => {
           const { items, meta } = unwrapListWithMeta<AuditCashSessionDto>(response);
-          return { items: items.map(toAuditCashSession), meta };
+          const sessions = items.map(toAuditCashSession);
+          if (!filters.needsReview || sessions.every(isAutoClosedForReview)) {
+            return { items: sessions, meta };
+          }
+          // El servidor no filtró: el total de su `meta` no es el de esta lista.
+          const filtered = sessions.filter(isAutoClosedForReview);
+          return { items: filtered, meta: null };
         }),
       );
   }

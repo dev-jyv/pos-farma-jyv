@@ -312,8 +312,22 @@ async function applyStock(prisma, id, { entries, appliedBy }) {
   });
 }
 
+/** Mensaje al intentar borrar un documento cuya mercancía ya entró (SPEC 58). */
+const STOCK_ALREADY_APPLIED_MESSAGE =
+  'Ya se dio entrada a esta factura; cancela la entrada desde el panel';
+
+/**
+ * Borra el documento, su embedding y el archivo. **No** si su mercancía ya se
+ * aplicó al inventario (`stockAppliedAt`, SPEC 58): borrarlo y volver a subir
+ * la misma factura (otra foto, el PDF) dejaba aplicarla otra vez y duplicaba el
+ * stock, porque la deduplicación local es por sha256 del archivo. Una entrada
+ * equivocada se corrige cancelándola desde el panel, con contramovimiento.
+ */
 async function remove(prisma, id) {
   const row = await requireDocument(prisma, id);
+  if (row.stockAppliedAt) {
+    throw new Error(STOCK_ALREADY_APPLIED_MESSAGE);
+  }
   await prisma.$transaction([
     prisma.invoiceEmbedding.deleteMany({ where: { documentId: id } }),
     prisma.invoiceDocument.delete({ where: { id } }),
@@ -324,6 +338,7 @@ async function remove(prisma, id) {
 
 module.exports = {
   MAX_FILE_BYTES,
+  STOCK_ALREADY_APPLIED_MESSAGE,
   register,
   readFile,
   list,

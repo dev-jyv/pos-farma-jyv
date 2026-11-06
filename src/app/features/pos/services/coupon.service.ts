@@ -1,10 +1,11 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, inject, signal } from '@angular/core';
 
 import { CartLine, CouponDto, SaleCoupon } from '../../../shared/models';
 import { isProductLine, linePieces, lineUnitPrice } from '../../../shared/utils/cart-line';
 import { CouponEngineCoupon, CouponEngineLine, computeCouponDiscount } from '../../../shared/utils/coupons';
 import { fromCents, toCents } from '../../../shared/utils/money';
 import { COUPONS_SYNCED_EVENT } from '../../../core/sync/sync-events';
+import { ClockSkewService } from '../../../core/time/clock-skew.service';
 
 /** Mensaje cuando el código no está en la SQLite de la caja. */
 export const COUPON_NOT_FOUND_MESSAGE = 'Cupón no encontrado — sincroniza o revisa el código';
@@ -83,6 +84,8 @@ function hasPromotion(line: CartLine): boolean {
  */
 @Injectable({ providedIn: 'root' })
 export class CouponService {
+  /** Hora corregida contra el servidor (SPEC 65): un reloj atrasado no aplica cupones vencidos. */
+  private readonly clock = inject(ClockSkewService);
   /** Cambia cada vez que baja un pull de cupones: la venta relee el aplicado. */
   readonly version = signal(0);
 
@@ -106,10 +109,11 @@ export class CouponService {
   }
 
   /**
-   * Vigencia con el reloj local: activo y dentro de `[startsAt, endsAt]`. No
-   * mira productos ni mínimo (eso depende del ticket).
+   * Vigencia con la hora corregida de la caja (`ClockSkewService`, SPEC 65):
+   * activo y dentro de `[startsAt, endsAt]`. No mira productos ni mínimo (eso
+   * depende del ticket).
    */
-  windowIssue(coupon: CouponDto, now = new Date()): CouponIssue | null {
+  windowIssue(coupon: CouponDto, now = this.clock.nowDate()): CouponIssue | null {
     if (!coupon.isActive) {
       return { code: 'inactive', message: `El cupón ${coupon.code} ya no está activo.` };
     }
@@ -142,7 +146,7 @@ export class CouponService {
    * - **Venta**: las líneas quedan igual y el descuento sale sobre la suma de
    *   sus netos, como `saleDiscountAmount`.
    */
-  apply(lines: CartLine[], coupon: CouponDto | null, now = new Date()): CouponPricing {
+  apply(lines: CartLine[], coupon: CouponDto | null, now = this.clock.nowDate()): CouponPricing {
     const sinCupon = lines.map((line) => (isProductLine(line) && line.coupon ? { ...line, coupon: null } : line));
     if (!coupon) {
       return { lines: sinCupon, saleDiscount: 0, total: 0, issue: null };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { BlockedSyncRecord } from '../electron/window.d';
-import { describeBlocked } from './sync-diagnosis';
+import { blockedCodeOf, describeBlocked } from './sync-diagnosis';
 
 function registro(overrides: Partial<BlockedSyncRecord> = {}): BlockedSyncRecord {
   return {
@@ -42,10 +42,74 @@ describe('describeBlocked', () => {
     expect(describeBlocked(registro({ diagnosis: { code: 'turno-cerrado' } })).recommended).toBe('avisar-admin');
   });
 
+  it('posible factura recapturada (SPEC 58): explica las dos salidas', () => {
+    const ayuda = describeBlocked(
+      registro({
+        kind: 'stockEntry',
+        diagnosis: { code: 'entrada-posible-duplicada', syncCode: 'ENTRY_POSSIBLE_DUPLICATE' },
+      }),
+    );
+
+    expect(ayuda.title).toBe('¿Factura capturada dos veces?');
+    expect(ayuda.explanation).toContain('Sí, es otra partida');
+    expect(ayuda.explanation).toContain('Descartar');
+  });
+
   it('sin diagnóstico (IPC viejo) cae en desconocido y manda con el admin', () => {
     const ayuda = describeBlocked(registro());
 
     expect(ayuda.title).toBe('Motivo no reconocido');
+    expect(ayuda.recommended).toBe('avisar-admin');
+  });
+
+  it('ENTRY_IN_PROGRESS: el código manda sobre el texto y ya no dice "No la reintentes" (SPEC 49)', () => {
+    const ayuda = describeBlocked({
+      kind: 'stockEntry',
+      id: 'b1',
+      // El texto del servidor es el mismo que el de una entrada a medias.
+      diagnosis: { code: 'entrada-a-medias', syncCode: 'ENTRY_IN_PROGRESS' },
+    } as BlockedSyncRecord);
+
+    expect(ayuda.recommended).toBe('reintentar');
+    expect(ayuda.explanation).not.toMatch(/no la reintentes/i);
+  });
+
+  it('el código del servidor resuelve la causa aunque el texto no se reconozca', () => {
+    expect(
+      blockedCodeOf(registro({ diagnosis: { code: 'desconocido', syncCode: 'SESSION_CLOSED' } })),
+    ).toBe('turno-cerrado');
+    expect(
+      blockedCodeOf(registro({ diagnosis: { code: 'desconocido', syncCode: 'PRODUCT_NOT_FOUND' } })),
+    ).toBe('producto-no-encontrado');
+    // Un código que esta versión no conoce no pisa el diagnóstico por texto.
+    expect(blockedCodeOf(registro({ diagnosis: { code: 'sin-stock', syncCode: 'NUEVO' } }))).toBe('sin-stock');
+  });
+
+  it('los códigos que sumaron SPEC 56 y 58 al contrato resuelven su causa del panel', () => {
+    expect(
+      blockedCodeOf(
+        registro({
+          kind: 'stockEntry',
+          diagnosis: { code: 'desconocido', syncCode: 'ENTRY_POSSIBLE_DUPLICATE' },
+        }),
+      ),
+    ).toBe('entrada-posible-duplicada');
+    expect(
+      blockedCodeOf(
+        registro({
+          kind: 'product',
+          diagnosis: { code: 'desconocido', syncCode: 'CATALOG_CONFLICT' },
+        }),
+      ),
+    ).toBe('catalogo-en-conflicto');
+  });
+
+  it('ENTRY_AMBIGUOUS sigue mandando con el admin', () => {
+    const ayuda = describeBlocked({
+      kind: 'stockEntry',
+      id: 'b1',
+      diagnosis: { code: 'desconocido', syncCode: 'ENTRY_AMBIGUOUS' },
+    } as BlockedSyncRecord);
     expect(ayuda.recommended).toBe('avisar-admin');
   });
 
@@ -78,5 +142,21 @@ describe('describeBlocked', () => {
     for (const code of codes) {
       expect(['reintentar', 'corregir', 'avisar-admin']).toContain(describeBlocked(registro({ diagnosis: { code } })).recommended);
     }
+  });
+});
+
+describe('describeBlocked — conflicto de catálogo (SPEC 56)', () => {
+  it('explica que el panel cambió el producto y nombra las dos salidas', () => {
+    const record = registro({
+      kind: 'product',
+      reason: 'El precio cambió en el panel: $58.00 [CATALOG_CONFLICT]',
+      diagnosis: { code: 'catalogo-en-conflicto', syncCode: 'CATALOG_CONFLICT' },
+    });
+
+    expect(blockedCodeOf(record)).toBe('catalogo-en-conflicto');
+    const ayuda = describeBlocked(record);
+    expect(ayuda.title).toBe('El producto cambió en el panel');
+    expect(ayuda.explanation).toContain('Usar el del panel');
+    expect(ayuda.explanation).toContain('Forzar el mío');
   });
 });

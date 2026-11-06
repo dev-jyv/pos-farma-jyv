@@ -21,6 +21,7 @@ import {
   ProductFieldsPayload,
   PromotionDto,
   Sale,
+  SaleSyncReview,
 } from '../../shared/models';
 
 export interface PendingStockEntry {
@@ -31,15 +32,64 @@ export interface PendingStockEntry {
   pushError: string | null;
 }
 
+/**
+ * Campos de catálogo tal como suben: `controlledGroup: null` es la
+ * desclasificación (SPEC 64), que viaja solo cuando la foto del servidor tenía grupo.
+ */
+export type CatalogPushFields = Partial<Omit<ProductFieldsPayload, 'controlledGroup'>> & {
+  controlledGroup?: ProductFieldsPayload['controlledGroup'] | null;
+};
+
 /** Producto pendiente de subir desde el módulo de edición de catálogo. */
 export interface PendingCatalogProduct {
   id: string;
   /** `null` = alta nueva (nunca sincronizó); si tiene valor, es una edición. */
   remoteId: string | null;
   fields: ProductFieldsPayload;
+  /**
+   * Edición con foto (SPEC 56): solo los campos que difieren de `baseFields`;
+   * eso es lo que sube el PATCH. `null`/ausente = sin foto (alta, o producto de
+   * antes de la migración): sube `fields` completo, como siempre.
+   */
+  changes?: CatalogPushFields | null;
+  /** `updatedAt` remoto de la foto; `null` sin foto o con "Forzar el mío". */
+  baseUpdatedAt?: string | null;
+  /** Campos de catálogo completos tal como quedarán arriba; la foto nueva al confirmar. */
+  snapshot?: CatalogPushFields;
   catalogPushError: string | null;
   /** `updatedAt` del producto al leer la cola; se devuelve a `markCatalogSynced`. */
   version?: string | null;
+}
+
+/** Lo que el servidor ya tiene tras un push de catálogo: renueva la foto `baseFields`. */
+export interface CatalogSyncedSnapshot {
+  fields: CatalogPushFields;
+  /** `updatedAt` que respondió el servidor (ISO o `Timestamp` serializado). */
+  remoteUpdatedAt?: unknown;
+}
+
+/** Valor actual del panel en un 409 `CATALOG_CONFLICT` (SPEC 56). */
+export interface CatalogConflictCurrent {
+  salePrice: number | null;
+  isActive: boolean | null;
+}
+
+/** "Usar el del panel" o "Forzar el mío". */
+export type CatalogConflictChoice = 'panel' | 'mine';
+
+/** Respuesta de `GET /v1/products/:id/stock` (SPEC 57), tal como se guarda en SQLite. */
+export interface ProductStockSnapshot {
+  id: string;
+  totalStock: number;
+  updatedAt?: unknown;
+  /** Solo lotes con piezas; misma forma que los de `/products/sync`. */
+  batches: Array<{ id: string; lotNumber?: string | null; expiryDate?: unknown; quantity: number }>;
+}
+
+/** Producto y lotes tras guardar la existencia fresca (lo pendiente ya descontado). */
+export interface ProductStockRefreshResult {
+  product: Product;
+  batches: ProductBatch[];
 }
 
 export interface StockEntryLocalResult {
@@ -146,7 +196,14 @@ export interface LocalCashSessionInput {
   openedBy: string;
   /** Correo del cajero al abrir; para que la auditoría no muestre un uid. */
   openedByLabel?: string;
+  /** Fondo del turno. Con `openingCounted` se ignora: el fondo es lo contado. */
   openingAmount: number;
+  /** Efectivo que el cajero contó al abrir (SPEC 63). */
+  openingCounted?: number;
+  /** Fondo que dejó el cierre anterior; se omite sin cierre previo. */
+  inheritedFloat?: number;
+  /** Obligatoria si el contado difiere de lo heredado. */
+  openingNote?: string;
 }
 
 /** Turno con su alta (`POST /cash-sessions`) pendiente de subir. */
@@ -188,7 +245,8 @@ export interface LocalCashMovementInput {
  * alguien tiene que leer el motivo y decidir, así que la caja debe mostrarlo.
  */
 export interface BlockedSyncRecord {
-  kind: 'sale' | 'cashMovement' | 'cashSession' | 'stockEntry' | 'product';
+  /** `saleVoid`: anulación de una venta ya subida que el servidor rechazó (SPEC 62). */
+  kind: 'sale' | 'saleVoid' | 'cashMovement' | 'cashSession' | 'stockEntry' | 'product';
   id: string;
   /** Folio, motivo del gasto o tipo de operación: con qué lo reconoce el cajero. */
   label: string;
@@ -203,6 +261,11 @@ export interface BlockedSyncRecord {
    * `remoteId`). Vacío si el bloqueo es un rechazo del servidor.
    */
   blockers?: PosBlocker[];
+  /**
+   * Solo productos con 409 `CATALOG_CONFLICT` (SPEC 56): lo que dice el panel.
+   * Con él se ofrecen "Usar el del panel" y "Forzar el mío".
+   */
+  conflict?: CatalogConflictCurrent;
 }
 
 export type BlockedCode =
@@ -213,6 +276,8 @@ export type BlockedCode =
   | 'producto-no-encontrado'
   | 'listo-para-reintentar'
   | 'entrada-a-medias'
+  | 'entrada-en-curso'
+  | 'entrada-posible-duplicada'
   | 'turno-duplicado'
   | 'turno-abierto-existente'
   | 'turno-ajeno'
@@ -220,10 +285,18 @@ export type BlockedCode =
   | 'turno-no-encontrado'
   | 'sin-stock'
   | 'promocion-no-vigente'
+  | 'anulacion-rechazada'
+  | 'catalogo-en-conflicto'
+  | 'producto-duplicado'
   | 'desconocido';
 
 export interface BlockedDiagnosis {
   code: BlockedCode;
+  /**
+   * Código estable del servidor (SPEC 49) que la caja guardó con el motivo, si
+   * vino (`SyncErrorCode`, o uno que esta versión no conoce). Manda sobre el texto.
+   */
+  syncCode?: string;
   /** Lo que la venta espera: con qué nombre lo reconoce el cajero. */
   dependency?: { kind: 'cashSession' | 'product'; label: string };
 }
@@ -289,6 +362,13 @@ declare global {
       getAppVersion: () => Promise<string>;
       getDeviceInfo: () => Promise<unknown>;
       openCashDrawer: (printerName: string) => Promise<boolean>;
+      products?: {
+        /** SPEC 57: guarda la existencia fresca de un producto; `null` si no está en la caja. */
+        refreshOne: (
+          remoteId: string,
+          snapshot: ProductStockSnapshot,
+        ) => Promise<ProductStockRefreshResult | null>;
+      };
       catalog: {
         search: (term: string) => Promise<Product[]>;
         /** Productos (activos o no) con el mismo nombre; el servidor no admite repetidos. */
@@ -310,6 +390,11 @@ declare global {
         clearStockEntryPushError: (batchLocalId: string) => Promise<void>;
         /** Borra un lote que nunca subió y descuenta sus piezas del stock local. */
         discardStockEntry: (batchLocalId: string) => Promise<void>;
+        /**
+         * "Sí, es otra partida" (SPEC 58): reenvía la entrada con `confirmDuplicate: true`
+         * tras un 409 `ENTRY_POSSIBLE_DUPLICATE`. `false` si ya no estaba pendiente.
+         */
+        confirmDuplicateStockEntry: (batchLocalId: string) => Promise<boolean>;
         /** Altas o ediciones de catálogo que el servidor rechazó. */
         listBlockedProducts: () => Promise<BlockedSyncRecord[]>;
         markStockEntrySynced: (batchLocalId: string, remoteProductId?: string | null) => Promise<void>;
@@ -317,9 +402,18 @@ declare global {
         /** Acepta id local o `remoteId`; devuelve `null` si no existe. */
         getProductById: (id: string) => Promise<Product | null>;
         createCatalogProduct: (fields: ProductFieldsPayload) => Promise<Product>;
-        updateCatalogProduct: (id: string, fields: Partial<ProductFieldsPayload>) => Promise<Product>;
+        updateCatalogProduct: (id: string, fields: CatalogPushFields) => Promise<Product>;
         getPendingCatalogPush: () => Promise<PendingCatalogProduct[]>;
-        markCatalogSynced: (localId: string, remoteId?: string | null, pushedVersion?: string | null) => Promise<void>;
+        markCatalogSynced: (
+          localId: string,
+          remoteId?: string | null,
+          pushedVersion?: string | null,
+          synced?: CatalogSyncedSnapshot | null,
+        ) => Promise<void>;
+        /** 409 `CATALOG_CONFLICT`: bloquea la edición visible con el valor del panel. */
+        markCatalogConflict: (localId: string, current: CatalogConflictCurrent) => Promise<void>;
+        /** `false` si el producto no tiene conflicto que resolver. */
+        resolveCatalogConflict: (localId: string, choice: CatalogConflictChoice) => Promise<boolean>;
         markCatalogPushFailed: (localId: string, message: string) => Promise<void>;
         clearCatalogPushError: (localId: string) => Promise<void>;
         /**
@@ -344,10 +438,18 @@ declare global {
          * Anuladas que nunca llegaron al servidor: se crean y se anulan allá,
          * para que el movimiento quede completo.
          */
-        getPendingVoided: (filters?: { ownerUid?: string }) => Promise<
-          Array<PendingSale & { voidedAt: string | null; voidedBy: string | null }>
+        getPendingVoided: (filters?: { ownerUid?: string; contarIntentos?: boolean }) => Promise<
+          Array<
+            PendingSale & { voidedAt: string | null; voidedBy: string | null; voidReason?: string | null }
+          >
         >;
-        markSynced: (localId: string, remoteId: string, remoteFolio: string) => Promise<void>;
+        /** `review`: marcas con las que el servidor aceptó la venta offline (SPEC 52). */
+        markSynced: (
+          localId: string,
+          remoteId: string,
+          remoteFolio: string,
+          review?: SaleSyncReview | null,
+        ) => Promise<void>;
         markPushFailed: (localId: string, message: string) => Promise<void>;
         /** Bloqueadores de una venta; `null` si no existe. */
         diagnose: (saleId: string) => Promise<PosBlocker[] | null>;
@@ -364,10 +466,29 @@ declare global {
         /** Bitácora de la venta: un renglón por movimiento, con quién y cuándo. */
         listMovements: (saleId: string) => Promise<SaleMovement[]>;
         clearPushError: (localId: string) => Promise<void>;
-        discard: (localId: string) => Promise<void>;
+        /**
+         * Descarte lógico (SPEC 62): motivo obligatorio; lanza si la venta ya está
+         * en el servidor o ya salió hacia él. `null` si no existe o ya se descartó.
+         */
+        discard: (
+          localId: string,
+          options: { discardedBy: string; reason: string },
+        ) => Promise<Sale | null>;
+        /** Venta local con esa llave de cobro (SPEC 66), o `null`. */
+        getByIdempotencyKey: (idempotencyKey: string) => Promise<Sale | null>;
+        /** El servidor rechazó la anulación remota con un 4xx: visible en "Rechazados". */
+        markVoidFailed: (localId: string, message: string) => Promise<void>;
+        /** "Reintentar" de un admin: la anulación remota vuelve a la cola. */
+        clearVoidError: (localId: string) => Promise<void>;
         /** Ventas ya sincronizadas que se anularon en local durante la carrera de `markSynced`. */
         getNeedingRemoteVoid: (filters?: { ownerUid?: string }) => Promise<
-          Array<{ id: string; remoteId: string; voidedAt: string | null; voidedBy: string | null }>
+          Array<{
+            id: string;
+            remoteId: string;
+            voidedAt: string | null;
+            voidedBy: string | null;
+            voidReason?: string | null;
+          }>
         >;
         /** Anulada sin red: queda pendiente de anularse también en el servidor. */
         markNeedsRemoteVoid: (localId: string) => Promise<void>;
@@ -383,8 +504,11 @@ declare global {
         list: (limit?: number) => Promise<PosSyncLogEntry[]>;
       };
       diagnostics: {
-        /** Foto para `POST /pos/diagnostics`, con la identidad del equipo. */
-        buildSnapshot: () => Promise<PosDiagnosticsInput>;
+        /**
+         * Foto para `POST /pos/diagnostics`, con la identidad del equipo.
+         * `includeStockSample` (SPEC 67) agrega la muestra diaria de stock.
+         */
+        buildSnapshot: (options?: { includeStockSample?: boolean }) => Promise<PosDiagnosticsInput>;
       };
       cashSessions: {
         /** El único turno sin cerrar de este cajero, si existe. */

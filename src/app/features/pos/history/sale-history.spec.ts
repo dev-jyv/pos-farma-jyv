@@ -63,7 +63,7 @@ describe('SaleHistory', () => {
   let list: (params: unknown) => Observable<Sale[]>;
   /** Parámetros con los que se pidió el listado, en orden. */
   let listCalls: Array<Record<string, unknown>>;
-  let voidSale: (id: string) => Observable<Sale>;
+  let voidSale: (sale: Sale, reason: string) => Observable<Sale>;
   let current: ReturnType<typeof signal<CashSession | null>>;
   let isAdmin: ReturnType<typeof signal<boolean>>;
   /** `pos:write`: el permiso con el que el cajero cobra. */
@@ -72,7 +72,6 @@ describe('SaleHistory', () => {
   let notifySuccess: ReturnType<typeof vi.fn>;
   let printSale: ReturnType<typeof vi.fn>;
   let movements: SaleMovement[];
-  let confirmSpy: ReturnType<typeof vi.spyOn>;
 
   async function build(): Promise<void> {
     TestBed.resetTestingModule();
@@ -89,7 +88,7 @@ describe('SaleHistory', () => {
               listCalls.push(params);
               return list(params);
             },
-            void: (id: string) => voidSale(id),
+            void: (target: Sale, reason: string) => voidSale(target, reason),
             movements: () => of(movements),
             pendingSales: signal([]),
           },
@@ -125,12 +124,10 @@ describe('SaleHistory', () => {
     current = signal<CashSession | null>(session);
     list = () => of([sale()]);
     voidSale = () => of(sale({ voidedAt: new Date('2026-08-08T16:00:00') }));
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     listCalls = [];
     await build();
   });
 
-  afterEach(() => confirmSpy.mockRestore());
 
   describe('alcance', () => {
     it('con turno abierto lista el turno y lo dice', () => {
@@ -167,22 +164,53 @@ describe('SaleHistory', () => {
   });
 
   describe('anulación', () => {
-    it('el administrador anula y la fila se actualiza en el listado', () => {
-      component.voidSale(component.sales()[0]);
+    /** Abre el diálogo del motivo y lo confirma, como haría el cajero. */
+    function anular(target: Sale, reason = 'Cliente desistió'): void {
+      component.voidSale(target);
+      if (component.voidTarget()) {
+        component.confirmVoid(reason);
+      }
+    }
 
-      expect(confirmSpy).toHaveBeenCalled();
+    it('el administrador anula con motivo y la fila se actualiza en el listado', () => {
+      const voidSpy = vi.fn(() => of(sale({ voidedAt: new Date('2026-08-08T16:00:00') })));
+      voidSale = voidSpy;
+
+      anular(component.sales()[0], 'Error de captura');
+
+      expect(voidSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'v1' }), 'Error de captura');
       expect(component.sales()[0].voidedAt).toBeInstanceOf(Date);
+      expect(component.voidTarget()).toBeNull();
       expect(notifySuccess).toHaveBeenCalled();
     });
 
-    it('sin confirmar no anula', () => {
-      confirmSpy.mockReturnValue(false);
+    it('anular pide el motivo antes de tocar nada (SPEC 62)', () => {
       const voidSpy = vi.fn(() => of(sale()));
       voidSale = voidSpy;
 
       component.voidSale(component.sales()[0]);
 
+      expect(component.voidTarget()?.id).toBe('v1');
       expect(voidSpy).not.toHaveBeenCalled();
+    });
+
+    it('cerrar el diálogo sin motivo no anula', () => {
+      const voidSpy = vi.fn(() => of(sale()));
+      voidSale = voidSpy;
+
+      component.voidSale(component.sales()[0]);
+      component.cancelVoid();
+
+      expect(component.voidTarget()).toBeNull();
+      expect(voidSpy).not.toHaveBeenCalled();
+    });
+
+    it('el diálogo ofrece las opciones rápidas del negocio', () => {
+      component.voidSale(component.sales()[0]);
+      fixture.detectChanges();
+
+      expect(component.voidReasons()).toHaveLength(4);
+      expect(component.voidOtherOption()).toBe(component.voidReasons()[3]);
     });
 
     it('el cajero SÍ puede anular: es rutina de mostrador, no atribución de admin', () => {
@@ -193,7 +221,7 @@ describe('SaleHistory', () => {
       const voidSpy = vi.fn(() => of(sale()));
       voidSale = voidSpy;
 
-      component.voidSale(component.sales()[0]);
+      anular(component.sales()[0]);
 
       expect(voidSpy).toHaveBeenCalled();
     });
@@ -204,8 +232,9 @@ describe('SaleHistory', () => {
       const voidSpy = vi.fn(() => of(sale()));
       voidSale = voidSpy;
 
-      component.voidSale(component.sales()[0]);
+      anular(component.sales()[0]);
 
+      expect(component.voidTarget()).toBeNull();
       expect(voidSpy).not.toHaveBeenCalled();
     });
 
@@ -213,19 +242,29 @@ describe('SaleHistory', () => {
       const voidSpy = vi.fn(() => of(sale()));
       voidSale = voidSpy;
 
-      component.voidSale(sale({ voidedAt: new Date() }));
+      anular(sale({ voidedAt: new Date() }));
 
       expect(voidSpy).not.toHaveBeenCalled();
     });
 
-    it('un rechazo del servidor se muestra tal cual y libera el botón', () => {
+    it('un rechazo del servidor se muestra tal cual, libera el botón y deja el motivo a la vista', () => {
       voidSale = () =>
         throwError(() => ({ message: 'Solo un administrador puede anular' }) as unknown as Error);
 
-      component.voidSale(component.sales()[0]);
+      anular(component.sales()[0]);
 
       expect(component.voiding()).toBeNull();
+      expect(component.voidTarget()?.id).toBe('v1');
       expect(notifyError).toHaveBeenCalled();
+    });
+
+    it('la fila anulada muestra su motivo', () => {
+      list = () => of([sale({ voidedAt: new Date(), voidedBy: 'u1', voidReason: 'Producto equivocado' })]);
+      component.reload();
+      fixture.detectChanges();
+
+      const motivo = fixture.nativeElement.querySelector('[data-testid="void-reason"]');
+      expect(motivo?.textContent).toContain('Producto equivocado');
     });
   });
 
@@ -283,6 +322,42 @@ describe('SaleHistory', () => {
     it('la fila del listado dice quién anuló', () => {
       expect(component.voidedByLabel(sale({ voidedBy: 'u1' }))).toBe('caja@farmajyv.mx');
       expect(component.voidedByLabel(sale({ voidedBy: 'u9' }))).toBe('u9');
+    });
+  });
+
+  describe('marcas de revisión (SPEC 52)', () => {
+    async function renderWith(overrides: Partial<Sale>): Promise<string> {
+      list = () => of([sale(overrides)]);
+      await build();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      return (fixture.nativeElement as HTMLElement).textContent ?? '';
+    }
+
+    it('una venta aceptada con faltante muestra el chip de revisión de stock', async () => {
+      const texto = await renderWith({
+        syncReview: {
+          stock: { items: [{ productId: 'r-1', requested: 5, allocated: 3, shortfall: 2 }] },
+          catalog: null,
+          late: false,
+        },
+      });
+      expect(texto).toContain('history.review.stock');
+      expect(texto).not.toContain('history.review.late');
+      // Registrada: no es rechazo ni conciliación.
+      expect(texto).toContain('history.completed');
+      expect(texto).not.toContain('history.unreconciled');
+    });
+
+    it('una venta cobrada con el turno ya cerrado muestra su chip', async () => {
+      const texto = await renderWith({ syncReview: { stock: null, catalog: null, late: true } });
+      expect(texto).toContain('history.review.late');
+      expect(texto).not.toContain('history.review.stock');
+    });
+
+    it('una venta sin marcas no muestra chips de revisión', async () => {
+      const texto = await renderWith({});
+      expect(texto).not.toContain('history.review');
     });
   });
 

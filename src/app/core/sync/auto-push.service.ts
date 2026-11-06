@@ -22,6 +22,12 @@ export const AUTO_PUSH_PAUSE_MS = 15 * 60_000;
 export interface PushOnlyFlusher {
   flush: () => Promise<void>;
   countPending: () => Promise<number>;
+  /**
+   * Contador monotónico de ventas que el servidor dejó `DEFERRED` (SPEC 48:
+   * se le acabó el presupuesto de tiempo del lote). Si sube durante un envío sin
+   * avance, ese envío no cuenta como intento fallido: no hubo rechazo.
+   */
+  deferredCount?: () => number;
 }
 
 /**
@@ -35,7 +41,8 @@ export interface PushOnlyFlusher {
  * - **Sin red**: no intenta; queda en la cola local y sube al volver la
  *   conexión o en el siguiente horario.
  * - **Backoff** exponencial con variación si el servidor no confirma nada, y
- *   pausa de 15 min tras 5 intentos sin avance. Un rechazo definitivo no
+ *   pausa de 15 min tras 5 intentos sin avance; al terminar la pausa se
+ *   rearma solo (SPEC 66). Un rechazo definitivo no
  *   reintenta en bucle: sale de la cola (queda en "Rechazados").
  * - **El backoff y la pausa solo frenan los reintentos**, nunca un cambio nuevo:
  *   `notifyChange()` siempre programa un envío tras el debounce. Basta un
@@ -49,6 +56,12 @@ export class AutoPushService {
 
   private flusher: PushOnlyFlusher | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Rearma el envío al terminar la pausa (SPEC 66). Aparte de `timer`: un
+   * `notifyChange()` dentro de la pausa reusa ese temporizador y, si no avanza,
+   * no arma nada; con uno solo la pausa terminaba sin que nadie reintentara.
+   */
+  private pauseTimer: ReturnType<typeof setTimeout> | null = null;
   private firstChangeAt: number | null = null;
   private pausedUntil = 0;
   private failures = 0;
@@ -61,6 +74,7 @@ export class AutoPushService {
     inject(DestroyRef).onDestroy(() => {
       window.removeEventListener('online', onOnline);
       this.clearTimer();
+      this.clearPauseTimer();
     });
   }
 
@@ -104,6 +118,27 @@ export class AutoPushService {
     }
   }
 
+  private clearPauseTimer(): void {
+    if (this.pauseTimer) {
+      clearTimeout(this.pauseTimer);
+      this.pauseTimer = null;
+    }
+  }
+
+  /**
+   * Al terminar la pausa vuelve a intentar sola (SPEC 66): antes la pausa de
+   * 15 min se quedaba muda hasta el siguiente cambio o el horario fijo. Sin red
+   * en ese momento, `notifyChange()` no hace nada y el aviso `online` la rearma.
+   */
+  private armPauseEnd(): void {
+    this.clearPauseTimer();
+    this.pauseTimer = setTimeout(() => {
+      this.pauseTimer = null;
+      this.log.info('auto-push-resumed', {});
+      this.notifyChange();
+    }, Math.max(0, this.pausedUntil - Date.now()));
+  }
+
   private async run(): Promise<void> {
     this.timer = null;
     this.firstChangeAt = null;
@@ -124,14 +159,17 @@ export class AutoPushService {
         return;
       }
       let after = before;
+      const deferredBefore = flusher.deferredCount?.() ?? 0;
+      let deferred = false;
       try {
         await flusher.flush();
+        deferred = (flusher.deferredCount?.() ?? 0) > deferredBefore;
         after = await flusher.countPending();
       } catch (error) {
         this.log.warn('auto-push-error', { message: (error as Error)?.message });
       }
-      this.log.info('auto-push', { before, after });
-      this.afterAttempt(before, after, wasPaused);
+      this.log.info('auto-push', { before, after, deferred });
+      this.afterAttempt(before, after, wasPaused, deferred);
     } catch (error) {
       this.log.warn('auto-push-error', { message: (error as Error)?.message });
     } finally {
@@ -143,7 +181,7 @@ export class AutoPushService {
     }
   }
 
-  private afterAttempt(before: number, after: number, wasPaused: boolean): void {
+  private afterAttempt(before: number, after: number, wasPaused: boolean, deferred = false): void {
     if (after === 0) {
       this.resetFailures();
       return;
@@ -158,6 +196,14 @@ export class AutoPushService {
       this.arm(AUTO_PUSH_DEBOUNCE_MS);
       return;
     }
+    if (deferred) {
+      // El servidor difirió el lote (SPEC 48): pendiente, no fallo. Se reintenta
+      // con la espera del escalón actual, sin subirlo ni entrar en pausa.
+      const base = AUTO_PUSH_BACKOFF_MS[Math.max(0, this.failures - 1)];
+      this.log.info('auto-push-deferred', { pending: after });
+      this.arm(Math.round(base * (0.8 + Math.random() * 0.4)));
+      return;
+    }
     if (wasPaused) {
       // Un cambio nuevo dentro de la pausa no avanzó: sigue la pausa tal cual,
       // sin escalar ni armar reintentos.
@@ -168,6 +214,7 @@ export class AutoPushService {
       this.pausedUntil = Date.now() + AUTO_PUSH_PAUSE_MS;
       this.failures = 0;
       this.log.warn('auto-push-paused', { pending: after, minutes: AUTO_PUSH_PAUSE_MS / 60_000 });
+      this.armPauseEnd();
       return;
     }
     const base = AUTO_PUSH_BACKOFF_MS[this.failures - 1];
@@ -179,5 +226,6 @@ export class AutoPushService {
   private resetFailures(): void {
     this.failures = 0;
     this.pausedUntil = 0;
+    this.clearPauseTimer();
   }
 }

@@ -3,8 +3,8 @@ import { signal, WritableSignal } from '@angular/core';
 import { provideTranslateService } from '@ngx-translate/core';
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
-import { of, throwError } from 'rxjs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Observable, of, Subject, throwError } from 'rxjs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ScanSoundService } from '../../../core/audio/scan-sound.service';
 import { ServiceCatalogService } from '../services/service-catalog.service';
@@ -24,6 +24,7 @@ import { CartStorageService } from '../services/cart-storage.service';
 import { CashSessionService } from '../services/cash-session.service';
 import { HeldSaleStorageService } from '../services/held-sale-storage.service';
 import { ProductService } from '../services/product.service';
+import { ProductStockService } from '../services/product-stock.service';
 import { PromoService } from '../services/promo.service';
 import { CouponService } from '../services/coupon.service';
 import { SaleService } from '../services/sale.service';
@@ -82,15 +83,23 @@ describe('Sale', () => {
   let servicios: PharmacyService[];
   /** Resultado de `ProductService.search`; `null` = el producto por defecto. */
   let searchResults: Product[] | null;
+  /**
+   * `ProductService.getByBarcode` (SPEC 66). Por defecto imita la SQLite:
+   * código de barras o SKU exactos, y después el código de la caja.
+   */
+  let barcodeLookup: (code: string) => Observable<Product | null>;
   /** Cupones de la SQLite simulada, por código normalizado. */
   let cupones: Record<string, CouponDto>;
   let doctores: ServiceProvider[];
+  /** `ProductStockService.refresh` (SPEC 57); por defecto no consulta (`null` en el acto). */
+  let refreshStock: ReturnType<typeof vi.fn>;
   let saleServiceMock: {
     pendingCount: ReturnType<typeof signal<number>>;
     pendingSales: ReturnType<typeof signal<unknown[]>>;
     void: ReturnType<typeof vi.fn>;
     flushQueue: ReturnType<typeof vi.fn>;
-    discardBlockedSale: ReturnType<typeof vi.fn>;
+    discardSale: ReturnType<typeof vi.fn>;
+    findByIdempotencyKey: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -104,7 +113,17 @@ describe('Sale', () => {
     notifyWarn = vi.fn();
     notifySuccess = vi.fn();
     batches = [batch()];
+    refreshStock = vi.fn(() => null);
     searchResults = null;
+    barcodeLookup = (code: string) => {
+      const catalogo = searchResults ?? [product()];
+      const pieza = catalogo.find((item) => item.barcode === code || item.sku === code);
+      if (pieza) {
+        return of(pieza);
+      }
+      const caja = catalogo.find((item) => item.boxBarcode === code);
+      return of(caja ? (caja.boxQuantity ? { ...caja, saleUnit: 'box' as const } : caja) : null);
+    };
     cupones = {};
     servicios = [servicio()];
     doctores = [{ id: 'dr-1', name: 'Dra. Ruiz' }];
@@ -116,7 +135,8 @@ describe('Sale', () => {
       pendingSales: signal<unknown[]>([]),
       void: vi.fn(() => of({ id: 'v1', folio: 'V-1' } as SaleModel)),
       flushQueue: vi.fn(),
-      discardBlockedSale: vi.fn(),
+      discardSale: vi.fn(() => Promise.resolve()),
+      findByIdempotencyKey: vi.fn(() => Promise.resolve(null)),
     };
 
     await build();
@@ -149,7 +169,11 @@ describe('Sale', () => {
         },
         {
           provide: ProductService,
-          useValue: { search: () => of(searchResults ?? [product()]), invalidate: vi.fn() },
+          useValue: {
+            search: () => of(searchResults ?? [product()]),
+            getByBarcode: (code: string) => barcodeLookup(code),
+            invalidate: vi.fn(),
+          },
         },
         {
           provide: CouponService,
@@ -161,6 +185,7 @@ describe('Sale', () => {
           },
         },
         { provide: BatchService, useValue: { listByProduct: () => of(batches) } },
+        { provide: ProductStockService, useValue: { refresh: refreshStock } },
         { provide: SaleService, useValue: saleServiceMock },
         { provide: SyncScheduler, useValue: syncSchedulerMock },
         {
@@ -400,6 +425,110 @@ describe('Sale', () => {
 
       expect(component.cart()).toHaveLength(0);
       expect(component.cashSessionDialogVisible()).toBe(true);
+    });
+
+    describe('stock fresco antes de negar (SPEC 57)', () => {
+      const flush = async () => {
+        for (let i = 0; i < 5; i += 1) {
+          await Promise.resolve();
+        }
+      };
+
+      it('con stock local 0 y servidor 5, agregar 2 piezas funciona tras la consulta', async () => {
+        const fresco = product({ remoteId: 'RmtP1', stock: 5 });
+        refreshStock.mockImplementation(() => {
+          batches = [batch({ quantity: 5 })];
+          return Promise.resolve({ product: fresco, batches });
+        });
+
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 0 }), 2);
+        await flush();
+
+        expect(refreshStock).toHaveBeenCalledTimes(1);
+        expect(component.cart()).toHaveLength(1);
+        expect(component.cart()[0].quantity).toBe(2);
+        expect(notifyError).not.toHaveBeenCalledWith('Producto sin stock disponible.');
+      });
+
+      it('también al pasar del stock local con piezas ya en el ticket', async () => {
+        batches = [batch({ quantity: 2 })];
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 2 }), 2);
+        refreshStock.mockImplementation(() => {
+          batches = [batch({ quantity: 6 })];
+          return Promise.resolve({ product: product({ remoteId: 'RmtP1', stock: 6 }), batches });
+        });
+
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 2 }), 3);
+        await flush();
+
+        expect(component.cart()[0].quantity).toBe(5);
+      });
+
+      it('si no consulta (sin red, sin remoteId o en antirrebote) niega en el acto como siempre', () => {
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 0 }));
+
+        expect(refreshStock).toHaveBeenCalledTimes(1);
+        expect(component.cart()).toHaveLength(0);
+        expect(notifyError).toHaveBeenCalledWith('Producto sin stock disponible.');
+      });
+
+      it('si el servidor tampoco tiene, niega sin volver a consultar', async () => {
+        refreshStock.mockImplementation(() =>
+          Promise.resolve({ product: product({ remoteId: 'RmtP1', stock: 1 }), batches: [batch({ quantity: 1 })] }),
+        );
+        batches = [batch({ quantity: 1 })];
+
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 1 }), 3);
+        await flush();
+
+        expect(refreshStock).toHaveBeenCalledTimes(1);
+        expect(component.cart()).toHaveLength(0);
+        expect(notifyError).toHaveBeenCalledWith('Sin stock suficiente para agregar otra unidad.');
+      });
+
+      it('subir la cantidad en el ticket también consulta antes de negar', async () => {
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 2 }), 1);
+        refreshStock.mockImplementation(() =>
+          Promise.resolve({ product: product({ remoteId: 'RmtP1', stock: 8 }), batches: [batch({ quantity: 8 })] }),
+        );
+
+        component.updateQuantity('product:p1', 4);
+        await flush();
+
+        const [linea] = component.cart();
+        expect(linea.quantity).toBe(4);
+        expect(linea.kind === 'product' ? linea.product.stock : null).toBe(8);
+      });
+    });
+
+    describe('caducidad por día de México (SPEC 57)', () => {
+      afterEach(() => vi.useRealTimers());
+
+      it('un lote que caduca hoy se vende hasta las 20:00 hora de México (y después)', () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        // 2026-11-06 20:00 en México = 2026-11-07 02:00 UTC.
+        vi.setSystemTime(new Date('2026-11-07T02:00:00Z'));
+        batches = [batch({ expiryDate: new Date('2026-11-06T00:00:00Z'), quantity: 3 })];
+
+        component.addToCart(product());
+
+        expect(component.cart()).toHaveLength(1);
+        expect(notifyError).not.toHaveBeenCalledWith('El stock disponible está vencido.');
+        expect(
+          notifyError.mock.calls.some(([message]) => String(message).includes('vence el 6/11/2026 (0 días)')),
+        ).toBe(true);
+      });
+
+      it('al día siguiente en México ya no se vende', () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-11-07T06:30:00Z'));
+        batches = [batch({ expiryDate: new Date('2026-11-06T00:00:00Z'), quantity: 3 })];
+
+        component.addToCart(product());
+
+        expect(component.cart()).toHaveLength(0);
+        expect(notifyError).toHaveBeenCalledWith('El stock disponible está vencido.');
+      });
     });
 
     it('un rol sin permiso de venta se entera aquí y no con un 403 al cobrar', () => {
@@ -674,7 +803,7 @@ describe('Sale', () => {
       component.onSaleCompleted({ ...sale, id: 'local-1', pendingPush: true } as SaleModel);
 
       expect(component.lastSaleQueueId()).toBe('local-1');
-      component.voidLastSale();
+      component.voidLastSale('Cliente desistió');
       expect(saleServiceMock.void).not.toHaveBeenCalled();
     });
 
@@ -682,7 +811,7 @@ describe('Sale', () => {
       saleServiceMock.void = vi.fn(() => throwError(() => new Error('Solo un administrador puede anular')));
       component.onSaleCompleted(sale);
 
-      component.voidLastSale();
+      component.voidLastSale('Cliente desistió');
 
       expect(notifyError).toHaveBeenCalledWith('Solo un administrador puede anular');
     });
@@ -1239,28 +1368,40 @@ describe('Sale', () => {
 
       component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
 
-      expect(saleServiceMock.discardBlockedSale).not.toHaveBeenCalled();
+      expect(component.discardPendingTarget()).toBeNull();
+      expect(saleServiceMock.discardSale).not.toHaveBeenCalled();
     });
 
-    it('pide confirmación antes de borrar: puede ser una venta ya cobrada', () => {
+    it('pide el motivo antes de borrar: puede ser una venta ya cobrada (SPEC 62)', () => {
       isAdmin.set(true);
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
       component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
 
-      expect(confirm).toHaveBeenCalled();
-      expect(saleServiceMock.discardBlockedSale).not.toHaveBeenCalled();
-      confirm.mockRestore();
+      expect(component.discardPendingTarget()?.queueId).toBe('v1');
+      expect(saleServiceMock.discardSale).not.toHaveBeenCalled();
+      component.cancelDiscardPending();
+      expect(component.discardPendingTarget()).toBeNull();
     });
 
-    it('confirmada, la descarta por el id local', () => {
+    it('con motivo, la descarta por el id local', async () => {
       isAdmin.set(true);
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
+      await component.confirmDiscardPending('Venta de prueba');
 
-      expect(saleServiceMock.discardBlockedSale).toHaveBeenCalledWith('v1');
-      confirm.mockRestore();
+      expect(saleServiceMock.discardSale).toHaveBeenCalledWith('v1', 'Venta de prueba');
+      expect(component.discardPendingTarget()).toBeNull();
+    });
+
+    it('si la caja la rechaza (ya salió al servidor) avisa y no la quita', async () => {
+      isAdmin.set(true);
+      saleServiceMock.discardSale.mockRejectedValueOnce(new Error('Ya está en el servidor; anúlala.'));
+
+      component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
+      await component.confirmDiscardPending('Venta de prueba');
+
+      expect(notifyError).toHaveBeenCalledWith('Ya está en el servidor; anúlala.');
+      expect(component.discardPendingTarget()?.queueId).toBe('v1');
     });
   });
 
@@ -1621,6 +1762,179 @@ describe('Sale', () => {
   });
 
   /** Cupones de descuento (SPEC 47). */
+  /** Mostrador robusto: borrador con llave, escáner exacto y búsquedas sin carreras (SPEC 66). */
+  describe('mostrador robusto (SPEC 66)', () => {
+    function borrador(idempotencyKey?: string): void {
+      localStorage.setItem(
+        'pos.current-cart.u1',
+        JSON.stringify({
+          lines: [{ kind: 'product', product: product(), quantity: 2, discountAmount: 0 }],
+          manualDiscounts: {},
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          savedAt: new Date().toISOString(),
+        }),
+      );
+    }
+
+    /** Teclea `code` como el escáner: una ráfaga con 10 ms entre caracteres. */
+    function escanear(code: string, terminador = 'Enter'): void {
+      let reloj = 1_000_000;
+      const ahora = vi.spyOn(Date, 'now').mockImplementation(() => reloj);
+      for (const tecla of code) {
+        reloj += 10;
+        component.onSearchKeydown(new KeyboardEvent('keydown', { key: tecla }));
+        component.onSearchChange(component.searchTerm() + tecla);
+      }
+      reloj += 10;
+      component.onSearchKeydown(new KeyboardEvent('keydown', { key: terminador }));
+      ahora.mockRestore();
+    }
+
+    /** Teclea `code` a mano: 200 ms entre teclas. */
+    function teclear(code: string): void {
+      let reloj = 1_000_000;
+      const ahora = vi.spyOn(Date, 'now').mockImplementation(() => reloj);
+      for (const tecla of code) {
+        reloj += 200;
+        component.onSearchKeydown(new KeyboardEvent('keydown', { key: tecla }));
+        component.onSearchChange(component.searchTerm() + tecla);
+      }
+      reloj += 200;
+      component.onSearchKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+      ahora.mockRestore();
+    }
+
+    describe('borrador con llave', () => {
+      it('un borrador con la llave de una venta existente se descarta al restaurar', async () => {
+        borrador('llave-cobrada-1');
+        saleServiceMock.findByIdempotencyKey = vi.fn(() =>
+          Promise.resolve({ id: 'local-1', folio: 'V-000123' } as SaleModel),
+        );
+        await build();
+        await fixture.whenStable();
+
+        expect(saleServiceMock.findByIdempotencyKey).toHaveBeenCalledWith('llave-cobrada-1');
+        expect(component.cart()).toEqual([]);
+        expect(notifyWarn).toHaveBeenCalledWith('La venta de este ticket ya se registró (folio V-000123)');
+        expect(TestBed.inject(CartStorageService).load('u1')).toBeNull();
+      });
+
+      it('con la llave de un cobro que no se registró, el ticket se recupera', async () => {
+        borrador('llave-sin-venta');
+        await build();
+        await fixture.whenStable();
+
+        expect(component.cart()).toHaveLength(1);
+        expect(notifyWarn).not.toHaveBeenCalledWith(expect.stringContaining('ya se registró'));
+      });
+
+      it('sin llave (nunca se abrió el cobro) se recupera sin consultar', async () => {
+        borrador();
+        await build();
+
+        expect(component.cart()).toHaveLength(1);
+        expect(saleServiceMock.findByIdempotencyKey).not.toHaveBeenCalled();
+      });
+
+      it('el borrador guarda la llave del cobro abierto y la olvida con el ticket', () => {
+        component.addToCart(product(), 1);
+        component.chargeKey.set('llave-abierta');
+        TestBed.tick();
+        expect(TestBed.inject(CartStorageService).load('u1')?.idempotencyKey).toBe('llave-abierta');
+
+        component.onSaleCompleted({ id: 'v1', folio: 'V-1', items: [] } as unknown as SaleModel);
+        component.addToCart(product(), 1);
+        TestBed.tick();
+        // La llave de la venta registrada no se hereda al ticket siguiente.
+        expect(TestBed.inject(CartStorageService).load('u1')?.idempotencyKey).toBeNull();
+      });
+    });
+
+    describe('escáner exacto', () => {
+      it('el escaneo de un código inexistente que coincide en parte con un solo producto no lo agrega', () => {
+        // La búsqueda difusa traería al Paracetamol (contiene "750100"), pero
+        // el código exacto no existe.
+        searchResults = [product({ barcode: '7501001' })];
+        escanear('750100');
+
+        expect(component.cart()).toEqual([]);
+        expect(notifyError).toHaveBeenCalledWith('Código no encontrado');
+        expect(component.searchTerm()).toBe('');
+      });
+
+      it('el escaneo de un código exacto agrega el producto', () => {
+        escanear('7501001');
+
+        expect(component.cart()).toHaveLength(1);
+        expect(component.searchTerm()).toBe('');
+      });
+
+      it('el sufijo Tab del escáner se trata como Enter', () => {
+        escanear('7501001', 'Tab');
+
+        expect(component.cart()).toHaveLength(1);
+      });
+
+      it('un Tab a mano no busca nada', () => {
+        component.onSearchChange('7501001');
+        const tab = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true });
+        component.onSearchKeydown(tab);
+
+        expect(component.cart()).toEqual([]);
+        expect(tab.defaultPrevented).toBe(false);
+      });
+
+      it('a mano, una coincidencia parcial única sí se agrega (como antes)', () => {
+        searchResults = [product({ barcode: '7501001' })];
+        teclear('para');
+
+        expect(component.cart()).toHaveLength(1);
+      });
+
+      it('un SKU numérico corto tecleado a mano gana por código exacto', () => {
+        searchResults = [product({ id: 'p-12', sku: '12', barcode: '999' }), product({ id: 'p-120', sku: '120' })];
+        teclear('12');
+
+        expect(component.cart()).toHaveLength(1);
+        expect((component.cart()[0] as { product: Product }).product.id).toBe('p-12');
+      });
+
+      it('a mano, sin resultado, el término vuelve a la caja para corregirlo', () => {
+        searchResults = [];
+        teclear('xyz9');
+
+        expect(component.cart()).toEqual([]);
+        expect(component.searchTerm()).toBe('xyz9');
+        expect(notifyError).toHaveBeenCalledWith('Producto no encontrado.');
+      });
+    });
+
+    describe('búsquedas sin carreras', () => {
+      it('dos búsquedas seguidas solo aplican la última', () => {
+        const pendientes = new Map<string, Subject<Product | null>>();
+        barcodeLookup = (code: string) => {
+          const respuesta = new Subject<Product | null>();
+          pendientes.set(code, respuesta);
+          return respuesta;
+        };
+
+        escanear('7501001');
+        // El término ya se limpió antes de la siguiente: el segundo escaneo no se
+        // pega al primero.
+        expect(component.searchTerm()).toBe('');
+        escanear('7502002');
+
+        // La respuesta del primero llega tarde: no agrega nada.
+        pendientes.get('7501001')!.next(product({ id: 'p-viejo', barcode: '7501001' }));
+        expect(component.cart()).toEqual([]);
+
+        pendientes.get('7502002')!.next(product({ id: 'p-nuevo', barcode: '7502002' }));
+        expect(component.cart()).toHaveLength(1);
+        expect((component.cart()[0] as { product: Product }).product.id).toBe('p-nuevo');
+      });
+    });
+  });
+
   describe('cupones', () => {
     function cupon(overrides: Partial<CouponDto> = {}): CouponDto {
       return {

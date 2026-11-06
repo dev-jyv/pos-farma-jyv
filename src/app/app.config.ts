@@ -9,6 +9,7 @@ import { providePrimeNG } from 'primeng/config';
 import { environment } from '../environments/environment';
 import { routes } from './app.routes';
 import { authInterceptor } from './core/api/auth.interceptor';
+import { clockSkewInterceptor } from './core/api/clock-skew.interceptor';
 import { LoggingErrorHandler } from './core/logging/app-log.service';
 import { provideFirebase } from './core/firebase/firebase.providers';
 import { PosPreset } from './core/theme/pos.preset';
@@ -19,7 +20,7 @@ export const appConfig: ApplicationConfig = {
     MessageService,
     { provide: ErrorHandler, useClass: LoggingErrorHandler },
     provideRouter(routes, ...(environment.isElectron ? [withHashLocation()] : [])),
-    provideHttpClient(withInterceptors([authInterceptor])),
+    provideHttpClient(withInterceptors([authInterceptor, clockSkewInterceptor])),
     provideTranslateService({
       loader: provideTranslateHttpLoader({
         prefix: environment.isElectron ? './i18n/' : '/i18n/',

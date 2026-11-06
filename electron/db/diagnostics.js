@@ -21,7 +21,11 @@ const LIMITS = {
   unsyncedProducts: 200,
   recentSyncRuns: 50,
   syncLog: 200,
+  stockSample: 300,
 };
+
+/** Ventana de "más vendidos" para priorizar la muestra de stock (SPEC 67). */
+const STOCK_SAMPLE_WINDOW_DAYS = 7;
 
 function iso(value) {
   if (!value) return null;
@@ -148,12 +152,74 @@ async function openCashSessionIdOf(prisma) {
 }
 
 /**
+ * Muestra de stock para que el backend detecte divergencias entre la caja y el
+ * servidor (SPEC 67, E3): `[{ productId (remoto), localStock }]`, máximo 300,
+ * primero los más vendidos de los últimos 7 días.
+ *
+ * Solo productos **sin pendientes de subida**: ni ventas sin subir (o anuladas
+ * en local sin anular arriba), ni lotes de entrada pendientes, ni alta o edición
+ * de catálogo pendiente. Con algo en vuelo la diferencia es esperada y el
+ * backend la contaría como divergencia falsa.
+ */
+async function stockSampleOf(prisma, now) {
+  const since = new Date(now.getTime() - STOCK_SAMPLE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const [products, pendingSales, pendingBatches, recentSales] = await Promise.all([
+    prisma.product.findMany({ where: { remoteId: { not: null } } }),
+    prisma.sale.findMany({
+      where: { OR: [{ pendingPush: true }, { needsRemoteVoid: true }] },
+      include: { items: true },
+    }),
+    prisma.batch.findMany({ where: { pendingPush: true } }),
+    prisma.sale.findMany({
+      where: { createdAt: { gte: since }, voidedAt: null },
+      include: { items: true },
+    }),
+  ]);
+
+  const withPending = new Set(pendingBatches.map((batch) => batch.productId));
+  for (const sale of pendingSales) {
+    for (const item of sale.items ?? []) {
+      if (item.productId) withPending.add(item.productId);
+    }
+  }
+
+  const sold = new Map();
+  for (const sale of recentSales) {
+    for (const item of sale.items ?? []) {
+      if (item.kind === 'product' && item.productId) {
+        sold.set(item.productId, (sold.get(item.productId) ?? 0) + Number(item.quantity ?? 0));
+      }
+    }
+  }
+
+  return products
+    .filter(
+      (row) =>
+        !withPending.has(row.id) &&
+        !row.pendingPush &&
+        !row.pendingCatalogPush &&
+        !row.pushError &&
+        !row.catalogPushError,
+    )
+    .sort((a, b) => {
+      const bySold = (sold.get(b.id) ?? 0) - (sold.get(a.id) ?? 0);
+      return bySold !== 0 ? bySold : String(a.remoteId).localeCompare(String(b.remoteId));
+    })
+    .slice(0, LIMITS.stockSample)
+    .map((row) => ({ productId: row.remoteId, localStock: Number(row.totalStock ?? 0) }));
+}
+
+/**
  * Arma el `PosDiagnosticsInput`. `device` lo pone el proceso main (identidad
  * del equipo y versión), que es quien la conoce; también `lastLocalBackupAt`
  * (ISO de la última copia local de rutina, SPEC 37), porque es main quien sabe
  * dónde están las copias. Sin él se reporta `null`.
+ *
+ * SPEC 67: `device.updateError`/`updateCheckedAt` (estado del actualizador, que
+ * conoce main) viajan solo si hay dato. `includeStockSample` agrega la muestra
+ * diaria de stock; si falla se omite (el renderer no da el día por cubierto).
  */
-async function buildSnapshot(prisma, device, now = new Date()) {
+async function buildSnapshot(prisma, device, now = new Date(), { includeStockSample = false } = {}) {
   const [
     pendingSalesCount,
     blockedSales,
@@ -172,6 +238,14 @@ async function buildSnapshot(prisma, device, now = new Date()) {
       syncLog.listRecent(prisma, LIMITS.syncLog).catch(() => []),
       openCashSessionIdOf(prisma),
     ]);
+  let stockSample;
+  if (includeStockSample) {
+    try {
+      stockSample = await stockSampleOf(prisma, now);
+    } catch {
+      stockSample = undefined;
+    }
+  }
   return {
     deviceId: device.deviceId,
     deviceName: device.deviceName,
@@ -187,7 +261,10 @@ async function buildSnapshot(prisma, device, now = new Date()) {
     // `undefined` (consulta fallida) desaparece al serializar a JSON.
     ...(openCashSessionId === undefined ? {} : { openCashSessionId }),
     lastLocalBackupAt: iso(device.lastLocalBackupAt),
+    ...(device.updateError ? { updateError: String(device.updateError) } : {}),
+    ...(iso(device.updateCheckedAt) ? { updateCheckedAt: iso(device.updateCheckedAt) } : {}),
+    ...(stockSample === undefined ? {} : { stockSample }),
   };
 }
 
-module.exports = { buildSnapshot, LIMITS };
+module.exports = { buildSnapshot, stockSampleOf, LIMITS };

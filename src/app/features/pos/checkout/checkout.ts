@@ -168,6 +168,12 @@ export class Checkout {
   readonly closed = output<void>();
   readonly completed = output<Sale>();
   /**
+   * Llave de idempotencia del cobro recién abierto (SPEC 66): la pantalla de
+   * venta la guarda en el borrador del ticket. Tras un apagón, un borrador con
+   * la llave de una venta ya registrada no se puede volver a cobrar.
+   */
+  readonly chargeKeyIssued = output<string>();
+  /**
    * Una promo del ticket cerró antes de registrar la venta (nombre de la promo).
    * La venta **no** se registró: la pantalla de venta refresca las promociones,
    * recalcula el ticket y pide volver a cobrar.
@@ -950,6 +956,7 @@ export class Checkout {
     this.stopPolling();
     // Diálogo abierto = cobro nuevo: llave de idempotencia nueva.
     this.idempotencyKey = newIdempotencyKey();
+    this.chargeKeyIssued.emit(this.idempotencyKey);
     this.cardAttempt = 0;
     this.paymentMethod.set('cash');
     this.amountReceived.set(this.total());

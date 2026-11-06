@@ -13,7 +13,7 @@ import { filter, map } from 'rxjs';
 
 import { AuthService } from '../auth/auth.service';
 import { ApiHealthService } from '../health/api-health.service';
-import { BlockedSyncRecord } from '../electron/window.d';
+import { BlockedSyncRecord, CatalogConflictChoice } from '../electron/window.d';
 import { BlockedSyncService } from '../sync/blocked-sync.service';
 import { describeBlocked } from '../sync/sync-diagnosis';
 import { SyncHelpReply, SyncHelpService } from '../sync/sync-help.service';
@@ -26,6 +26,8 @@ import { SaleService } from '../../features/pos/services/sale.service';
 import { SyncScheduler } from '../sync/sync-scheduler.service';
 import { environment } from '../../../environments/environment';
 import { NAV_ITEMS, NavItem } from './nav.config';
+import { ReasonDialog } from '../../shared/ui/reason-dialog/reason-dialog';
+import { ClockSkewService } from '../time/clock-skew.service';
 
 @Component({
   selector: 'app-shell',
@@ -42,6 +44,7 @@ import { NAV_ITEMS, NavItem } from './nav.config';
     ProgressSpinnerModule,
     TooltipModule,
     CashSessionDialog,
+    ReasonDialog,
   ],
   templateUrl: './shell.html',
   host: {
@@ -240,7 +243,121 @@ export class Shell {
     return this.blockedSync.canDiscard(record);
   }
 
+  canRetryBlocked(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.canRetry(record);
+  }
+
+  /** Anulación rechazada vista por un cajero: solo un admin la resuelve (SPEC 62). */
+  needsAdminBlocked(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.needsAdmin(record);
+  }
+
+  askAdmin(record: BlockedSyncRecord): void {
+    this.notifications.warn(
+      'Pide a un administrador que entre en esta caja y pulse Reintentar en este registro: ' +
+        'con su sesión la anulación se vuelve a enviar al servidor.',
+      `${record.label}: necesita a un administrador`,
+    );
+  }
+
+  /** Venta que se va a descartar: espera el motivo (SPEC 62). */
+  readonly discardTarget = signal<BlockedSyncRecord | null>(null);
+  readonly discarding = signal(false);
+
+  cancelDiscard(): void {
+    if (!this.discarding()) {
+      this.discardTarget.set(null);
+    }
+  }
+
+  async confirmDiscard(reason: string): Promise<void> {
+    const record = this.discardTarget();
+    if (!record || this.discarding()) {
+      return;
+    }
+    this.discarding.set(true);
+    try {
+      await this.blockedSync.discard(record, reason);
+      this.discardTarget.set(null);
+      this.notifications.success('Venta descartada; el motivo quedó en la bitácora.');
+    } catch (error: unknown) {
+      this.notifications.error(
+        error instanceof Error ? error.message : 'No se pudo descartar el registro.',
+      );
+    } finally {
+      this.discarding.set(false);
+    }
+    this.closeBlockedIfEmpty();
+  }
+
   /** Abre el gasto o el producto en su pantalla, ya cargado para corregirlo. */
+  canResolveConflict(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.canResolveConflict(record);
+  }
+
+  /**
+   * "Usar el del panel" / "Forzar el mío" (SPEC 56) y, como "Reintentar", empuja
+   * en el acto: lo que quede de la edición sube sin esperar al horario fijo.
+   */
+  async resolveConflict(record: BlockedSyncRecord, choice: CatalogConflictChoice): Promise<void> {
+    if (choice === 'mine') {
+      const confirmado = window.confirm(
+        `¿Forzar el valor de esta caja para "${record.label}"?\n\n` +
+          'Se sube aunque en el panel lo hayan cambiado después, y reemplaza lo del panel.',
+      );
+      if (!confirmado) {
+        return;
+      }
+    }
+    this.retryingBlockedId.set(record.id);
+    try {
+      await this.blockedSync.resolveConflict(record, choice);
+      await this.syncScheduler.flushPendingNow();
+      await this.blockedSync.refresh();
+    } catch (error: unknown) {
+      this.notifications.error(
+        error instanceof Error ? error.message : 'No se pudo resolver el conflicto del producto.',
+      );
+    } finally {
+      this.retryingBlockedId.set(null);
+    }
+    this.closeBlockedIfEmpty();
+  }
+
+  /** Entrada con aviso de posible factura recapturada (SPEC 58). */
+  isPossibleDuplicate(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.isPossibleDuplicate(record);
+  }
+
+  /**
+   * "Sí, es otra partida" (SPEC 58): reenvía la entrada con `confirmDuplicate` y
+   * empuja en el acto, como "Reintentar". Se confirma nombrándola: si era la
+   * misma mercancía, el stock queda contado dos veces también en el servidor.
+   */
+  async confirmDuplicateEntry(record: BlockedSyncRecord): Promise<void> {
+    const confirmado = window.confirm(
+      `¿"${record.label}" (${record.detail}) es otra partida de la factura?\n\n` +
+        'Se registrará aunque la factura ya tenga una entrada igual. Si es la misma ' +
+        'mercancía capturada otra vez, elige Descartar.',
+    );
+    if (!confirmado) {
+      return;
+    }
+    this.retryingBlockedId.set(record.id);
+    try {
+      await this.blockedSync.confirmDuplicate(record);
+      await this.syncScheduler.flushPendingNow();
+      await this.blockedSync.refresh();
+    } catch (error: unknown) {
+      this.notifications.error(
+        error instanceof Error ? error.message : 'No se pudo reenviar la entrada.',
+      );
+    } finally {
+      this.retryingBlockedId.set(null);
+    }
+    this.closeBlockedIfEmpty();
+  }
+
   fixBlocked(record: BlockedSyncRecord): void {
     this.blockedDialogVisible.set(false);
     if (record.kind === 'product') {
@@ -255,6 +372,12 @@ export class Shell {
    * el registro, no con un "¿estás seguro?" genérico.
    */
   async discardBlocked(record: BlockedSyncRecord): Promise<void> {
+    if (this.blockedSync.needsDiscardReason(record)) {
+      // Una venta se descarta con motivo (SPEC 62): el diálogo explica la
+      // consecuencia y no deja confirmar sin él.
+      this.discardTarget.set(record);
+      return;
+    }
     const consecuencia =
       record.kind === 'stockEntry'
         ? 'Se borra de este equipo, nunca llegará al servidor y se descuentan esas piezas del stock de esta caja.'
@@ -365,6 +488,15 @@ export class Shell {
   readonly isAdmin = this.authService.isAdmin;
   readonly browserOnline = this.health.browserOnline;
   readonly degraded = this.health.degraded;
+  /**
+   * Reloj de la caja contra el del servidor (SPEC 65). Más de 5 min de desfase
+   * se avisa en la barra; sin medición (sin red desde el arranque) la barra de
+   * "sin red" lo dice: la caja va con su reloj sin verificar.
+   */
+  private readonly clock = inject(ClockSkewService);
+  readonly clockWarning = this.clock.warning;
+  readonly clockMeasured = this.clock.measured;
+  readonly clockSkewMinutes = this.clock.skewMinutes;
   readonly appVersion = environment.version;
   /**
    * `environment.isElectron` solo cambia con `ng build --configuration electron`;

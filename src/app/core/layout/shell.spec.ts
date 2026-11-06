@@ -19,6 +19,8 @@ import { SyncScheduler } from '../sync/sync-scheduler.service';
 import { SyncHelpService } from '../sync/sync-help.service';
 import { NAV_ITEMS } from './nav.config';
 import { Shell } from './shell';
+import { ClockSkewService } from '../time/clock-skew.service';
+import { TranslateService } from '@ngx-translate/core';
 
 /** El camino de salida encadena varias promesas (contar cola → vaciar → contar). */
 async function drenarMicrotareas(): Promise<void> {
@@ -112,6 +114,9 @@ describe('Shell', () => {
             discard: vi.fn(),
             canFix: () => false,
             canDiscard: () => false,
+            canRetry: (record: BlockedSyncRecord) => record.kind !== 'saleVoid',
+            needsAdmin: (record: BlockedSyncRecord) => record.kind === 'saleVoid',
+            needsDiscardReason: (record: BlockedSyncRecord) => record.kind === 'sale',
             canRepair: (record: BlockedSyncRecord) => (record.blockers?.length ?? 0) > 0,
             canSendToUnreconciled: (_record: BlockedSyncRecord, fixFailed: boolean) => fixFailed,
           },
@@ -176,6 +181,51 @@ describe('Shell', () => {
         },
       ],
     };
+
+    describe('anulación rechazada y descarte con motivo (SPEC 62)', () => {
+      const anulacion: BlockedSyncRecord = {
+        kind: 'saleVoid',
+        id: 'sale-2',
+        label: 'Anulación de V-2',
+        detail: '$50.00',
+        occurredAt: '2026-11-06T10:00:00Z',
+        reason: 'Solo un administrador puede anular [VOID_FORBIDDEN]',
+        diagnosis: { code: 'anulacion-rechazada' },
+      };
+
+      it('una anulación rechazada vista por el cajero ofrece "Pedir a un admin", no Reintentar', () => {
+        expect(component.needsAdminBlocked(anulacion)).toBe(true);
+        expect(component.canRetryBlocked(anulacion)).toBe(false);
+        component.askAdmin(anulacion);
+        expect(notifications.warn).toHaveBeenCalledWith(
+          expect.stringContaining('administrador'),
+          'Anulación de V-2: necesita a un administrador',
+        );
+      });
+
+      it('descartar una venta abre el diálogo del motivo y descarta con él', async () => {
+        const blocked = TestBed.inject(BlockedSyncService);
+
+        await component.discardBlocked(venta);
+        expect(component.discardTarget()?.id).toBe('sale-1');
+        expect(blocked.discard).not.toHaveBeenCalled();
+
+        await component.confirmDiscard('Venta de prueba');
+        expect(blocked.discard).toHaveBeenCalledWith(venta, 'Venta de prueba');
+        expect(component.discardTarget()).toBeNull();
+      });
+
+      it('si la caja rechaza el descarte, avisa y deja el diálogo abierto', async () => {
+        const blocked = TestBed.inject(BlockedSyncService);
+        blocked.discard = vi.fn().mockRejectedValue(new Error('Ya está en el servidor; anúlala.'));
+
+        await component.discardBlocked(venta);
+        await component.confirmDiscard('Venta de prueba');
+
+        expect(notifications.error).toHaveBeenCalledWith('Ya está en el servidor; anúlala.');
+        expect(component.discardTarget()?.id).toBe('sale-1');
+      });
+    });
 
     // Sin `detectChanges`: la plantilla completa del shell necesita el router
     // real (routerLink, router-outlet). Se prueba lo que decide qué botones
@@ -623,6 +673,69 @@ describe('Shell', () => {
         loading: false,
         error: 'Sin conexión: la ayuda con IA necesita internet.',
       });
+    });
+  });
+
+  /** SPEC 65: la barra avisa del reloj desfasado y, sin red y sin medición, de que no se verificó. */
+  describe('reloj de la caja', () => {
+    function host(): HTMLElement {
+      return fixture.nativeElement as HTMLElement;
+    }
+
+    function desfasar(ms: number): void {
+      const clock = TestBed.inject(ClockSkewService);
+      const ahora = Date.now();
+      clock.record(new Date(ahora + ms).toUTCString(), ahora, ahora);
+    }
+
+    beforeEach(() => {
+      TestBed.inject(TranslateService).setTranslation(
+        'es',
+        {
+          shell: {
+            banner: {
+              offline: 'Sin conexión a internet',
+              apiDown: 'El servidor no responde',
+              clockSkew: 'El reloj de esta caja está desfasado {{minutes}} min',
+              clockUnverified: 'Reloj sin verificar',
+            },
+          },
+        },
+        true,
+      );
+    });
+
+    it('con 10 min de desfase aparece el aviso con los minutos', () => {
+      desfasar(10 * 60_000);
+      fixture.detectChanges();
+
+      expect(host().querySelector('[data-testid="clock-skew-banner"]')?.textContent).toContain(
+        'El reloj de esta caja está desfasado 10 min',
+      );
+    });
+
+    it('con un desfase menor a 5 min no hay aviso', () => {
+      desfasar(2 * 60_000);
+      fixture.detectChanges();
+
+      expect(host().querySelector('[data-testid="clock-skew-banner"]')).toBeNull();
+    });
+
+    it('sin red desde el arranque la barra dice que el reloj no se verificó', () => {
+      (TestBed.inject(ApiHealthService).degraded as ReturnType<typeof signal<boolean>>).set(true);
+      fixture.detectChanges();
+
+      expect(host().querySelector('[data-testid="clock-unverified"]')?.textContent).toContain(
+        'Reloj sin verificar',
+      );
+    });
+
+    it('con medición, la barra de sin red ya no dice "sin verificar"', () => {
+      desfasar(0);
+      (TestBed.inject(ApiHealthService).degraded as ReturnType<typeof signal<boolean>>).set(true);
+      fixture.detectChanges();
+
+      expect(host().querySelector('[data-testid="clock-unverified"]')).toBeNull();
     });
   });
 });

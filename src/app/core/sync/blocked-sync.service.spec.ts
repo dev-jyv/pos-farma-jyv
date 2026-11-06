@@ -5,6 +5,8 @@ import { AuthService } from '../auth/auth.service';
 import { BlockedSyncRecord } from '../electron/window.d';
 import { PosBlocker } from '../../shared/models';
 import { BlockedSyncService } from './blocked-sync.service';
+import { SaleService } from '../../features/pos/services/sale.service';
+import { describeBlocked } from './sync-diagnosis';
 
 function build(isAdmin: boolean) {
   TestBed.configureTestingModule({
@@ -142,6 +144,74 @@ describe('BlockedSyncService', () => {
   });
 });
 
+/** Anulación rechazada y descarte con motivo (SPEC 62). */
+describe('BlockedSyncService — anulaciones y descarte (SPEC 62)', () => {
+  afterEach(() => {
+    TestBed.resetTestingModule();
+    window.electronAPI = undefined;
+  });
+
+  const anulacion: BlockedSyncRecord = {
+    kind: 'saleVoid',
+    id: 's-9',
+    label: 'Anulación de V-9',
+    detail: '$10.00',
+    occurredAt: '2026-11-06T10:00:00Z',
+    reason: 'Solo un administrador puede anular [VOID_FORBIDDEN]',
+    diagnosis: { code: 'anulacion-rechazada' },
+  };
+
+  it('el cajero no la reintenta: el panel le pide a un admin; nadie la descarta', () => {
+    const cajero = build(false);
+    expect(cajero.canRetry(anulacion)).toBe(false);
+    expect(cajero.needsAdmin(anulacion)).toBe(true);
+    expect(cajero.canDiscard(anulacion)).toBe(false);
+    TestBed.resetTestingModule();
+    const admin = build(true);
+    expect(admin.canRetry(anulacion)).toBe(true);
+    expect(admin.needsAdmin(anulacion)).toBe(false);
+    expect(admin.canDiscard(anulacion)).toBe(false);
+  });
+
+  it('el "Reintentar" del admin la devuelve a la cola de anulaciones remotas', async () => {
+    const clearVoidError = vi.fn().mockResolvedValue(undefined);
+    window.electronAPI = {
+      sales: { listBlocked: vi.fn().mockResolvedValue([]), clearVoidError },
+      cashMovements: { listBlocked: vi.fn().mockResolvedValue([]) },
+      cashSessions: { listBlocked: vi.fn().mockResolvedValue([]) },
+      catalog: {
+        listBlockedStockEntries: vi.fn().mockResolvedValue([]),
+        listBlockedProducts: vi.fn().mockResolvedValue([]),
+      },
+    } as unknown as typeof window.electronAPI;
+
+    await build(false).retry(anulacion);
+    expect(clearVoidError).not.toHaveBeenCalled();
+    TestBed.resetTestingModule();
+    await build(true).retry(anulacion);
+    expect(clearVoidError).toHaveBeenCalledWith('s-9');
+  });
+
+  it('el panel la explica como anulación rechazada y recomienda avisar al admin', () => {
+    const ayuda = describeBlocked(anulacion);
+    expect(ayuda.title).toBe('El servidor rechazó la anulación');
+    expect(ayuda.recommended).toBe('avisar-admin');
+  });
+
+  it('descartar una venta pide motivo y va por SaleService.discardSale', async () => {
+    const discardSale = vi.fn().mockResolvedValue(undefined);
+    window.electronAPI = { sales: {} } as unknown as typeof window.electronAPI;
+    TestBed.configureTestingModule({ providers: [{ provide: SaleService, useValue: { discardSale } }] });
+    const admin = build(true);
+
+    expect(admin.needsDiscardReason(venta)).toBe(true);
+    expect(admin.needsDiscardReason(gasto)).toBe(false);
+    await admin.discard(venta, 'Venta de prueba');
+
+    expect(discardSale).toHaveBeenCalledWith('s1', 'Venta de prueba');
+  });
+});
+
 /** Cuándo el panel ofrece "Arreglar" y cuándo "Mandar a conciliación". */
 describe('BlockedSyncService — reparación', () => {
   afterEach(() => TestBed.resetTestingModule());
@@ -188,5 +258,108 @@ describe('BlockedSyncService — reparación', () => {
     expect(
       service.canSendToUnreconciled(ventaCon([{ ...productoPendiente, missingLocally: true }]), true),
     ).toBe(true);
+  });
+});
+
+describe('BlockedSyncService — conflicto de catálogo con el panel (SPEC 56)', () => {
+  afterEach(() => {
+    window.electronAPI = undefined;
+    TestBed.resetTestingModule();
+  });
+
+  const enConflicto = {
+    kind: 'product',
+    id: 'p1',
+    conflict: { salePrice: 58, isActive: true },
+  } as BlockedSyncRecord;
+
+  it('solo un producto con conflicto ofrece "Usar el del panel" / "Forzar el mío"', () => {
+    const service = build(false);
+    expect(service.canResolveConflict(enConflicto)).toBe(true);
+    expect(service.canResolveConflict(producto)).toBe(false);
+    expect(service.canResolveConflict({ ...venta, conflict: enConflicto.conflict } as BlockedSyncRecord)).toBe(false);
+  });
+
+  it('resolver pasa la elección al proceso main y relee la lista', async () => {
+    const resolveCatalogConflict = vi.fn().mockResolvedValue(true);
+    const listBlockedProducts = vi.fn().mockResolvedValue([]);
+    window.electronAPI = {
+      sales: { listBlocked: vi.fn().mockResolvedValue([]) },
+      cashMovements: { listBlocked: vi.fn().mockResolvedValue([]) },
+      cashSessions: { listBlocked: vi.fn().mockResolvedValue([]) },
+      catalog: {
+        listBlockedStockEntries: vi.fn().mockResolvedValue([]),
+        listBlockedProducts,
+        resolveCatalogConflict,
+      },
+    } as unknown as typeof window.electronAPI;
+
+    await build(false).resolveConflict(enConflicto, 'mine');
+
+    expect(resolveCatalogConflict).toHaveBeenCalledWith('p1', 'mine');
+    expect(listBlockedProducts).toHaveBeenCalled();
+  });
+});
+
+describe('BlockedSyncService — posible factura recapturada (SPEC 58)', () => {
+  afterEach(() => {
+    window.electronAPI = undefined;
+    TestBed.resetTestingModule();
+  });
+
+  const duplicada: BlockedSyncRecord = {
+    kind: 'stockEntry',
+    id: 'b-dup',
+    label: 'Entrada L-1',
+    detail: 'Paracetamol · 6 pzas',
+    occurredAt: '2026-11-06T10:00:00Z',
+    reason: 'La factura ya tiene una entrada igual. [ENTRY_POSSIBLE_DUPLICATE]',
+    diagnosis: { code: 'entrada-posible-duplicada', syncCode: 'ENTRY_POSSIBLE_DUPLICATE' },
+  };
+
+  function api() {
+    const confirmDuplicateStockEntry = vi.fn().mockResolvedValue(true);
+    const discardStockEntry = vi.fn().mockResolvedValue(undefined);
+    window.electronAPI = {
+      sales: { listBlocked: vi.fn().mockResolvedValue([]) },
+      cashMovements: { listBlocked: vi.fn().mockResolvedValue([]) },
+      cashSessions: { listBlocked: vi.fn().mockResolvedValue([]) },
+      catalog: {
+        listBlockedStockEntries: vi.fn().mockResolvedValue([]),
+        listBlockedProducts: vi.fn().mockResolvedValue([]),
+        confirmDuplicateStockEntry,
+        discardStockEntry,
+      },
+    } as unknown as typeof window.electronAPI;
+    return { confirmDuplicateStockEntry, discardStockEntry };
+  }
+
+  it('reconoce el aviso solo en entradas con ese diagnóstico', () => {
+    const service = build(false);
+    expect(service.isPossibleDuplicate(duplicada)).toBe(true);
+    expect(service.isPossibleDuplicate(entrada)).toBe(false);
+    expect(service.isPossibleDuplicate({ ...duplicada, kind: 'sale' })).toBe(false);
+  });
+
+  it('"Sí, es otra partida" reenvía la entrada con confirmDuplicate', async () => {
+    const { confirmDuplicateStockEntry } = api();
+    await build(false).confirmDuplicate(duplicada);
+    expect(confirmDuplicateStockEntry).toHaveBeenCalledWith('b-dup');
+  });
+
+  it('una entrada sin el aviso no se confirma como duplicada', async () => {
+    const { confirmDuplicateStockEntry } = api();
+    await build(true).confirmDuplicate(entrada);
+    expect(confirmDuplicateStockEntry).not.toHaveBeenCalled();
+  });
+
+  it('"Descartar" también lo puede elegir el cajero ante el aviso; otro lote no', async () => {
+    const { discardStockEntry } = api();
+    const cajero = build(false);
+    expect(cajero.canDiscard(duplicada)).toBe(true);
+    expect(cajero.canDiscard(entrada)).toBe(false);
+
+    await cajero.discard(duplicada);
+    expect(discardStockEntry).toHaveBeenCalledWith('b-dup');
   });
 });

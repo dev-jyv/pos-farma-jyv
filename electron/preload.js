@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearStockEntryPushError: (batchLocalId) =>
       ipcRenderer.invoke('catalog:clearStockEntryPushError', batchLocalId),
     discardStockEntry: (batchLocalId) => ipcRenderer.invoke('catalog:discardStockEntry', batchLocalId),
+    confirmDuplicateStockEntry: (batchLocalId) =>
+      ipcRenderer.invoke('catalog:confirmDuplicateStockEntry', batchLocalId),
     listBlockedProducts: () => ipcRenderer.invoke('catalog:listBlockedProducts'),
     markStockEntrySynced: (batchLocalId, remoteProductId) =>
       ipcRenderer.invoke('catalog:markStockEntrySynced', batchLocalId, remoteProductId),
@@ -47,12 +49,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createCatalogProduct: (fields) => ipcRenderer.invoke('catalog:createCatalogProduct', fields),
     updateCatalogProduct: (id, fields) => ipcRenderer.invoke('catalog:updateCatalogProduct', id, fields),
     getPendingCatalogPush: () => ipcRenderer.invoke('catalog:getPendingCatalogPush'),
-    markCatalogSynced: (localId, remoteId, pushedVersion) =>
-      ipcRenderer.invoke('catalog:markCatalogSynced', localId, remoteId, pushedVersion),
+    markCatalogSynced: (localId, remoteId, pushedVersion, synced) =>
+      ipcRenderer.invoke('catalog:markCatalogSynced', localId, remoteId, pushedVersion, synced),
+    markCatalogConflict: (localId, current) =>
+      ipcRenderer.invoke('catalog:markCatalogConflict', localId, current),
+    resolveCatalogConflict: (localId, choice) =>
+      ipcRenderer.invoke('catalog:resolveCatalogConflict', localId, choice),
     markCatalogPushFailed: (localId, message) =>
       ipcRenderer.invoke('catalog:markCatalogPushFailed', localId, message),
     clearCatalogPushError: (localId) => ipcRenderer.invoke('catalog:clearCatalogPushError', localId),
     retryProductPush: (localId) => ipcRenderer.invoke('catalog:retryProductPush', localId),
+  },
+
+  products: {
+    /**
+     * SPEC 57: guarda en SQLite la existencia fresca de un producto (respuesta de
+     * `GET /products/:id/stock`, pedida por el renderer) respetando lo pendiente.
+     */
+    refreshOne: (remoteId, snapshot) => ipcRenderer.invoke('products:refreshOne', remoteId, snapshot),
   },
 
   sales: {
@@ -61,8 +75,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPendingPush: (filters) => ipcRenderer.invoke('sales:getPendingPush', filters),
     listBlocked: (filters) => ipcRenderer.invoke('sales:listBlocked', filters),
     getPendingVoided: (filters) => ipcRenderer.invoke('sales:getPendingVoided', filters),
-    markSynced: (localId, remoteId, remoteFolio) =>
-      ipcRenderer.invoke('sales:markSynced', localId, remoteId, remoteFolio),
+    markSynced: (localId, remoteId, remoteFolio, review) =>
+      ipcRenderer.invoke('sales:markSynced', localId, remoteId, remoteFolio, review ?? null),
     markUnreconciled: (localId, reason) =>
       ipcRenderer.invoke('sales:markUnreconciled', localId, reason),
     markPushFailed: (localId, message) => ipcRenderer.invoke('sales:markPushFailed', localId, message),
@@ -72,7 +86,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('sales:voidLocal', localId, voidedBy, voidedByLabel, reason),
     listMovements: (saleId) => ipcRenderer.invoke('sales:listMovements', saleId),
     clearPushError: (localId) => ipcRenderer.invoke('sales:clearPushError', localId),
-    discard: (localId) => ipcRenderer.invoke('sales:discard', localId),
+    discard: (localId, options) => ipcRenderer.invoke('sales:discard', localId, options),
+    getByIdempotencyKey: (idempotencyKey) =>
+      ipcRenderer.invoke('sales:getByIdempotencyKey', idempotencyKey),
+    markVoidFailed: (localId, message) => ipcRenderer.invoke('sales:markVoidFailed', localId, message),
+    clearVoidError: (localId) => ipcRenderer.invoke('sales:clearVoidError', localId),
     getNeedingRemoteVoid: (filters) => ipcRenderer.invoke('sales:getNeedingRemoteVoid', filters),
     markNeedsRemoteVoid: (localId) => ipcRenderer.invoke('sales:markNeedsRemoteVoid', localId),
     markRemoteVoided: (localId) => ipcRenderer.invoke('sales:markRemoteVoided', localId),
@@ -91,7 +109,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** Foto de salud del sync para `POST /pos/diagnostics`. */
   diagnostics: {
-    buildSnapshot: () => ipcRenderer.invoke('diagnostics:buildSnapshot'),
+    buildSnapshot: (options) => ipcRenderer.invoke('diagnostics:buildSnapshot', options),
   },
 
   cashSessions: {
