@@ -35,7 +35,10 @@ import {
   StockRowError,
   StockRowGroup,
   StockRowValue,
+  boxConversionLegend,
   buildStockRow,
+  piecesPerBox,
+  rowPieces,
   savesBarcode,
   stockRowErrors,
   toStockEntry,
@@ -90,6 +93,9 @@ export class InvoiceRagStockDialog {
   readonly rowValues = signal<StockRowValue[]>([]);
   readonly suggestions = signal<Product[]>([]);
   readonly savesBarcode = savesBarcode;
+  readonly piecesPerBox = piecesPerBox;
+  readonly rowPieces = rowPieces;
+  readonly boxConversionLegend = boxConversionLegend;
 
   readonly invoices = signal<PurchaseInvoice[]>([]);
   readonly invoicesError = signal<string | null>(null);
@@ -119,7 +125,8 @@ export class InvoiceRagStockDialog {
 
   readonly rowErrors = computed(() => this.rowValues().map((row) => stockRowErrors(row, this.today)));
   readonly included = computed(() => this.rowValues().filter((row) => row.include));
-  readonly totalPieces = computed(() => this.included().reduce((sum, row) => sum + (row.quantity ?? 0), 0));
+  /** Piezas que entran: las partidas en Caja ya convertidas (SPEC 59). */
+  readonly totalPieces = computed(() => this.included().reduce((sum, row) => sum + rowPieces(row), 0));
   readonly blockers = computed(() => {
     const reasons: string[] = [];
     if (!this.invoiceId()) reasons.push('invoiceRag.stock.blockerInvoice');
@@ -148,6 +155,17 @@ export class InvoiceRagStockDialog {
 
   searchProducts(event: AutoCompleteCompleteEvent): void {
     this.products.search(event.query).subscribe((products) => this.suggestions.set(products));
+  }
+
+  /**
+   * Al ligar otro producto: incluye la partida y, si el nuevo no se vende por
+   * caja, vuelve a Pieza (no hay con qué convertir).
+   */
+  onProductSelected(row: StockRowGroup): void {
+    row.controls.include.setValue(true);
+    if (piecesPerBox(row.controls.product.value) === null) {
+      row.controls.unit.setValue('piece');
+    }
   }
 
   hasError(index: number, field: StockRowError): boolean {

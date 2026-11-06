@@ -208,7 +208,12 @@ async function recordStockEntry(prisma, payload) {
   return prisma.$transaction((tx) => recordStockEntryTx(tx, payload));
 }
 
-async function recordStockEntryTx(prisma, payload) {
+async function recordStockEntryTx(prisma, input) {
+  // SPEC 59: el servidor valida la caducidad contra el día de la **captura**, no
+  // contra el del sync. Se estampa aquí, al guardar, y viaja en el payload que se
+  // reenvía tal cual: una entrada capturada sin red el día 5 con caducidad del 6
+  // que sube el 7 se acepta.
+  const payload = input.capturedAt ? input : { ...input, capturedAt: new Date().toISOString() };
   let productId = payload.productId ?? null;
 
   if (productId) {

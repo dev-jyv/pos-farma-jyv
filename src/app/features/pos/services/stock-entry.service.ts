@@ -1,5 +1,5 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { Injectable, inject, signal } from '@angular/core';
+import { Injectable, Injector, inject, signal } from '@angular/core';
 import {
   EMPTY,
   Observable,
@@ -16,6 +16,7 @@ import {
 import { HttpErrorResponse } from '@angular/common/http';
 
 import { getApiErrorMessage, toDate, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
+import { NotificationService } from '../../../core/notifications/notification.service';
 import { AutoPushService } from '../../../core/sync/auto-push.service';
 import {
   syncActionFor,
@@ -37,6 +38,12 @@ export const ENTRY_IN_PROGRESS_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000, 6
 
 export interface CreateStockEntryPayload {
   invoiceId: string;
+  /**
+   * Momento de la captura en la caja (ISO), SPEC 59: el servidor valida la
+   * caducidad contra ese día y no contra el del sync. Lo estampa
+   * `recordStockEntry` al guardar en SQLite si no viene.
+   */
+  capturedAt?: string;
   lotNumber: string;
   /** `YYYY-MM-DD`; el backend rechaza fechas pasadas. */
   expiryDate: string;
@@ -54,6 +61,44 @@ export interface StockEntryResult {
   product: Product;
   /** Existencias del producto **después** de la entrada. */
   stock: number;
+  /** Advertencias que no rechazan la entrada (SPEC 59), p. ej. `LOT_EXPIRY_MISMATCH`. */
+  warnings?: string[];
+}
+
+/** Advertencia del servidor: el mismo lote ya existe con otra caducidad (SPEC 59). */
+export const LOT_EXPIRY_MISMATCH = 'LOT_EXPIRY_MISMATCH';
+
+/**
+ * Advertencias de una respuesta de `POST /stock-entries`. El contrato las pone
+ * en `warnings` y la regla funcional en `details.warnings`: se aceptan las dos,
+ * dentro o fuera de `data`.
+ */
+export function stockEntryWarnings(response: unknown): string[] {
+  const found = new Set<string>();
+  const collect = (value: unknown) => {
+    if (Array.isArray(value)) {
+      value.filter((item): item is string => typeof item === 'string').forEach((item) => found.add(item));
+    }
+  };
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== 'object') {
+      return;
+    }
+    const record = node as { warnings?: unknown; details?: { warnings?: unknown } };
+    collect(record.warnings);
+    collect(record.details?.warnings);
+  };
+  visit(response);
+  visit((response as { data?: unknown } | null)?.data);
+  return [...found];
+}
+
+/** Texto para el cajero de una advertencia de entrada. */
+function warningMessage(code: string, lotNumber: string, productName: string): string {
+  if (code === LOT_EXPIRY_MISMATCH) {
+    return `El lote ${lotNumber} de ${productName} ya existía con otra caducidad. Revisa la factura.`;
+  }
+  return `Entrada de ${productName} (lote ${lotNumber}): ${code}.`;
 }
 
 interface InvoiceDto {
@@ -91,8 +136,12 @@ export class StockEntryService {
   private readonly apiUrl = environment.apiUrl;
 
   private readonly autoPush = inject(AutoPushService);
+  private readonly injector = inject(Injector);
 
   private flushing = false;
+
+  /** Avisos del empuje en curso; se muestran juntos al terminar. */
+  private pendingWarnings: string[] = [];
 
   /**
    * Entradas locales sin subir, contando las que esperan a su producto
@@ -276,6 +325,16 @@ flushQueueAsync(): Promise<void> {
             concatMap((response) => {
               this.inProgressBackoff.delete(item.id);
               const result = unwrapEntity<StockEntryResult>(response);
+              const payload = item.payload as { lotNumber?: string; product?: { name?: string } };
+              for (const code of stockEntryWarnings(response)) {
+                this.pendingWarnings.push(
+                  warningMessage(
+                    code,
+                    payload.lotNumber ?? '',
+                    result.product?.name ?? payload.product?.name ?? 'producto',
+                  ),
+                );
+              }
               return from(this.api().markStockEntrySynced(item.id, result.product?.id ?? null));
             }),
             catchError((error: unknown) => {
@@ -311,8 +370,26 @@ flushQueueAsync(): Promise<void> {
         finalize(() => {
           this.flushing = false;
           this.refreshPending();
+          this.showWarnings();
         }),
       );
+  }
+
+  /**
+   * Las advertencias no rechazan la entrada (ya se aplicó): se avisan al terminar
+   * el empuje. Sin `MessageService` (pruebas, arranque) no hay a quién avisar.
+   */
+  private showWarnings(): void {
+    const messages = this.pendingWarnings;
+    this.pendingWarnings = [];
+    if (!messages.length) {
+      return;
+    }
+    try {
+      this.injector.get(NotificationService).warn(messages.join(' '), 'Revisa la entrada');
+    } catch {
+      // Sin notificaciones disponibles; la entrada ya quedó registrada.
+    }
   }
 
   private isPermanentFailure(error: unknown): boolean {

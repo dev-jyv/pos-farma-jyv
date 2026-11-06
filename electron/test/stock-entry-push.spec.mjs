@@ -95,3 +95,39 @@ describe('entradas: alta embebida de un producto que ya subió (SPEC 55, B5)', (
     expect(bloqueada.diagnosis).toEqual({ code: 'entrada-a-medias', syncCode: 'ENTRY_AMBIGUOUS' });
   });
 });
+
+describe('entradas: fecha de captura (SPEC 59)', () => {
+  it('se estampa capturedAt al guardar y viaja tal cual al subir', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T21:30:00.000Z'));
+    try {
+      await productos.recordStockEntry(prisma, {
+        invoiceId: 'inv-1',
+        lotNumber: 'L-1',
+        expiryDate: '2026-11-06',
+        quantity: 3,
+        product: { sku: 'CAP-1', name: 'Captura sin red', salePrice: 10 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Sube días después: el payload conserva el día de la captura.
+    const [pendiente] = await productos.getPendingStockEntries(prisma);
+    expect(pendiente.payload.capturedAt).toBe('2026-11-05T21:30:00.000Z');
+  });
+
+  it('una captura que ya trae capturedAt no se reescribe', async () => {
+    await productos.recordStockEntry(prisma, {
+      invoiceId: 'inv-1',
+      lotNumber: 'L-2',
+      expiryDate: '2027-01-31',
+      quantity: 1,
+      capturedAt: '2026-11-01T15:00:00.000Z',
+      product: { sku: 'CAP-2', name: 'Captura previa', salePrice: 10 },
+    });
+
+    const [pendiente] = await productos.getPendingStockEntries(prisma);
+    expect(pendiente.payload.capturedAt).toBe('2026-11-01T15:00:00.000Z');
+  });
+});

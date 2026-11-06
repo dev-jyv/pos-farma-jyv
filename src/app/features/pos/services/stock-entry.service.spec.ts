@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
 import { PurchaseInvoice } from '../../../shared/models';
-import { ENTRY_IN_PROGRESS_BACKOFF_MS, StockEntryService } from './stock-entry.service';
+import { MessageService } from 'primeng/api';
+
+import {
+  ENTRY_IN_PROGRESS_BACKOFF_MS,
+  StockEntryService,
+  stockEntryWarnings,
+} from './stock-entry.service';
 
 const BASE = `${environment.apiUrl}/stock-entries`;
 
@@ -346,3 +352,74 @@ async function flushMicrotasks(): Promise<void> {
     await Promise.resolve();
   }
 }
+
+describe('StockEntryService — advertencias del servidor (SPEC 59)', () => {
+  let service: StockEntryService;
+  let http: HttpTestingController;
+  let add: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    window.electronAPI = {
+      getDeviceInfo: vi.fn().mockResolvedValue({ id: 'aa:bb' }),
+      catalog: {
+        getPendingStockEntries: vi.fn().mockResolvedValue([
+          {
+            id: 'b-1',
+            payload: { invoiceId: 'inv-1', lotNumber: 'ABC12', quantity: 5, productId: 'p1' },
+          },
+        ]),
+        markStockEntrySynced: vi.fn().mockResolvedValue(undefined),
+        markStockEntryPushFailed: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as Window['electronAPI'];
+    add = vi.fn();
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting(), { provide: MessageService, useValue: { add } }],
+    });
+    service = TestBed.inject(StockEntryService);
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => http.verify());
+
+  async function subirCon(body: object): Promise<void> {
+    const done = service.flushQueueAsync();
+    await flushMicrotasks();
+    http.expectOne(BASE).flush(body, { status: 201, statusText: 'Created' });
+    await done;
+  }
+
+  it('LOT_EXPIRY_MISMATCH (details.warnings): la entrada queda subida y se avisa al terminar', async () => {
+    await subirCon({
+      data: { product: { id: 'p1', name: 'Sertralina 50 mg' }, stock: 9, details: { warnings: ['LOT_EXPIRY_MISMATCH'] } },
+    });
+
+    expect(window.electronAPI!.catalog.markStockEntrySynced).toHaveBeenCalledWith('b-1', 'p1');
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(add.mock.calls[0][0]).toMatchObject({
+      severity: 'warn',
+      detail: 'El lote ABC12 de Sertralina 50 mg ya existía con otra caducidad. Revisa la factura.',
+    });
+  });
+
+  it('también con `warnings` en la respuesta (forma del contrato)', async () => {
+    await subirCon({ data: { product: { id: 'p1', name: 'Sertralina' }, stock: 9, warnings: ['LOT_EXPIRY_MISMATCH'] } });
+
+    expect(add).toHaveBeenCalledTimes(1);
+  });
+
+  it('sin advertencias no avisa nada', async () => {
+    await subirCon({ data: { product: { id: 'p1', name: 'Sertralina' }, stock: 9 } });
+
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it('stockEntryWarnings lee las dos formas y no repite', () => {
+    expect(
+      stockEntryWarnings({ data: { warnings: ['LOT_EXPIRY_MISMATCH'], details: { warnings: ['LOT_EXPIRY_MISMATCH'] } } }),
+    ).toEqual(['LOT_EXPIRY_MISMATCH']);
+    expect(stockEntryWarnings({ details: { warnings: ['X'] } })).toEqual(['X']);
+    expect(stockEntryWarnings(null)).toEqual([]);
+  });
+});
