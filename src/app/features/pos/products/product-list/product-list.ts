@@ -9,8 +9,8 @@ import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 import { Subject, debounceTime, switchMap } from 'rxjs';
 
+import { PendingUpload } from '../../../../core/sync/pending-upload/pending-upload';
 import { Product } from '../../../../shared/models';
-import { ProductCatalogService } from '../../services/product-catalog.service';
 import { ProductService } from '../../services/product.service';
 
 /** Con una letra el catálogo local devuelve medio mostrador; no es búsqueda útil. */
@@ -25,19 +25,26 @@ const MIN_SEARCH_LENGTH = 2;
 @Component({
   selector: 'app-product-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, TranslatePipe, ButtonModule, InputTextModule, TableModule, TagModule, DecimalPipe],
+  imports: [
+    FormsModule,
+    TranslatePipe,
+    ButtonModule,
+    InputTextModule,
+    TableModule,
+    TagModule,
+    DecimalPipe,
+    PendingUpload,
+  ],
   templateUrl: './product-list.html',
 })
 export class ProductList {
   private readonly productService = inject(ProductService);
-  private readonly catalogService = inject(ProductCatalogService);
   private readonly router = inject(Router);
 
   readonly search = signal('');
   readonly results = signal<Product[]>([]);
   readonly searching = signal(false);
   readonly searched = signal(false);
-  readonly pendingCount = this.catalogService.pendingCount;
 
   private readonly search$ = new Subject<string>();
 

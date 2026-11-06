@@ -4,8 +4,10 @@
       <h1 class="text-lg font-bold text-slate-900">{{ 'stockEntry.title' | translate }}</h1>
       <p class="text-xs text-slate-500">{{ 'stockEntry.subtitle' | translate }}</p>
     </div>
+    <div class="ml-auto">
+      <app-pending-upload />
+    </div>
     <p-button
-      class="ml-auto"
       icon="pi pi-refresh"
       [text]="true"
       (onClick)="loadInvoices()"

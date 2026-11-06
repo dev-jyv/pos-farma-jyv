@@ -1,3 +1,4 @@
+import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideTranslateService } from '@ngx-translate/core';
 import { MessageService } from 'primeng/api';
@@ -6,11 +7,16 @@ import { Observable, of, throwError } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { NotificationService } from '../../../core/notifications/notification.service';
+import { PendingUpload } from '../../../core/sync/pending-upload/pending-upload';
 import { Category, Product, PurchaseInvoice } from '../../../shared/models';
 import { CategoryService } from '../services/category.service';
 import { ProductService } from '../services/product.service';
 import { CreateStockEntryPayload, StockEntryService } from '../services/stock-entry.service';
 import { StockEntryScreen } from './stock-entry';
+
+/** El botón de subida tiene su propio spec; aquí solo estorbaría con el sincronizador. */
+@Component({ selector: 'app-pending-upload', template: '' })
+class PendingUploadStub {}
 
 function invoice(overrides: Partial<PurchaseInvoice> = {}): PurchaseInvoice {
   return {
@@ -88,6 +94,9 @@ describe('StockEntryScreen', () => {
           useValue: { search: () => of(searchResults), findByName },
         },
       ],
+    }).overrideComponent(StockEntryScreen, {
+      remove: { imports: [PendingUpload] },
+      add: { imports: [PendingUploadStub] },
     });
 
     fixture = TestBed.createComponent(StockEntryScreen);
