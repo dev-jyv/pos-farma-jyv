@@ -553,3 +553,62 @@ describe('markSynced y anulación local en carrera', () => {
     expect(await getPendingPush(prisma)).toHaveLength(0);
   });
 });
+
+describe('marcas de revisión de una venta aceptada (SPEC 52)', () => {
+  async function ventaPendiente() {
+    await producto('p-1');
+    return createLocal(prisma, {
+      folio: 'PENDIENTE-1',
+      idempotencyKey: 'k-1',
+      cashierId: CAJERO,
+      total: 200,
+      items: [partidaProducto('p-1')],
+    });
+  }
+
+  it('la venta aceptada con faltante queda subida y conserva su marca para el historial', async () => {
+    const venta = await ventaPendiente();
+    await markSynced(prisma, venta.id, 'remote-1', 'F-1', {
+      stock: { items: [{ productId: 'r-1', requested: 5, allocated: 3, shortfall: 2 }] },
+      catalog: null,
+      late: false,
+    });
+
+    expect(await getPendingPush(prisma)).toHaveLength(0);
+    const [listada] = await list(prisma, {});
+    expect(listada.remoteId).toBe('remote-1');
+    expect(listada.pendingPush).toBe(false);
+    expect(listada.syncReview).toEqual({
+      stock: { items: [{ productId: 'r-1', requested: 5, allocated: 3, shortfall: 2 }] },
+      catalog: null,
+      late: false,
+    });
+  });
+
+  it('turno cerrado: la marca late llega al historial', async () => {
+    const venta = await ventaPendiente();
+    await markSynced(prisma, venta.id, 'remote-1', 'F-1', { stock: null, catalog: null, late: true });
+
+    const [listada] = await list(prisma, {});
+    expect(listada.syncReview).toEqual({ stock: null, catalog: null, late: true });
+  });
+
+  it('sin marcas no guarda nada: syncReview es null', async () => {
+    const venta = await ventaPendiente();
+    await markSynced(prisma, venta.id, 'remote-1', 'F-1', { stock: null, catalog: null, late: false });
+
+    const [listada] = await list(prisma, {});
+    expect(listada.syncReview).toBeNull();
+  });
+
+  it('una anulada en carrera también guarda la marca y encola el void remoto', async () => {
+    const venta = await ventaPendiente();
+    await voidLocal(prisma, venta.id, CAJERO);
+    await markSynced(prisma, venta.id, 'remote-1', 'F-1', { stock: null, catalog: { inactive: ['r-1'] }, late: false });
+
+    const [pendiente] = await getNeedingRemoteVoid(prisma);
+    expect(pendiente.remoteId).toBe('remote-1');
+    const [listada] = await list(prisma, { includeVoided: true });
+    expect(listada.syncReview).toEqual({ stock: null, catalog: { inactive: ['r-1'] }, late: false });
+  });
+});

@@ -152,7 +152,12 @@
       "sale": "Charged by",
       "void": "Voided by"
     },
-    "unreconciled": "Unreconciled"
+    "unreconciled": "Unreconciled",
+    "review": {
+      "stock": "Review: stock shortfall",
+      "late": "Review: charged after shift close",
+      "catalog": "Review: inactive product"
+    }
   },
   "payment": {
     "cash": "Cash",

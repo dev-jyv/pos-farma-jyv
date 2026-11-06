@@ -21,6 +21,7 @@ import {
   ProductFieldsPayload,
   PromotionDto,
   Sale,
+  SaleSyncReview,
 } from '../../shared/models';
 
 export interface PendingStockEntry {
@@ -353,7 +354,13 @@ declare global {
         getPendingVoided: (filters?: { ownerUid?: string }) => Promise<
           Array<PendingSale & { voidedAt: string | null; voidedBy: string | null }>
         >;
-        markSynced: (localId: string, remoteId: string, remoteFolio: string) => Promise<void>;
+        /** `review`: marcas con las que el servidor aceptó la venta offline (SPEC 52). */
+        markSynced: (
+          localId: string,
+          remoteId: string,
+          remoteFolio: string,
+          review?: SaleSyncReview | null,
+        ) => Promise<void>;
         markPushFailed: (localId: string, message: string) => Promise<void>;
         /** Bloqueadores de una venta; `null` si no existe. */
         diagnose: (saleId: string) => Promise<PosBlocker[] | null>;

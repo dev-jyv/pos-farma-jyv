@@ -31,6 +31,8 @@ import {
   SaleCoupon,
   SaleItem,
   SalePrescription,
+  SaleStockShortfall,
+  SaleSyncReview,
 } from '../../../shared/models';
 import {
   isControlledGroup,
@@ -162,9 +164,21 @@ export interface ListSalesParams {
   limit?: number;
 }
 
+/**
+ * Venta tal como la devuelve `/sales/bulk`. Desde SPEC 52 una venta offline con
+ * faltante, catálogo inactivo o turno cerrado **se acepta** con su marca.
+ */
+interface BulkAcceptedSale {
+  id: string;
+  folio: string;
+  stockReview?: { items?: unknown } | null;
+  catalogReview?: { inactive?: unknown } | null;
+  lateSync?: boolean | null;
+}
+
 /** Un elemento de la respuesta de `POST /sales/bulk`, en el mismo orden que se mandó. */
 type BulkSaleResult =
-  | { ok: true; sale: { id: string; folio: string } }
+  | { ok: true; sale: BulkAcceptedSale }
   /** `code`/`retryable` desde SPEC 49; un backend viejo manda el código HTTP o nada. */
   | { ok: false; error: string; code?: string; retryable?: boolean };
 
@@ -193,6 +207,46 @@ interface SaleDto {
   invoiceStatus?: 'pending' | null;
   voidedAt: unknown;
   createdAt: unknown;
+}
+
+function asShortfall(value: unknown): SaleStockShortfall | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const item = value as Record<string, unknown>;
+  if (typeof item['productId'] !== 'string') {
+    return null;
+  }
+  const num = (key: string): number => (typeof item[key] === 'number' ? (item[key] as number) : 0);
+  return {
+    productId: item['productId'],
+    requested: num('requested'),
+    allocated: num('allocated'),
+    shortfall: num('shortfall'),
+  };
+}
+
+/**
+ * Marcas de revisión de una venta aceptada (SPEC 52), o `null` si no trae
+ * ninguna. Se toleran formas parciales: la marca existe aunque el detalle no
+ * venga completo, y eso es lo que el historial necesita mostrar.
+ */
+export function syncReviewOf(sale: BulkAcceptedSale): SaleSyncReview | null {
+  const stock = sale.stockReview && typeof sale.stockReview === 'object'
+    ? {
+        items: (Array.isArray(sale.stockReview.items) ? sale.stockReview.items : [])
+          .map(asShortfall)
+          .filter((item): item is SaleStockShortfall => item !== null),
+      }
+    : null;
+  const catalog = sale.catalogReview && typeof sale.catalogReview === 'object'
+    ? {
+        inactive: (Array.isArray(sale.catalogReview.inactive) ? sale.catalogReview.inactive : [])
+          .filter((id): id is string => typeof id === 'string'),
+      }
+    : null;
+  const late = sale.lateSync === true;
+  return stock || catalog || late ? { stock, catalog, late } : null;
 }
 
 /** uuid v4 cuando el entorno lo soporta; fallback para WebViews viejos de Electron. */
@@ -814,9 +868,10 @@ flushQueueAsync(): Promise<void> {
    * concilia a mano.
    *
    * Desde SPEC 49 decide el **código** del servidor (`core/sync/sync-error-codes.ts`):
-   * un rechazo `retryable` se queda pendiente sin `pushError`, `STOCK_*`/`PRODUCT_*`
-   * van a conciliación y `SESSION_*`/`VALIDATION` se bloquean visibles. Solo sin
-   * código (backend viejo) se clasifica por el texto, como antes.
+   * un rechazo `retryable` se queda pendiente sin `pushError`, solo
+   * `PRODUCT_NOT_FOUND` va a conciliación (SPEC 52: faltante, inactivo y turno
+   * cerrado ya llegan como venta aceptada con marca) y lo demás se bloquea
+   * visible. Solo sin código (backend viejo) se clasifica por el texto, como antes.
    */
   private handleRejected(item: PendingSale, failure: SyncFailure): Observable<unknown> {
     const action = syncActionFor(failure) ?? legacySaleRejectionAction(failure.message);
@@ -910,7 +965,14 @@ flushQueueAsync(): Promise<void> {
               return of(undefined);
             }
             if (result.ok) {
-              return from(this.api().sales.markSynced(item.id, result.sale.id, result.sale.folio));
+              // Aceptada, con o sin marcas de revisión (SPEC 52): está registrada.
+              // Las marcas se guardan para que el historial las muestre.
+              const review = syncReviewOf(result.sale);
+              return from(
+                review
+                  ? this.api().sales.markSynced(item.id, result.sale.id, result.sale.folio, review)
+                  : this.api().sales.markSynced(item.id, result.sale.id, result.sale.folio),
+              );
             }
             if (result.code === 'DEFERRED') {
               // Pendiente sin contar intento ni bloquear (SPEC 48).

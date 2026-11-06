@@ -23,10 +23,12 @@ describe('tabla de clasificación (SPEC 49)', () => {
   });
 
   it.each([
-    ['STOCK_INSUFFICIENT', 'reconcile'],
-    ['BATCH_EXPIRED', 'reconcile'],
+    // SPEC 52: el lote offline acepta faltante e inactivo; si aun así llegan, se
+    // bloquean visibles y nunca van a conciliación.
+    ['STOCK_INSUFFICIENT', 'block'],
+    ['BATCH_EXPIRED', 'block'],
     ['PRODUCT_NOT_FOUND', 'reconcile'],
-    ['PRODUCT_INACTIVE', 'reconcile'],
+    ['PRODUCT_INACTIVE', 'block'],
     ['SESSION_CLOSED', 'block'],
     ['SESSION_FORBIDDEN', 'block'],
     ['IDEMPOTENCY_CONFLICT', 'block'],

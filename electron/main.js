@@ -524,8 +524,8 @@ function registrarIPCHandlers() {
     salesDb.getPendingPush(await getPrisma(), filters));
   ipcMain.handle('sales:listBlocked', async (_event, filters) =>
     salesDb.listBlocked(await getPrisma(), filters));
-  ipcMain.handle('sales:markSynced', async (_event, localId, remoteId, remoteFolio) =>
-    salesDb.markSynced(await getPrisma(), localId, remoteId, remoteFolio));
+  ipcMain.handle('sales:markSynced', async (_event, localId, remoteId, remoteFolio, review) =>
+    salesDb.markSynced(await getPrisma(), localId, remoteId, remoteFolio, review));
   ipcMain.handle('sales:markUnreconciled', async (_event, localId, reason) =>
     salesDb.markUnreconciled(await getPrisma(), localId, reason),
   );

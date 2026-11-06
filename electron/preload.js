@@ -61,8 +61,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPendingPush: (filters) => ipcRenderer.invoke('sales:getPendingPush', filters),
     listBlocked: (filters) => ipcRenderer.invoke('sales:listBlocked', filters),
     getPendingVoided: (filters) => ipcRenderer.invoke('sales:getPendingVoided', filters),
-    markSynced: (localId, remoteId, remoteFolio) =>
-      ipcRenderer.invoke('sales:markSynced', localId, remoteId, remoteFolio),
+    markSynced: (localId, remoteId, remoteFolio, review) =>
+      ipcRenderer.invoke('sales:markSynced', localId, remoteId, remoteFolio, review ?? null),
     markUnreconciled: (localId, reason) =>
       ipcRenderer.invoke('sales:markUnreconciled', localId, reason),
     markPushFailed: (localId, message) => ipcRenderer.invoke('sales:markPushFailed', localId, message),

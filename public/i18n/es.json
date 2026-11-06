@@ -353,7 +353,12 @@
       "sale": "Cobrada por",
       "void": "Anulada por"
     },
-    "unreconciled": "No conciliada"
+    "unreconciled": "No conciliada",
+    "review": {
+      "stock": "Revisión: faltante de stock",
+      "late": "Revisión: cobrada con turno cerrado",
+      "catalog": "Revisión: producto inactivo"
+    }
   },
   "payment": {
     "cash": "Efectivo",

@@ -119,12 +119,49 @@ function toSaleDto(row) {
     servicesCashAmount: row.servicesCashAmount ?? null,
     commissionTotal: row.commissionTotal ?? 0,
     coupon: parseCoupon(row.couponJson),
+    syncReview: parseSyncReview(row.syncReviewJson),
     unreconciledAt: row.unreconciledAt ?? null,
     unreconciledReason: row.unreconciledReason ?? null,
     voidedAt: row.voidedAt,
     voidedBy: row.voidedBy ?? null,
     createdAt: row.createdAt,
   };
+}
+
+/**
+ * Marcas de revisión con las que el servidor aceptó la venta (SPEC 52):
+ * `{ stock, catalog, late }`, o `null`. Un JSON roto no tumba el historial.
+ */
+function parseSyncReview(json) {
+  if (!json) {
+    return null;
+  }
+  try {
+    const review = JSON.parse(json);
+    if (!review || typeof review !== 'object') {
+      return null;
+    }
+    return {
+      stock: review.stock && typeof review.stock === 'object' ? review.stock : null,
+      catalog: review.catalog && typeof review.catalog === 'object' ? review.catalog : null,
+      late: review.late === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Serializa las marcas de revisión; sin ninguna marca no se guarda nada. */
+function serializeSyncReview(review) {
+  if (!review || typeof review !== 'object') {
+    return null;
+  }
+  const limpio = {
+    stock: review.stock && typeof review.stock === 'object' ? review.stock : null,
+    catalog: review.catalog && typeof review.catalog === 'object' ? review.catalog : null,
+    late: review.late === true,
+  };
+  return limpio.stock || limpio.catalog || limpio.late ? JSON.stringify(limpio) : null;
 }
 
 /** Cupón impreso en el ticket (`{ code, name, scope, discountAmount }`), o `null`. */
@@ -923,13 +960,16 @@ async function prepareUnreconciled(prisma, localId) {
   };
 }
 
-async function markSynced(prisma, localId, remoteId, remoteFolio) {
+async function markSynced(prisma, localId, remoteId, remoteFolio, review = null) {
+  // Marcas de revisión (SPEC 52): la venta quedó registrada, con faltante,
+  // catálogo inactivo o turno cerrado; el historial las muestra.
+  const syncReviewJson = serializeSyncReview(review);
   // Se reclama la venta solo si sigue sin anular, en una sola sentencia: leer
   // `voidedAt` y escribir después dejaba una ventana en la que una anulación
   // intermedia quedaba sin cola de void remoto.
   const claimed = await prisma.sale.updateMany({
     where: { id: localId, voidedAt: null },
-    data: { remoteId, remoteFolio, pendingPush: false, pushError: null },
+    data: { remoteId, remoteFolio, pendingPush: false, pushError: null, syncReviewJson },
   });
   if (claimed.count > 0) {
     return;
@@ -941,7 +981,14 @@ async function markSynced(prisma, localId, remoteId, remoteFolio) {
   // `POST /sales/:id/void` remoto explícito en el próximo sync.
   await prisma.sale.update({
     where: { id: localId },
-    data: { remoteId, remoteFolio, pushError: null, pendingPush: false, needsRemoteVoid: true },
+    data: {
+      remoteId,
+      remoteFolio,
+      pushError: null,
+      pendingPush: false,
+      needsRemoteVoid: true,
+      syncReviewJson,
+    },
   });
 }
 

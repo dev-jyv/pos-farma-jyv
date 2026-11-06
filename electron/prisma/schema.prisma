@@ -153,6 +153,9 @@ model Sale {
   /// Cupón aplicado (SPEC 47): `{ code, name, scope, discountAmount }` (JSON).
   /// El backend recalcula el monto; esto es lo que se imprimió en el ticket.
   couponJson             String?
+  /// Marcas con las que el servidor aceptó la venta offline (SPEC 52):
+  /// `{ stock, catalog, late }` (JSON). Null si subió sin marcas o no ha subido.
+  syncReviewJson         String?
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
   items                  SaleItem[]

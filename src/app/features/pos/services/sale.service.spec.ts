@@ -706,16 +706,18 @@ describe('SaleService', () => {
         expect(sales.markPushFailed).not.toHaveBeenCalled();
       });
 
-      it('STOCK_INSUFFICIENT va a conciliación aunque el texto no diga "stock"', async () => {
-        await flushBulkWith({ code: 'STOCK_INSUFFICIENT', error: 'Faltan 2 piezas', retryable: false });
+      it.each(['STOCK_INSUFFICIENT', 'BATCH_EXPIRED', 'PRODUCT_INACTIVE'])(
+        '%s ya no va a conciliación: se bloquea visible (SPEC 52)',
+        async (code) => {
+          await flushBulkWith({ code, error: 'Faltan 2 piezas', retryable: false });
 
-        const request = http.expectOne(`${SALES_URL}/unreconciled`);
-        expect(request.request.body).toMatchObject({ localId: 'local-1', reason: 'Faltan 2 piezas' });
-        request.flush({ data: {} });
-        await flushMicrotasks();
-
-        expect(sales.markUnreconciled).toHaveBeenCalledWith('local-1', 'Faltan 2 piezas');
-      });
+          // `unreconciledSales` no descuenta ninguna partida: mandarla ahí inflaba
+          // el inventario de todas las cajas.
+          http.expectNone(`${SALES_URL}/unreconciled`);
+          expect(sales.markUnreconciled).not.toHaveBeenCalled();
+          expect(sales.markPushFailed).toHaveBeenCalledWith('local-1', `Faltan 2 piezas [${code}]`);
+        },
+      );
 
       it('PRODUCT_NOT_FOUND va a conciliación aunque el texto no coincida', async () => {
         await flushBulkWith({
@@ -780,6 +782,67 @@ describe('SaleService', () => {
 
         http.expectNone(`${SALES_URL}/bulk`);
         expect(sales.markPushFailed).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('venta aceptada con marcas de revisión (SPEC 52)', () => {
+      it('faltante de stock: se marca subida con su marca y nunca va a conciliación', async () => {
+        rejectWith('');
+        await flushMicrotasks();
+        const stockReview = {
+          items: [{ productId: 'r-1', requested: 5, allocated: 3, shortfall: 2 }],
+        };
+        http.expectOne(`${SALES_URL}/bulk`).flush({
+          data: [{ ok: true, sale: { id: 'remote-1', folio: 'V-000010', stockReview } }],
+        });
+        await flushMicrotasks();
+
+        expect(sales.markSynced).toHaveBeenCalledWith('local-1', 'remote-1', 'V-000010', {
+          stock: stockReview,
+          catalog: null,
+          late: false,
+        });
+        http.expectNone(`${SALES_URL}/unreconciled`);
+        expect(sales.markUnreconciled).not.toHaveBeenCalled();
+        expect(sales.markPushFailed).not.toHaveBeenCalled();
+      });
+
+      it('turno cerrado y catálogo inactivo: subida con las dos marcas', async () => {
+        rejectWith('');
+        await flushMicrotasks();
+        http.expectOne(`${SALES_URL}/bulk`).flush({
+          data: [
+            {
+              ok: true,
+              sale: {
+                id: 'remote-1',
+                folio: 'V-000011',
+                lateSync: true,
+                catalogReview: { inactive: ['r-9'] },
+                stockReview: null,
+              },
+            },
+          ],
+        });
+        await flushMicrotasks();
+
+        expect(sales.markSynced).toHaveBeenCalledWith('local-1', 'remote-1', 'V-000011', {
+          stock: null,
+          catalog: { inactive: ['r-9'] },
+          late: true,
+        });
+        expect(sales.markPushFailed).not.toHaveBeenCalled();
+      });
+
+      it('sin marcas se marca subida como siempre', async () => {
+        rejectWith('');
+        await flushMicrotasks();
+        http.expectOne(`${SALES_URL}/bulk`).flush({
+          data: [{ ok: true, sale: { id: 'remote-1', folio: 'V-000012', lateSync: false } }],
+        });
+        await flushMicrotasks();
+
+        expect(sales.markSynced).toHaveBeenCalledWith('local-1', 'remote-1', 'V-000012');
       });
     });
 

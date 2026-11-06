@@ -573,6 +573,27 @@ export interface SaleBilling {
   email?: string;
 }
 
+/** Partida con faltante tal como la midió el servidor (`Sale.stockReview.items`, SPEC 52). */
+export interface SaleStockShortfall {
+  productId: string;
+  requested: number;
+  allocated: number;
+  shortfall: number;
+}
+
+/**
+ * Marcas de revisión de una venta aceptada por `/sales/bulk` (SPEC 52). Se
+ * guardan en la venta local al marcarla subida para que el historial las muestre.
+ */
+export interface SaleSyncReview {
+  /** `Sale.stockReview`: se descontó lo disponible; el resto quedó como faltante. */
+  stock: { items: SaleStockShortfall[] } | null;
+  /** `Sale.catalogReview`: ids de productos o servicios vendidos estando inactivos. */
+  catalog: { inactive: string[] } | null;
+  /** `Sale.lateSync`: llegó después del cierre del turno en que se cobró. */
+  late: boolean;
+}
+
 export interface Sale {
   id: string;
   folio: string;
@@ -617,6 +638,12 @@ export interface Sale {
    */
   unreconciledAt?: Date | null;
   unreconciledReason?: string | null;
+  /**
+   * Marcas de revisión con las que el servidor **aceptó** la venta offline
+   * (SPEC 52): faltante de stock, catálogo inactivo o turno ya cerrado. La
+   * venta está registrada; el gerente la revisa. Ausente o `null` sin marcas.
+   */
+  syncReview?: SaleSyncReview | null;
   createdAt: Date;
   /**
    * Totales denormalizados por rama. El corte y los reportes los leen sin

@@ -112,6 +112,17 @@
               } @else {
                 <p-tag severity="success" [value]="'history.completed' | translate" />
               }
+              <!-- SPEC 52: el servidor registró la venta offline con una marca
+                   para que el gerente la revise; no es un rechazo. -->
+              @if (sale.syncReview?.stock) {
+                <p-tag severity="warn" [value]="'history.review.stock' | translate" />
+              }
+              @if (sale.syncReview?.late) {
+                <p-tag severity="warn" [value]="'history.review.late' | translate" />
+              }
+              @if (sale.syncReview?.catalog) {
+                <p-tag severity="warn" [value]="'history.review.catalog' | translate" />
+              }
               @if (sale.invoiceStatus === 'pending') {
                 <p-tag severity="warn" [value]="'history.pendingInvoice' | translate" />
               }

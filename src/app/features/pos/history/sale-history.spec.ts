@@ -286,6 +286,42 @@ describe('SaleHistory', () => {
     });
   });
 
+  describe('marcas de revisión (SPEC 52)', () => {
+    async function renderWith(overrides: Partial<Sale>): Promise<string> {
+      list = () => of([sale(overrides)]);
+      await build();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      return (fixture.nativeElement as HTMLElement).textContent ?? '';
+    }
+
+    it('una venta aceptada con faltante muestra el chip de revisión de stock', async () => {
+      const texto = await renderWith({
+        syncReview: {
+          stock: { items: [{ productId: 'r-1', requested: 5, allocated: 3, shortfall: 2 }] },
+          catalog: null,
+          late: false,
+        },
+      });
+      expect(texto).toContain('history.review.stock');
+      expect(texto).not.toContain('history.review.late');
+      // Registrada: no es rechazo ni conciliación.
+      expect(texto).toContain('history.completed');
+      expect(texto).not.toContain('history.unreconciled');
+    });
+
+    it('una venta cobrada con el turno ya cerrado muestra su chip', async () => {
+      const texto = await renderWith({ syncReview: { stock: null, catalog: null, late: true } });
+      expect(texto).toContain('history.review.late');
+      expect(texto).not.toContain('history.review.stock');
+    });
+
+    it('una venta sin marcas no muestra chips de revisión', async () => {
+      const texto = await renderWith({});
+      expect(texto).not.toContain('history.review');
+    });
+  });
+
   it('methodLabelKey devuelve la llave i18n del método', () => {
     expect(component.methodLabelKey('mixed')).toBe('payment.mixed');
   });
