@@ -1121,9 +1121,13 @@ export const SYNC_ERROR_CODES = [
   'DEFERRED',
   'ENTRY_IN_PROGRESS',
   'ENTRY_AMBIGUOUS',
+  // La factura ya tiene una entrada igual con otra llave (SPEC 58): bloqueo visible.
+  'ENTRY_POSSIBLE_DUPLICATE',
   'ALREADY_VOIDED',
   'HAS_RETURNS',
   'VOID_FORBIDDEN',
+  // El panel cambió precio o estado después de la foto de la caja (SPEC 56).
+  'CATALOG_CONFLICT',
   'INTERNAL',
 ] as const;
 

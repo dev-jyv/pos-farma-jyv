@@ -85,6 +85,25 @@ describe('describeBlocked', () => {
     expect(blockedCodeOf(registro({ diagnosis: { code: 'sin-stock', syncCode: 'NUEVO' } }))).toBe('sin-stock');
   });
 
+  it('los códigos que sumaron SPEC 56 y 58 al contrato resuelven su causa del panel', () => {
+    expect(
+      blockedCodeOf(
+        registro({
+          kind: 'stockEntry',
+          diagnosis: { code: 'desconocido', syncCode: 'ENTRY_POSSIBLE_DUPLICATE' },
+        }),
+      ),
+    ).toBe('entrada-posible-duplicada');
+    expect(
+      blockedCodeOf(
+        registro({
+          kind: 'product',
+          diagnosis: { code: 'desconocido', syncCode: 'CATALOG_CONFLICT' },
+        }),
+      ),
+    ).toBe('catalogo-en-conflicto');
+  });
+
   it('ENTRY_AMBIGUOUS sigue mandando con el admin', () => {
     const ayuda = describeBlocked({
       kind: 'stockEntry',

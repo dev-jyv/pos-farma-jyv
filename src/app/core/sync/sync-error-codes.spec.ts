@@ -36,9 +36,11 @@ describe('tabla de clasificación (SPEC 49)', () => {
     ['DEFERRED', 'retry'],
     ['ENTRY_IN_PROGRESS', 'retry'],
     ['ENTRY_AMBIGUOUS', 'block'],
+    ['ENTRY_POSSIBLE_DUPLICATE', 'block'],
     ['ALREADY_VOIDED', 'done'],
     ['HAS_RETURNS', 'block'],
     ['VOID_FORBIDDEN', 'block'],
+    ['CATALOG_CONFLICT', 'block'],
     ['INTERNAL', 'retry'],
   ])('%s → %s', (code, action) => {
     const failure = syncFailureFromResult({ code, error: 'x', retryable: false });

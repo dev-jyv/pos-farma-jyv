@@ -40,9 +40,14 @@ export const SYNC_ERROR_ACTIONS: Readonly<Record<SyncErrorCode, SyncErrorAction>
   DEFERRED: 'retry',
   ENTRY_IN_PROGRESS: 'retry',
   ENTRY_AMBIGUOUS: 'block',
+  // SPEC 58: lo resuelve una persona ("Sí, es otra partida" o "Descartar"). La
+  // entrada lo lee antes en `details.code`; aquí queda por si llega por otro camino.
+  ENTRY_POSSIBLE_DUPLICATE: 'block',
   ALREADY_VOIDED: 'done',
   HAS_RETURNS: 'block',
   VOID_FORBIDDEN: 'block',
+  // SPEC 56: "Usar el del panel" o "Forzar el mío"; reintentar volvería a chocar.
+  CATALOG_CONFLICT: 'block',
   INTERNAL: 'retry',
 };
 

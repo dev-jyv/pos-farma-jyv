@@ -197,6 +197,8 @@ const POR_CODIGO_DE_SERVIDOR: Partial<Record<SyncErrorCode, BlockedCode>> = {
   SESSION_FORBIDDEN: 'turno-ajeno',
   ENTRY_IN_PROGRESS: 'entrada-en-curso',
   ENTRY_AMBIGUOUS: 'entrada-a-medias',
+  ENTRY_POSSIBLE_DUPLICATE: 'entrada-posible-duplicada',
+  CATALOG_CONFLICT: 'catalogo-en-conflicto',
 };
 
 /** Causa del panel para un registro: primero el código del servidor, luego el diagnóstico por texto. */
