@@ -105,7 +105,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** Foto de salud del sync para `POST /pos/diagnostics`. */
   diagnostics: {
-    buildSnapshot: () => ipcRenderer.invoke('diagnostics:buildSnapshot'),
+    buildSnapshot: (options) => ipcRenderer.invoke('diagnostics:buildSnapshot', options),
   },
 
   cashSessions: {

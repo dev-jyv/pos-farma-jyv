@@ -467,8 +467,11 @@ declare global {
         list: (limit?: number) => Promise<PosSyncLogEntry[]>;
       };
       diagnostics: {
-        /** Foto para `POST /pos/diagnostics`, con la identidad del equipo. */
-        buildSnapshot: () => Promise<PosDiagnosticsInput>;
+        /**
+         * Foto para `POST /pos/diagnostics`, con la identidad del equipo.
+         * `includeStockSample` (SPEC 67) agrega la muestra diaria de stock.
+         */
+        buildSnapshot: (options?: { includeStockSample?: boolean }) => Promise<PosDiagnosticsInput>;
       };
       cashSessions: {
         /** El único turno sin cerrar de este cajero, si existe. */

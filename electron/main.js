@@ -61,6 +61,7 @@ const invoiceRagDb = require('./db/invoice-rag');
 const syncLogDb = require('./db/sync-log');
 const diagnosticsDb = require('./db/diagnostics');
 const saleBlockers = require('./db/sale-blockers');
+const { createUpdaterStatus, attachUpdater } = require('./updater-status');
 
 app.commandLine.appendSwitch('lang', 'es-MX');
 app.commandLine.appendSwitch('accept-lang', 'es-MX,es;q=0.9');
@@ -69,6 +70,14 @@ const DEV_SERVER_URL = process.env.ELECTRON_DEV_SERVER_URL ?? 'http://localhost:
 const DIST_INDEX = path.join(__dirname, '..', 'dist', 'farma-jyv-pos', 'browser', 'index.html');
 
 let mainWindow;
+
+/**
+ * Último resultado del actualizador (SPEC 67): viaja en el diagnóstico remoto y
+ * cada error nuevo queda en `SyncLog` (`entity: 'actualizacion'`).
+ */
+const updaterStatus = createUpdaterStatus({
+  log: async (entry) => syncLogDb.appendSafe(await getPrisma(), entry),
+});
 
 function createWindow() {
   const windowOptions = {
@@ -371,21 +380,17 @@ function verificarActualizaciones() {
       autoUpdater.setFeedURL({ provider: 'generic', url: updateUrl });
     }
 
-    autoUpdater.on('error', (error) => {
-      console.log('[updater] error (no-op):', error?.message ?? error);
-    });
-    autoUpdater.on('update-available', (info) => {
-      console.log(`[updater] actualización disponible: ${info.version}`);
-    });
-    autoUpdater.on('update-downloaded', (info) => {
-      console.log(`[updater] descargada ${info.version}; se instalará al cerrar la app`);
-    });
+    // SPEC 67: el error ya no se queda en `console`. Va a `SyncLog` y al
+    // diagnóstico (`updateError`/`updateCheckedAt`), que el panel muestra.
+    attachUpdater(autoUpdater, updaterStatus, { info: (message) => console.log(message) });
 
     autoUpdater.checkForUpdatesAndNotify().catch((error) => {
-      console.log('[updater] sin feed de actualizaciones (no-op):', error?.message ?? error);
+      console.log('[updater] sin feed de actualizaciones:', error?.message ?? error);
+      void updaterStatus.recordError(error);
     });
   } catch (error) {
-    console.log('[updater] no disponible (no-op):', error?.message ?? error);
+    console.log('[updater] no disponible:', error?.message ?? error);
+    void updaterStatus.recordError(error);
   }
 }
 
@@ -590,15 +595,24 @@ function registrarIPCHandlers() {
   ipcMain.handle('syncLog:list', async (_event, limit) => syncLogDb.listRecent(await getPrisma(), limit));
   // Foto para `POST /pos/diagnostics`. La identidad del equipo la pone main,
   // que es quien la conoce: el mismo `id` que `get-device-info` (hostname + MAC).
-  ipcMain.handle('diagnostics:buildSnapshot', async () => {
+  // `options.includeStockSample` (SPEC 67) lo decide el renderer: una vez al día.
+  ipcMain.handle('diagnostics:buildSnapshot', async (_event, options) => {
     const info = obtenerInfoDispositivo();
-    return diagnosticsDb.buildSnapshot(await getPrisma(), {
-      deviceId: info.id,
-      deviceName: info.hostname,
-      appVersion: app.getVersion(),
-      platform: `${info.plataforma}-${info.arquitectura}`,
-      lastLocalBackupAt: routineBackups.lastBackupAt(),
-    });
+    const updater = updaterStatus.snapshot();
+    return diagnosticsDb.buildSnapshot(
+      await getPrisma(),
+      {
+        deviceId: info.id,
+        deviceName: info.hostname,
+        appVersion: app.getVersion(),
+        platform: `${info.plataforma}-${info.arquitectura}`,
+        lastLocalBackupAt: routineBackups.lastBackupAt(),
+        updateError: updater.updateError,
+        updateCheckedAt: updater.updateCheckedAt,
+      },
+      new Date(),
+      { includeStockSample: options?.includeStockSample === true },
+    );
   });
 
   // Turnos de caja locales.
