@@ -1114,6 +1114,10 @@ export const SYNC_ERROR_CODES = [
   'BATCH_EXPIRED',
   'PRODUCT_NOT_FOUND',
   'PRODUCT_INACTIVE',
+  // Alta de producto que choca con otro del catálogo (SPEC 60): bloqueo visible.
+  'PRODUCT_DUPLICATE',
+  'PRODUCT_SKU_TAKEN',
+  'PRODUCT_NAME_TAKEN',
   'SESSION_CLOSED',
   'SESSION_FORBIDDEN',
   'IDEMPOTENCY_CONFLICT',

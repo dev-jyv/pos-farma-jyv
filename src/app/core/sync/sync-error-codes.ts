@@ -33,6 +33,10 @@ export const SYNC_ERROR_ACTIONS: Readonly<Record<SyncErrorCode, SyncErrorAction>
   BATCH_EXPIRED: 'block',
   PRODUCT_NOT_FOUND: 'reconcile',
   PRODUCT_INACTIVE: 'block',
+  // SPEC 60: es otro producto con el mismo SKU, nombre o código; lo resuelve una persona.
+  PRODUCT_DUPLICATE: 'block',
+  PRODUCT_SKU_TAKEN: 'block',
+  PRODUCT_NAME_TAKEN: 'block',
   SESSION_CLOSED: 'block',
   SESSION_FORBIDDEN: 'block',
   IDEMPOTENCY_CONFLICT: 'block',
