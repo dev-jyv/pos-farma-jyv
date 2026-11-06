@@ -203,6 +203,38 @@ describe('PATCH por diferencias (SPEC 56, C3)', () => {
     expect(pendiente.changes).toEqual({ hasIva: false, hasIvaZero: true, hasIeps: true, iepsRate: 0.08 });
   });
 
+  it('quitar el grupo controlado manda controlledGroup: null (SPEC 64)', async () => {
+    await productos.upsertMany(prisma, [remoto({ controlledGroup: 'IV', requiresPrescription: true })]);
+    const fila = await filaRemota();
+    expect(fila.controlledGroup).toBe('IV');
+    await productos.updateCatalogProduct(prisma, fila.id, { controlledGroup: null });
+
+    const [pendiente] = await productos.getPendingCatalogPush(prisma);
+
+    expect(pendiente.changes).toEqual({ controlledGroup: null });
+    expect(pendiente.snapshot.controlledGroup).toBeNull();
+
+    // Confirmado el push, la foto nueva ya no tiene grupo: no vuelve a viajar.
+    await productos.markCatalogSynced(prisma, fila.id, REMOTO, pendiente.version, {
+      fields: pendiente.snapshot,
+      remoteUpdatedAt: '2026-11-06T13:00:00.000Z',
+    });
+    await productos.updateCatalogProduct(prisma, fila.id, { concentration: '650 mg' });
+    const [siguiente] = await productos.getPendingCatalogPush(prisma);
+    expect(siguiente.changes).toEqual({ concentration: '650 mg' });
+    expect(siguiente.fields).not.toHaveProperty('controlledGroup');
+  });
+
+  it('un producto que nunca tuvo grupo no manda controlledGroup', async () => {
+    await productos.upsertMany(prisma, [remoto()]);
+    const fila = await filaRemota();
+    await productos.updateCatalogProduct(prisma, fila.id, { salePrice: 55 });
+
+    const [pendiente] = await productos.getPendingCatalogPush(prisma);
+    expect(pendiente.changes).toEqual({ salePrice: 55 });
+    expect(pendiente.fields).not.toHaveProperty('controlledGroup');
+  });
+
   it('guardar sin cambios no deja nada que subir', async () => {
     await productos.upsertMany(prisma, [remoto()]);
     const fila = await filaRemota();

@@ -31,6 +31,14 @@ export interface PendingStockEntry {
   pushError: string | null;
 }
 
+/**
+ * Campos de catálogo tal como suben: `controlledGroup: null` es la
+ * desclasificación (SPEC 64), que viaja solo cuando la foto del servidor tenía grupo.
+ */
+export type CatalogPushFields = Partial<Omit<ProductFieldsPayload, 'controlledGroup'>> & {
+  controlledGroup?: ProductFieldsPayload['controlledGroup'] | null;
+};
+
 /** Producto pendiente de subir desde el módulo de edición de catálogo. */
 export interface PendingCatalogProduct {
   id: string;
@@ -42,11 +50,11 @@ export interface PendingCatalogProduct {
    * eso es lo que sube el PATCH. `null`/ausente = sin foto (alta, o producto de
    * antes de la migración): sube `fields` completo, como siempre.
    */
-  changes?: Partial<ProductFieldsPayload> | null;
+  changes?: CatalogPushFields | null;
   /** `updatedAt` remoto de la foto; `null` sin foto o con "Forzar el mío". */
   baseUpdatedAt?: string | null;
   /** Campos de catálogo completos tal como quedarán arriba; la foto nueva al confirmar. */
-  snapshot?: Partial<ProductFieldsPayload>;
+  snapshot?: CatalogPushFields;
   catalogPushError: string | null;
   /** `updatedAt` del producto al leer la cola; se devuelve a `markCatalogSynced`. */
   version?: string | null;
@@ -54,7 +62,7 @@ export interface PendingCatalogProduct {
 
 /** Lo que el servidor ya tiene tras un push de catálogo: renueva la foto `baseFields`. */
 export interface CatalogSyncedSnapshot {
-  fields: Partial<ProductFieldsPayload>;
+  fields: CatalogPushFields;
   /** `updatedAt` que respondió el servidor (ISO o `Timestamp` serializado). */
   remoteUpdatedAt?: unknown;
 }
@@ -384,7 +392,7 @@ declare global {
         /** Acepta id local o `remoteId`; devuelve `null` si no existe. */
         getProductById: (id: string) => Promise<Product | null>;
         createCatalogProduct: (fields: ProductFieldsPayload) => Promise<Product>;
-        updateCatalogProduct: (id: string, fields: Partial<ProductFieldsPayload>) => Promise<Product>;
+        updateCatalogProduct: (id: string, fields: CatalogPushFields) => Promise<Product>;
         getPendingCatalogPush: () => Promise<PendingCatalogProduct[]>;
         markCatalogSynced: (
           localId: string,

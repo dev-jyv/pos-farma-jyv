@@ -859,8 +859,13 @@ async function updateCatalogProduct(prisma, id, fields) {
  * producto nunca haya tenido esos campos. Este serializador aparte omite por
  * completo cualquier campo opcional que esté vacío, en vez de mandarlo como
  * `null`.
+ *
+ * Excepción (SPEC 64): `controlledGroup: null` **sí** viaja cuando la foto del
+ * servidor (`base`, SPEC 56) tenía grupo y el local ya no. Omitirlo dejaba la
+ * desclasificación solo en esta caja: el servidor nunca se enteraba y no quedaba
+ * auditoría. Sin foto no se sabe si arriba tenía grupo y se omite como siempre.
  */
-function toPushFields(row) {
+function toPushFields(row, base = null) {
   const fields = {
     name: row.name,
     sku: row.sku,
@@ -878,6 +883,7 @@ function toPushFields(row) {
   if (row.concentration) fields.concentration = row.concentration;
   if (row.hasIeps && row.iepsRate != null) fields.iepsRate = row.iepsRate;
   if (row.controlledGroup) fields.controlledGroup = row.controlledGroup;
+  else if (base?.fields?.controlledGroup) fields.controlledGroup = null;
   // El backend no acepta `isActive` en el alta (`createProductSchema` no lo
   // declara); solo tiene sentido en la edición de un producto ya remoto.
   if (row.remoteId) fields.isActive = Boolean(row.isActive);
@@ -889,8 +895,8 @@ function toPushFields(row) {
  * `isActive` siempre (el alta no lo manda, pero la foto debe saberlo para que el
  * PATCH no reactive un producto que el panel desactivó).
  */
-function catalogFieldsOf(row) {
-  return { ...toPushFields(row), isActive: row.isActive !== false };
+function catalogFieldsOf(row, base = null) {
+  return { ...toPushFields(row, base), isActive: row.isActive !== false };
 }
 
 /** `baseFields` = `{ updatedAt (ISO remoto o null), fields }`. */
@@ -949,7 +955,8 @@ const TAX_FIELDS = ['hasIva', 'hasIvaZero', 'hasIeps', 'iepsRate'];
  * C3). Mandar el registro completo era "gana la última escritura": una caja con
  * datos viejos que corregía otro campo revertía el precio del admin, y además
  * reactivaba un producto desactivado. Un campo que se vació en local no viaja
- * (el backend no acepta `null`), igual que antes con el registro completo.
+ * (el backend no acepta `null`), igual que antes con el registro completo,
+ * salvo `controlledGroup` (SPEC 64, ver `toPushFields`).
  */
 function diffCatalogFields(current, base) {
   const changes = {};
@@ -994,13 +1001,13 @@ async function getPendingCatalogPush(prisma) {
     orderBy: { updatedAt: 'asc' },
   });
   return rows.map((row) => {
-    const snapshot = catalogFieldsOf(row);
     const base = row.remoteId ? parseBaseFields(row.baseFields) : null;
+    const snapshot = catalogFieldsOf(row, base);
     const conflict = parseConflict(row.catalogConflict);
     return {
       id: row.id,
       remoteId: row.remoteId ?? null,
-      fields: toPushFields(row),
+      fields: toPushFields(row, base),
       // Edición con foto: solo lo cambiado. `null` = sin foto (alta, o fila de
       // antes de SPEC 56): sube completo, como siempre.
       changes: base ? diffCatalogFields(snapshot, base.fields) : null,

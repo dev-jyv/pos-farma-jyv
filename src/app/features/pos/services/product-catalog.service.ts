@@ -5,6 +5,7 @@ import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, las
 import { getApiErrorMessage, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
 import { AutoPushService } from '../../../core/sync/auto-push.service';
 import {
+  CatalogPushFields,
   CatalogConflictChoice,
   CatalogConflictCurrent,
   CatalogSyncedSnapshot,
@@ -132,7 +133,7 @@ export class ProductCatalogService {
     return from(this.api().createCatalogProduct(fields)).pipe(tap(() => this.afterLocalWrite()));
   }
 
-  update(id: string, fields: Partial<ProductFieldsPayload>): Observable<Product> {
+  update(id: string, fields: CatalogPushFields): Observable<Product> {
     return from(this.api().updateCatalogProduct(id, fields)).pipe(tap(() => this.afterLocalWrite()));
   }
 

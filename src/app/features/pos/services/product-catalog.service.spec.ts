@@ -317,6 +317,24 @@ describe('ProductCatalogService.flushQueueAsync (edición por diferencias, SPEC 
     });
   });
 
+  it('quitar el grupo controlado manda controlledGroup: null en el PATCH (SPEC 64)', async () => {
+    catalog.getPendingCatalogPush.mockResolvedValue([
+      pendiente({
+        changes: { controlledGroup: null },
+        snapshot: { ...SNAPSHOT, controlledGroup: null },
+      }),
+    ]);
+    const done = service.flushQueueAsync();
+    await tick();
+    const patch = http.expectOne((req) => req.url === PRODUCT_URL && req.method === 'PATCH');
+    expect(patch.request.body).toEqual({
+      controlledGroup: null,
+      baseUpdatedAt: '2026-11-06T10:00:00.000Z',
+    });
+    patch.flush({ data: { id: 'remote-1', sku: 'QA-NEW-1', updatedAt: '2026-11-06T12:00:00.000Z' } });
+    await done;
+  });
+
   it('sin cambios respecto a la foto no pide nada al servidor', async () => {
     catalog.getPendingCatalogPush.mockResolvedValue([pendiente({ changes: {} })]);
     await service.flushQueueAsync();
