@@ -147,7 +147,14 @@ export interface LocalCashSessionInput {
   openedBy: string;
   /** Correo del cajero al abrir; para que la auditoría no muestre un uid. */
   openedByLabel?: string;
+  /** Fondo del turno. Con `openingCounted` se ignora: el fondo es lo contado. */
   openingAmount: number;
+  /** Efectivo que el cajero contó al abrir (SPEC 63). */
+  openingCounted?: number;
+  /** Fondo que dejó el cierre anterior; se omite sin cierre previo. */
+  inheritedFloat?: number;
+  /** Obligatoria si el contado difiere de lo heredado. */
+  openingNote?: string;
 }
 
 /** Turno con su alta (`POST /cash-sessions`) pendiente de subir. */

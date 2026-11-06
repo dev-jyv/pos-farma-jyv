@@ -58,6 +58,13 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 - `pullPromotions()` también baja los **cupones** (`GET /coupons/sync`, entidad `coupons`, mismo cursor por `updatedAt`) y emite `COUPONS_SYNCED_EVENT`; el resultado de cupones no cuenta para el `true/false` de promociones (un backend sin la ruta deja un `sync_run` con error y nada más).
 - `electron/db/promotions.js#purgeStale` (y `coupons.js#purgeStale`) borra al arrancar (best-effort, tras migraciones) las promos dadas de baja o terminadas hace más de 30 días.
 
+### Arqueo del fondo heredado (SPEC 63)
+
+- **Abrir turno pide contar.** `CashSessionDialog` muestra "Fondo del cierre anterior" (`getCashOnHand`, solo referencia) y "Efectivo contado" **vacío y obligatorio** (`openingCounted`); sin contado el botón no se habilita. Si difiere ≥ 1 centavo pide nota (3–200). Sin cierre previo ni movimientos entre turnos no hay heredado: se captura el fondo sin diferencia ni nota.
+- **El fondo del turno es lo contado.** `cash-sessions.js#createLocal` acepta `openingCounted`/`inheritedFloat`/`openingNote`, pone `openingAmount = openingCounted` (el Z parte de ahí) y guarda `openingDifference = contado − heredado`; con diferencia y sin nota lanza. Sin `openingCounted` abre como antes. Migración `20261106120000_cash_session_opening_count`.
+- **Push.** `openingBody` arma `POST /cash-sessions` `{ openingAmount, openingCounted?, inheritedFloat?, openingNote? }`; un turno en cola de antes (sin `openingCounted`) sube solo con `openingAmount`.
+- **Autocierre = revisión.** `closeLocal` con `autoClosedByExpiry` pone `needsReview` (la migración marca los autocierres viejos); el DTO expone también `autoClosed`. La auditoría de cortes tiene el filtro "Autocerrados": manda `needsReview=true` y, si el backend no filtró, filtra la página aquí (sin `meta`). Muestra `openingDifference` y `followingOpeningDifference` (la pone el backend en el turno anterior).
+
 ### Mostrador robusto (SPEC 66)
 
 - **Borrador con llave.** `Checkout` emite `chargeKeyIssued` con la `idempotencyKey` de cada apertura; `Sale.chargeKey` la guarda en el borrador (`CartStorageService`, campo `idempotencyKey`) y `resetTicket` la olvida. `SaleService.create` limpia el borrador en el `tap` de `createLocal` (misma secuencia que confirma en SQLite). Al restaurar, si `SaleService.findByIdempotencyKey` (IPC `sales:getByIdempotencyKey`) encuentra la venta, el borrador se descarta con "La venta de este ticket ya se registró (folio X)". Sin llave se restaura como antes, sin consultar.

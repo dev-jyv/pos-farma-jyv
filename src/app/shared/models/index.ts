@@ -800,6 +800,19 @@ export interface CashSession {
   adjustmentNote?: string | null;
   /** `true` si el turno se cerró solo por expiración de sesión (24:00 CDMX). */
   autoClosedByExpiry?: boolean;
+  /** Nombre del backend para lo mismo (SPEC 63). */
+  autoClosed?: boolean;
+  /** Autocierre sin arqueo: un admin debe revisarlo (SPEC 63). */
+  needsReview?: boolean;
+  /** Efectivo contado al abrir; es el fondo del turno (SPEC 63). `null` en turnos de antes. */
+  openingCounted?: number | null;
+  /** Fondo que dejó el cierre anterior; `null` sin cierre previo. */
+  inheritedFloat?: number | null;
+  /** `openingCounted − inheritedFloat`. */
+  openingDifference?: number | null;
+  openingNote?: string | null;
+  /** Diferencia que encontró al abrir el turno **siguiente** (la pone el backend). */
+  followingOpeningDifference?: number | null;
   /** Solo tiene sentido en el POS local-first; el admin-web (100% online) no lo usa. */
   remoteId?: string | null;
   pendingPush?: boolean;

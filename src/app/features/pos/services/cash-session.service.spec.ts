@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../../../environments/environment';
 import { CashSession } from '../../../shared/models';
-import { CashSessionService } from './cash-session.service';
+import { CashSessionService, openingBody } from './cash-session.service';
 
 const BASE = `${environment.apiUrl}/cash-sessions`;
 
@@ -150,6 +150,123 @@ describe('CashSessionService (local-first)', () => {
       await flushMicrotasks();
       expect(service.isOpen()).toBe(true);
       http.expectNone(BASE);
+    });
+  });
+
+  describe('arqueo del fondo heredado (SPEC 63)', () => {
+    it('openLocal guarda el contado como fondo, con lo heredado y la nota', () => {
+      service
+        .openLocal('u1', 'cajero@test.com', 700, {
+          counted: true,
+          inheritedFloat: 780,
+          openingNote: '  Faltan 80  ',
+        })
+        .subscribe();
+      expect(cashSessions.createLocal).toHaveBeenCalledWith({
+        openedBy: 'u1',
+        openedByLabel: 'cajero@test.com',
+        openingAmount: 700,
+        openingCounted: 700,
+        inheritedFloat: 780,
+        openingNote: 'Faltan 80',
+      });
+    });
+
+    it('primer turno de la caja: contado sin heredado ni nota', () => {
+      service.openLocal('u1', undefined, 300, { counted: true, inheritedFloat: null }).subscribe();
+      expect(cashSessions.createLocal).toHaveBeenCalledWith({
+        openedBy: 'u1',
+        openedByLabel: undefined,
+        openingAmount: 300,
+        openingCounted: 300,
+      });
+    });
+
+    it('el alta sube openingCounted, inheritedFloat y openingNote', async () => {
+      cashSessions.getPendingPush.mockResolvedValue([
+        localSession({
+          openingAmount: 700,
+          openingCounted: 700,
+          inheritedFloat: 780,
+          openingDifference: -80,
+          openingNote: 'Faltan 80',
+        }),
+      ]);
+      service.flushQueue();
+      await flushMicrotasks();
+
+      http.expectOne(`${BASE}/current`).flush({ data: null });
+      await flushMicrotasks();
+      const create = http.expectOne(BASE);
+      expect(create.request.body).toEqual({
+        openingAmount: 700,
+        openingCounted: 700,
+        inheritedFloat: 780,
+        openingNote: 'Faltan 80',
+      });
+      create.flush({ data: { id: 'remote-1' } });
+      await flushMicrotasks();
+    });
+
+    it('un turno en cola desde antes de la actualización sube como siempre', () => {
+      expect(openingBody(localSession({ openingAmount: 500 }))).toEqual({ openingAmount: 500 });
+    });
+
+    it('contado sin heredado (primer turno) no manda inheritedFloat ni nota', () => {
+      expect(
+        openingBody(localSession({ openingAmount: 300, openingCounted: 300, inheritedFloat: null })),
+      ).toEqual({ openingAmount: 300, openingCounted: 300 });
+    });
+
+    it('el autocierre manda autoClosedByExpiry: el turno local queda para revisión', async () => {
+      cashSessions.getOpenLocal.mockResolvedValue(localSession({ openedAt: new Date('2026-01-15T20:00:00Z') }));
+      await service.autoCloseStale('u1');
+      expect(cashSessions.closeLocal).toHaveBeenCalledWith(
+        'local-1',
+        expect.objectContaining({ autoClosedByExpiry: true }),
+      );
+    });
+
+    it('el filtro "Autocerrados" pide needsReview y mapea la marca del backend', async () => {
+      let page: { items: CashSession[]; meta: unknown } | null = null;
+      service.listAudit({ needsReview: true, page: 1, limit: 50 }).subscribe((r) => (page = r));
+      await flushMicrotasks();
+
+      const request = http.expectOne((req) => req.url === BASE);
+      expect(request.request.params.get('needsReview')).toBe('true');
+      request.flush({
+        data: [
+          {
+            ...localSession({ id: 'r-1' }),
+            autoClosed: true,
+            needsReview: true,
+            openedAt: { _seconds: 1_757_000_000, _nanoseconds: 0 },
+          },
+        ],
+        meta: { page: 1, limit: 50, total: 1, totalPages: 1 },
+      });
+
+      expect(page!.items).toHaveLength(1);
+      expect(page!.items[0].needsReview).toBe(true);
+      expect(page!.items[0].autoClosedByExpiry).toBe(true);
+      expect(page!.meta).not.toBeNull();
+    });
+
+    it('un backend que ignora el filtro: la página se filtra aquí', async () => {
+      let page: { items: CashSession[]; meta: unknown } | null = null;
+      service.listAudit({ needsReview: true }).subscribe((r) => (page = r));
+      await flushMicrotasks();
+
+      http.expectOne((req) => req.url === BASE).flush({
+        data: [
+          { ...localSession({ id: 'r-1' }), autoClosedByExpiry: true, openedAt: { _seconds: 1 } },
+          { ...localSession({ id: 'r-2' }), openedAt: { _seconds: 2 } },
+        ],
+        meta: { page: 1, limit: 50, total: 2, totalPages: 1 },
+      });
+
+      expect(page!.items.map((item) => item.id)).toEqual(['r-1']);
+      expect(page!.meta).toBeNull();
     });
   });
 

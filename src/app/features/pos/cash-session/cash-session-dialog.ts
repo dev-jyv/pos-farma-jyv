@@ -34,6 +34,9 @@ import { TicketPrintService } from '../ticket/ticket-print.service';
  */
 /** Máximo que el corte espera a sincronizar antes de mostrarse con lo que haya. */
 const SYNC_BEFORE_CLOSE_TIMEOUT_MS = 20_000;
+/** Nota del arqueo de apertura: lo mínimo para que diga algo, y un tope (SPEC 63). */
+export const OPENING_NOTE_MIN_LENGTH = 3;
+export const OPENING_NOTE_MAX_LENGTH = 200;
 
 @Component({
   selector: 'app-cash-session-dialog',
@@ -92,13 +95,54 @@ export class CashSessionDialog {
   readonly canDismiss = computed(
     () => !this.syncing() && (this.mode() !== 'open' || this.dismissible()),
   );
-  readonly openingAmount = signal(0);
+  /**
+   * Fondo que dejó el cierre anterior (más los movimientos entre turnos). Ya no
+   * es el fondo del turno: es la **referencia** contra la que se compara lo que
+   * el cajero cuenta (SPEC 63).
+   */
+  readonly inheritedAmount = signal(0);
   /** Hay un corte previo en este equipo del cual sale el fondo. */
   readonly hasPreviousClose = signal(false);
+  /**
+   * Hay fondo heredado contra el cual comparar: un cierre previo, o dinero que
+   * se metió o sacó del cajón sin turno. Sin eso (primer turno de la caja) se
+   * captura el fondo y no hay diferencia que explicar.
+   */
+  readonly hasInherited = computed(() => this.hasPreviousClose() || this.inheritedAmount() !== 0);
   readonly cashOnHandLoading = signal(false);
   readonly cashOnHandError = signal(false);
-  /** Sin el monto real leído no hay fondo que asentar. */
-  readonly canOpen = computed(() => !this.cashOnHandLoading() && !this.cashOnHandError());
+  /**
+   * Efectivo que el cajero contó al abrir. Arranca **vacío** a propósito: con el
+   * heredado precargado, abrir sin contar era un clic, y el faltante del turno
+   * anterior acababa en el Z de quien abría (SPEC 63).
+   */
+  readonly openingCounted = signal<number | null>(null);
+  readonly openingNote = signal('');
+  readonly openingNoteMaxLength = OPENING_NOTE_MAX_LENGTH;
+  /** Contado − heredado; 0 sin heredado o sin contado. */
+  readonly openingDifference = computed(() => {
+    const counted = this.openingCounted();
+    if (counted === null || !this.hasInherited()) {
+      return 0;
+    }
+    return roundMoney(counted - this.inheritedAmount());
+  });
+  /** Mismo umbral que el corte: debajo de un centavo no es diferencia. */
+  readonly needsOpeningNote = computed(() => Math.abs(this.openingDifference()) >= 0.01);
+  readonly openingNoteValid = computed(
+    () => this.openingNote().trim().length >= OPENING_NOTE_MIN_LENGTH,
+  );
+  /**
+   * Sin el heredado leído no hay contra qué comparar; sin el contado no hay
+   * fondo que asentar; con diferencia, sin nota no hay registro de ella.
+   */
+  readonly canOpen = computed(
+    () =>
+      !this.cashOnHandLoading() &&
+      !this.cashOnHandError() &&
+      this.openingCounted() !== null &&
+      (!this.needsOpeningNote() || this.openingNoteValid()),
+  );
   /**
    * Se precarga con el efectivo esperado, pero el cajero puede cerrar tal cual
    * o dejarlo en $0.00: ambos son cierres válidos. No se le exige tocar el
@@ -199,7 +243,9 @@ export class CashSessionDialog {
   }
 
   private resetForOpening(): void {
-    this.openingAmount.set(0);
+    this.inheritedAmount.set(0);
+    this.openingCounted.set(null);
+    this.openingNote.set('');
     this.countedCashAmount.set(0);
     this.submitting.set(false);
     this.confirmingDifference.set(false);
@@ -220,11 +266,11 @@ export class CashSessionDialog {
   }
 
   /**
-   * El fondo inicial **no se captura**: es el efectivo con el que cerró el turno
-   * anterior (ajustado por lo que se metió o sacó entre turnos). Ese dinero sigue
-   * en el cajón, y dejarlo teclear abría turnos con un fondo que no venía de
-   * ningún corte. Si la lectura falla no se abre: un $0.00 por un error se
-   * asentaría como fondo real.
+   * El fondo heredado es el efectivo con el que cerró el turno anterior
+   * (ajustado por lo que se metió o sacó entre turnos). Se muestra como
+   * referencia; el fondo del turno es lo que el cajero **cuenta** (SPEC 63). Si
+   * la lectura falla no se abre: sin heredado no hay contra qué comparar y la
+   * diferencia del turno anterior volvería a perderse.
    */
   loadCashOnHand(): void {
     this.cashOnHandLoading.set(true);
@@ -234,7 +280,7 @@ export class CashSessionDialog {
       .pipe(finalize(() => this.cashOnHandLoading.set(false)))
       .subscribe({
         next: (detail) => {
-          this.openingAmount.set(detail.amount);
+          this.inheritedAmount.set(detail.amount);
           this.hasPreviousClose.set(detail.lastClosedAt !== null);
         },
         error: () => this.cashOnHandError.set(true),
@@ -245,12 +291,18 @@ export class CashSessionDialog {
     const user = this.authService.user();
     // El doble clic abriría dos turnos: el segundo ahora lo rechaza SQLite,
     // pero el cajero solo vería un error donde en realidad todo salió bien.
-    if (!user || this.submitting() || !this.canOpen()) {
+    const counted = this.openingCounted();
+    if (!user || this.submitting() || !this.canOpen() || counted === null) {
       return;
     }
     this.submitting.set(true);
     this.cashSessionService
-      .openLocal(user.uid, this.authService.profile()?.email ?? undefined, this.openingAmount())
+      .openLocal(user.uid, this.authService.profile()?.email ?? undefined, counted, {
+        counted: true,
+        inheritedFloat: this.hasInherited() ? this.inheritedAmount() : null,
+        // Contado igual a lo heredado: sin nota (SPEC 63).
+        openingNote: this.needsOpeningNote() ? this.openingNote().trim() : null,
+      })
       .subscribe({
         next: () => {
           this.submitting.set(false);
@@ -261,6 +313,14 @@ export class CashSessionDialog {
           this.notifications.error(this.translate.instant('cashCut.openError'));
         },
       });
+  }
+
+  setOpeningCounted(value: number | null): void {
+    this.openingCounted.set(value ?? null);
+  }
+
+  onOpeningNoteInput(event: Event): void {
+    this.openingNote.set((event.target as HTMLTextAreaElement).value);
   }
 
   /**

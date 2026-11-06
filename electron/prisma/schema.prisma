@@ -334,6 +334,17 @@ model CashSession {
   adjustmentNote             String?
   /// `true` si el auto-cierre a las 24:00 (expiración de sesión) fue quien cerró este turno.
   autoClosedByExpiry         Boolean        @default(false)
+  /// Un autocierre nadie lo arqueó: queda para revisión (SPEC 63).
+  needsReview                Boolean        @default(false)
+  /// Arqueo del fondo heredado al abrir (SPEC 63). `openingCounted` es lo que el
+  /// cajero contó y es también `openingAmount`; `inheritedFloat`, lo que dejó el
+  /// cierre anterior (null sin cierre previo). `null` en turnos de antes.
+  openingCounted             Float?
+  inheritedFloat             Float?
+  /// `openingCounted − inheritedFloat`, redondeada a centavos.
+  openingDifference          Float?
+  /// Nota obligatoria cuando el contado difiere de lo heredado.
+  openingNote                String?
   /// Cola de alta: sigue `true` hasta que `POST /cash-sessions` responde con éxito.
   pendingPush                Boolean        @default(true)
   pushError                  String?

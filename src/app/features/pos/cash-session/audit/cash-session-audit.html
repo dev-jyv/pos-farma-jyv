@@ -113,6 +113,18 @@
             } @else {
               <p-tag severity="secondary" [value]="'cashCut.audit.noAdjustment' | translate" />
             }
+            <!-- SPEC 63: el arqueo del fondo al abrir, y el que hizo quien abrió después. -->
+            @if (session.openingDifference) {
+              <span class="mt-1 block text-xs text-amber-700" data-testid="audit-opening-difference">
+                {{ 'cashCut.audit.openingDifference' | translate }}: ${{ session.openingDifference | number: '1.2-2' }}
+              </span>
+            }
+            @if (session.followingOpeningDifference) {
+              <span class="mt-1 block text-xs text-amber-700" data-testid="audit-following-difference">
+                {{ 'cashCut.audit.followingOpeningDifference' | translate }}:
+                ${{ session.followingOpeningDifference | number: '1.2-2' }}
+              </span>
+            }
           </td>
           <td>
             @if (session.adjustmentStatus === 'pending') {

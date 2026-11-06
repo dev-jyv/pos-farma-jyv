@@ -841,3 +841,79 @@ describe('estado del ajuste (pull desde el backend)', () => {
     expect(pendientes[0].id).toBe(mio.id);
   });
 });
+
+describe('arqueo del fondo heredado (SPEC 63)', () => {
+  it('abre con lo contado como fondo y guarda la diferencia contra lo heredado', async () => {
+    const turno = await createLocal(prisma, {
+      openedBy: CAJERO,
+      openingAmount: 700,
+      openingCounted: 700,
+      inheritedFloat: 780.5,
+      openingNote: '  Faltan 80.50 del turno anterior  ',
+    });
+
+    expect(turno).toMatchObject({
+      openingAmount: 700,
+      openingCounted: 700,
+      inheritedFloat: 780.5,
+      openingDifference: -80.5,
+      openingNote: 'Faltan 80.50 del turno anterior',
+      needsReview: false,
+    });
+  });
+
+  it('el esperado del turno nuevo parte de lo contado, no de lo heredado', async () => {
+    const turno = await createLocal(prisma, {
+      openedBy: CAJERO,
+      openingAmount: 700,
+      openingCounted: 700,
+      inheritedFloat: 780,
+      openingNote: 'Faltan 80',
+    });
+    const { expectedCashAmount } = await getLiveSummary(prisma, turno.id);
+    expect(expectedCashAmount).toBe(700);
+  });
+
+  it('con diferencia y sin nota no abre turno', async () => {
+    await expect(
+      createLocal(prisma, { openedBy: CAJERO, openingAmount: 700, openingCounted: 700, inheritedFloat: 780 }),
+    ).rejects.toThrow(/escribe una nota/);
+    expect(prisma.cashSession.rows).toHaveLength(0);
+  });
+
+  it('contado igual a lo heredado: sin nota ni diferencia', async () => {
+    const turno = await createLocal(prisma, {
+      openedBy: CAJERO,
+      openingAmount: 780,
+      openingCounted: 780,
+      inheritedFloat: 780,
+      openingNote: 'no hace falta',
+    });
+    expect(turno.openingDifference).toBe(0);
+    expect(turno.openingNote).toBeNull();
+  });
+
+  it('primer turno de la caja: sin heredado no hay diferencia', async () => {
+    const turno = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 300, openingCounted: 300 });
+    expect(turno).toMatchObject({ openingAmount: 300, inheritedFloat: null, openingDifference: null });
+  });
+
+  it('una llamada de antes (sin contado) abre como siempre, sin arqueo', async () => {
+    const turno = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 500 });
+    expect(turno).toMatchObject({ openingAmount: 500, openingCounted: null, openingDifference: null });
+  });
+
+  it('el autocierre marca needsReview; el cierre del cajero no', async () => {
+    const auto = await createLocal(prisma, { openedBy: CAJERO, openingAmount: 100 });
+    const cerradoAuto = await closeLocal(prisma, auto.id, {
+      countedCashAmount: 100,
+      closedBy: CAJERO,
+      autoClosedByExpiry: true,
+    });
+    expect(cerradoAuto).toMatchObject({ autoClosed: true, autoClosedByExpiry: true, needsReview: true });
+
+    const manual = await createLocal(prisma, { openedBy: 'otro', openingAmount: 100 });
+    const cerradoManual = await closeLocal(prisma, manual.id, { countedCashAmount: 100, closedBy: 'otro' });
+    expect(cerradoManual).toMatchObject({ autoClosed: false, needsReview: false });
+  });
+});
