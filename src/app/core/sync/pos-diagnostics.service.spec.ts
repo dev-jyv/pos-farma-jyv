@@ -7,7 +7,11 @@ import { AuthService } from '../auth/auth.service';
 import { PosCommand, PosDiagnosticsInput } from '../../shared/models';
 import { environment } from '../../../environments/environment';
 import { ClockSkewService } from '../time/clock-skew.service';
-import { PosDiagnosticsService } from './pos-diagnostics.service';
+import {
+  PosDiagnosticsService,
+  STOCK_SAMPLE_DAY_KEY,
+  stockSampleDue,
+} from './pos-diagnostics.service';
 import { SyncRepairService } from './sync-repair.service';
 
 /**
@@ -48,6 +52,7 @@ describe('PosDiagnosticsService', () => {
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   beforeEach(() => {
+    localStorage.removeItem(STOCK_SAMPLE_DAY_KEY);
     user = { uid: 'uid-cajero' };
     append = vi.fn().mockResolvedValue(null);
     window.electronAPI = {
@@ -75,6 +80,63 @@ describe('PosDiagnosticsService', () => {
   afterEach(() => {
     http.verify();
     delete (window as { electronAPI?: unknown }).electronAPI;
+    vi.useRealTimers();
+    localStorage.removeItem(STOCK_SAMPLE_DAY_KEY);
+  });
+
+  describe('muestra diaria de stock (SPEC 67)', () => {
+    // 08:00 en México (UTC-6) del 6 de noviembre.
+    const OCHO_MX = new Date('2026-11-06T14:00:00.000Z');
+    const conMuestra = {
+      ...snapshot,
+      stockSample: [{ productId: 'RmtPrd0000000000000A', localStock: 12 }],
+    } as PosDiagnosticsInput;
+
+    it('antes de las 07:00 de México no toca; desde las 07:00 sí, una vez por día', () => {
+      expect(stockSampleDue(new Date('2026-11-06T12:59:00.000Z'), null)).toBe(false);
+      expect(stockSampleDue(new Date('2026-11-06T13:00:00.000Z'), null)).toBe(true);
+      expect(stockSampleDue(OCHO_MX, '2026-11-06')).toBe(false);
+      expect(stockSampleDue(OCHO_MX, '2026-11-05')).toBe(true);
+      // 23:30 en México ya es otro día en UTC: manda el día de México.
+      expect(stockSampleDue(new Date('2026-11-07T05:30:00.000Z'), '2026-11-06')).toBe(false);
+    });
+
+    it('el primer reporte después de las 07:00 la pide y, recibida, no la repite ese día', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(OCHO_MX);
+      const buildSnapshot = vi.fn().mockResolvedValue(conMuestra);
+      window.electronAPI!.diagnostics.buildSnapshot = buildSnapshot;
+
+      let done = service.report();
+      await flush();
+      const post = http.expectOne(`${api}/pos/diagnostics`);
+      expect(post.request.body.stockSample).toEqual(conMuestra.stockSample);
+      post.flush({ data: { commands: [] } });
+      await done;
+      expect(buildSnapshot).toHaveBeenCalledWith({ includeStockSample: true });
+      expect(localStorage.getItem(STOCK_SAMPLE_DAY_KEY)).toBe('2026-11-06');
+
+      buildSnapshot.mockResolvedValue(snapshot);
+      done = service.report();
+      await flush();
+      http.expectOne(`${api}/pos/diagnostics`).flush({ data: { commands: [] } });
+      await done;
+      expect(buildSnapshot).toHaveBeenLastCalledWith();
+    });
+
+    it('si el servidor no la recibió, el siguiente reporte la vuelve a pedir', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(OCHO_MX);
+      const buildSnapshot = vi.fn().mockResolvedValue(conMuestra);
+      window.electronAPI!.diagnostics.buildSnapshot = buildSnapshot;
+
+      const done = service.report();
+      await flush();
+      http.expectOne(`${api}/pos/diagnostics`).flush('caído', { status: 503, statusText: 'down' });
+      await done;
+
+      expect(localStorage.getItem(STOCK_SAMPLE_DAY_KEY)).toBeNull();
+    });
   });
 
   it('sin sesión no manda nada', async () => {

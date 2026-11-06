@@ -29,6 +29,7 @@ const PATRONES = [
   ['producto-no-encontrado', /producto no encontrado/i],
   ['sin-stock', /stock insuficiente/i],
   ['promocion-no-vigente', /promoci[oó]n .* no est[aá] vigente/i],
+  ['producto-duplicado', /ya existe otro producto con es[ea] (sku|nombre)/i],
 ];
 
 /**
@@ -45,6 +46,14 @@ const POR_CODIGO = {
   SESSION_FORBIDDEN: 'turno-ajeno',
   ENTRY_IN_PROGRESS: 'entrada-en-curso',
   ENTRY_AMBIGUOUS: 'entrada-a-medias',
+  // SPEC 58: la factura ya tiene una entrada con el mismo producto, lote y cantidad.
+  ENTRY_POSSIBLE_DUPLICATE: 'entrada-posible-duplicada',
+  // SPEC 56: el PATCH de la caja chocó con un cambio de precio o estado del panel.
+  CATALOG_CONFLICT: 'catalogo-en-conflicto',
+  // SPEC 60: el alta chocó por SKU o nombre con **otro** producto (no se adopta).
+  PRODUCT_DUPLICATE: 'producto-duplicado',
+  PRODUCT_SKU_TAKEN: 'producto-duplicado',
+  PRODUCT_NAME_TAKEN: 'producto-duplicado',
 };
 
 const ETIQUETA_DE_CODIGO = /\[([A-Z][A-Z_]*)\]\s*$/;

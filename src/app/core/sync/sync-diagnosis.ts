@@ -78,6 +78,15 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
       'lote en inventario. Si ya está registrado ahí, esta copia se puede descartar.',
     recommended: 'avisar-admin',
   }),
+  'entrada-posible-duplicada': () => ({
+    title: '¿Factura capturada dos veces?',
+    explanation:
+      'Esta factura ya tiene en el servidor una entrada con el mismo producto, lote y cantidad. ' +
+      'Si de verdad son dos partidas iguales, pulsa "Sí, es otra partida". Si es la misma ' +
+      'mercancía capturada otra vez (otra foto, el PDF o en otra caja), pulsa "Descartar": se ' +
+      'quitan esas piezas del stock de esta caja.',
+    recommended: 'corregir',
+  }),
   'listo-para-reintentar': () => ({
     title: 'Ya se puede enviar',
     explanation: 'Lo que faltaba ya llegó al servidor. Pulsa Reintentar.',
@@ -148,6 +157,22 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
       'administrador que entre en esta caja y pulse Reintentar: con su sesión la anulación se ' +
       'vuelve a enviar. No la cobres de nuevo.',
     recommended: 'avisar-admin',
+  }),
+  'catalogo-en-conflicto': () => ({
+    title: 'El producto cambió en el panel',
+    explanation:
+      'Mientras esta caja guardaba su cambio, en el panel cambiaron el precio o el estado del ' +
+      'producto. Elige "Usar el del panel" para quedarte con lo del panel, o "Forzar el mío" si ' +
+      'el valor de esta caja es el correcto. Lo demás que corregiste se sube igual.',
+    recommended: 'corregir',
+  }),
+  'producto-duplicado': () => ({
+    title: 'Ya existe otro producto con ese SKU o nombre',
+    explanation:
+      'Otra caja o el panel dio de alta un producto distinto con el mismo SKU o nombre, y no ' +
+      'coinciden el código de barras ni el nombre con su concentración, así que la caja no lo ' +
+      'adopta. Corrige el SKU o el nombre en Productos y reintenta, o avisa al administrador.',
+    recommended: 'corregir',
   }),
   desconocido: (_dep, record) => ({
     title: 'Motivo no reconocido',

@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearStockEntryPushError: (batchLocalId) =>
       ipcRenderer.invoke('catalog:clearStockEntryPushError', batchLocalId),
     discardStockEntry: (batchLocalId) => ipcRenderer.invoke('catalog:discardStockEntry', batchLocalId),
+    confirmDuplicateStockEntry: (batchLocalId) =>
+      ipcRenderer.invoke('catalog:confirmDuplicateStockEntry', batchLocalId),
     listBlockedProducts: () => ipcRenderer.invoke('catalog:listBlockedProducts'),
     markStockEntrySynced: (batchLocalId, remoteProductId) =>
       ipcRenderer.invoke('catalog:markStockEntrySynced', batchLocalId, remoteProductId),
@@ -47,12 +49,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createCatalogProduct: (fields) => ipcRenderer.invoke('catalog:createCatalogProduct', fields),
     updateCatalogProduct: (id, fields) => ipcRenderer.invoke('catalog:updateCatalogProduct', id, fields),
     getPendingCatalogPush: () => ipcRenderer.invoke('catalog:getPendingCatalogPush'),
-    markCatalogSynced: (localId, remoteId, pushedVersion) =>
-      ipcRenderer.invoke('catalog:markCatalogSynced', localId, remoteId, pushedVersion),
+    markCatalogSynced: (localId, remoteId, pushedVersion, synced) =>
+      ipcRenderer.invoke('catalog:markCatalogSynced', localId, remoteId, pushedVersion, synced),
+    markCatalogConflict: (localId, current) =>
+      ipcRenderer.invoke('catalog:markCatalogConflict', localId, current),
+    resolveCatalogConflict: (localId, choice) =>
+      ipcRenderer.invoke('catalog:resolveCatalogConflict', localId, choice),
     markCatalogPushFailed: (localId, message) =>
       ipcRenderer.invoke('catalog:markCatalogPushFailed', localId, message),
     clearCatalogPushError: (localId) => ipcRenderer.invoke('catalog:clearCatalogPushError', localId),
     retryProductPush: (localId) => ipcRenderer.invoke('catalog:retryProductPush', localId),
+  },
+
+  products: {
+    /**
+     * SPEC 57: guarda en SQLite la existencia fresca de un producto (respuesta de
+     * `GET /products/:id/stock`, pedida por el renderer) respetando lo pendiente.
+     */
+    refreshOne: (remoteId, snapshot) => ipcRenderer.invoke('products:refreshOne', remoteId, snapshot),
   },
 
   sales: {
@@ -95,7 +109,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** Foto de salud del sync para `POST /pos/diagnostics`. */
   diagnostics: {
-    buildSnapshot: () => ipcRenderer.invoke('diagnostics:buildSnapshot'),
+    buildSnapshot: (options) => ipcRenderer.invoke('diagnostics:buildSnapshot', options),
   },
 
   cashSessions: {

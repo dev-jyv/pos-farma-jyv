@@ -13,7 +13,7 @@ import { filter, map } from 'rxjs';
 
 import { AuthService } from '../auth/auth.service';
 import { ApiHealthService } from '../health/api-health.service';
-import { BlockedSyncRecord } from '../electron/window.d';
+import { BlockedSyncRecord, CatalogConflictChoice } from '../electron/window.d';
 import { BlockedSyncService } from '../sync/blocked-sync.service';
 import { describeBlocked } from '../sync/sync-diagnosis';
 import { SyncHelpReply, SyncHelpService } from '../sync/sync-help.service';
@@ -291,6 +291,73 @@ export class Shell {
   }
 
   /** Abre el gasto o el producto en su pantalla, ya cargado para corregirlo. */
+  canResolveConflict(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.canResolveConflict(record);
+  }
+
+  /**
+   * "Usar el del panel" / "Forzar el mío" (SPEC 56) y, como "Reintentar", empuja
+   * en el acto: lo que quede de la edición sube sin esperar al horario fijo.
+   */
+  async resolveConflict(record: BlockedSyncRecord, choice: CatalogConflictChoice): Promise<void> {
+    if (choice === 'mine') {
+      const confirmado = window.confirm(
+        `¿Forzar el valor de esta caja para "${record.label}"?\n\n` +
+          'Se sube aunque en el panel lo hayan cambiado después, y reemplaza lo del panel.',
+      );
+      if (!confirmado) {
+        return;
+      }
+    }
+    this.retryingBlockedId.set(record.id);
+    try {
+      await this.blockedSync.resolveConflict(record, choice);
+      await this.syncScheduler.flushPendingNow();
+      await this.blockedSync.refresh();
+    } catch (error: unknown) {
+      this.notifications.error(
+        error instanceof Error ? error.message : 'No se pudo resolver el conflicto del producto.',
+      );
+    } finally {
+      this.retryingBlockedId.set(null);
+    }
+    this.closeBlockedIfEmpty();
+  }
+
+  /** Entrada con aviso de posible factura recapturada (SPEC 58). */
+  isPossibleDuplicate(record: BlockedSyncRecord): boolean {
+    return this.blockedSync.isPossibleDuplicate(record);
+  }
+
+  /**
+   * "Sí, es otra partida" (SPEC 58): reenvía la entrada con `confirmDuplicate` y
+   * empuja en el acto, como "Reintentar". Se confirma nombrándola: si era la
+   * misma mercancía, el stock queda contado dos veces también en el servidor.
+   */
+  async confirmDuplicateEntry(record: BlockedSyncRecord): Promise<void> {
+    const confirmado = window.confirm(
+      `¿"${record.label}" (${record.detail}) es otra partida de la factura?\n\n` +
+        'Se registrará aunque la factura ya tenga una entrada igual. Si es la misma ' +
+        'mercancía capturada otra vez, elige Descartar.',
+    );
+    if (!confirmado) {
+      return;
+    }
+    this.retryingBlockedId.set(record.id);
+    try {
+      await this.blockedSync.confirmDuplicate(record);
+      await this.syncScheduler.flushPendingNow();
+      await this.blockedSync.refresh();
+    } catch (error: unknown) {
+      this.notifications.error(
+        error instanceof Error ? error.message : 'No se pudo reenviar la entrada.',
+      );
+    } finally {
+      this.retryingBlockedId.set(null);
+    }
+    this.closeBlockedIfEmpty();
+  }
+
   fixBlocked(record: BlockedSyncRecord): void {
     this.blockedDialogVisible.set(false);
     if (record.kind === 'product') {

@@ -62,6 +62,41 @@ interface SyncCatalogItem {
 
 interface SyncProductsResponse {
   data: Array<{ updatedAt?: unknown }>;
+  /** Hora del servidor tomada **antes** de leer (SPEC 56); falta en backends viejos. */
+  meta?: { serverTime?: unknown };
+}
+
+/**
+ * Traslape del cursor de productos (SPEC 56, C4). Un `updatedAt` se escribe con
+ * la hora en que arrancó la escritura, no con la de su confirmación: una venta
+ * que confirma tarde queda **detrás** de un cursor que ya avanzó y esta caja no
+ * la bajaba nunca. Se relee lo de los últimos 2 min; el upsert es idempotente.
+ */
+export const PRODUCTS_CURSOR_OVERLAP_MS = 120_000;
+
+/**
+ * Cursor siguiente del pull de productos:
+ *
+ * - con `meta.serverTime`: esa hora menos el traslape;
+ * - backend viejo: el `updatedAt` más nuevo recibido menos el traslape, sin
+ *   retroceder del cursor anterior (si no, un pull sin cambios relee lo mismo
+ *   para siempre);
+ * - nada recibido y sin hora del servidor: el cursor anterior.
+ */
+export function nextProductsCursor(
+  serverTime: unknown,
+  newestUpdatedAt: string | null,
+  previous: string | null,
+): string | null {
+  const server = parseTimestamp(serverTime);
+  if (server) {
+    return new Date(server.getTime() - PRODUCTS_CURSOR_OVERLAP_MS).toISOString();
+  }
+  if (!newestUpdatedAt) {
+    return previous;
+  }
+  const candidate = new Date(new Date(newestUpdatedAt).getTime() - PRODUCTS_CURSOR_OVERLAP_MS).toISOString();
+  return previous && previous > candidate ? previous : candidate;
 }
 
 /**
@@ -678,12 +713,24 @@ export class SyncScheduler {
     return Math.min(...candidates) - now.getTime();
   }
 
+  /**
+   * El pull de productos va **en la misma fila que los empujes** (`pushChain`,
+   * SPEC 56, C5): espera a que termine el push en curso y un push nuevo espera a
+   * que termine él. En paralelo, el GET podía traer el stock del servidor antes
+   * de que llegara una venta que el push estaba subiendo y que, al confirmarse,
+   * ya no cuenta como pendiente: stock fantasma hasta el siguiente horario.
+   */
   private pullProducts(): Promise<SyncOutcome> {
     if (this.pullInFlight) {
       return this.pullInFlight;
     }
     this.promotionsPullOk = false;
-    this.pullInFlight = this.doPullProducts().finally(() => {
+    const pull = this.pushChain.catch(() => undefined).then(() => this.doPullProducts());
+    this.pushChain = pull.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.pullInFlight = pull.finally(() => {
       this.pullInFlight = null;
     });
     return this.pullInFlight;
@@ -691,7 +738,7 @@ export class SyncScheduler {
 
   private async doPullProducts(): Promise<SyncOutcome> {
     const cursor = await this.getCursor();
-    let newestUpdatedAt = cursor;
+    let newestUpdatedAt: string | null = null;
 
     try {
       const response = await firstValueFrom(this.fetchAll(cursor));
@@ -706,11 +753,12 @@ export class SyncScheduler {
       if (items.length) {
         await window.electronAPI?.catalog.upsertMany(items);
       }
+      const nextCursor = nextProductsCursor(response.meta?.serverTime, newestUpdatedAt, cursor);
       await window.electronAPI?.sync.recordRun({
         entity: 'products',
         direction: 'pull',
         status: 'ok',
-        cursor: newestUpdatedAt ?? undefined,
+        cursor: nextCursor ?? undefined,
       });
       await this.doPullServiceCatalogs();
       return { ok: true, pulled: items.length };
@@ -741,8 +789,9 @@ export class SyncScheduler {
   }
 
   /**
-   * Cursor = `updatedAt` más nuevo visto en el último pull exitoso de ESA
-   * entidad; null = trae todo. Cada catálogo lleva el suyo: si compartieran
+   * Cursor guardado en el último pull exitoso de ESA entidad; null = trae todo.
+   * El de productos es `serverTime − 120 s` (`nextProductsCursor`); los demás
+   * catálogos, el `updatedAt` más nuevo recibido. Cada catálogo lleva el suyo: si compartieran
    * cursor, el primero en sincronizar dejaría a los otros creyendo que ya
    * estaban al día.
    */

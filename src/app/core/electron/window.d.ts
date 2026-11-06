@@ -32,15 +32,64 @@ export interface PendingStockEntry {
   pushError: string | null;
 }
 
+/**
+ * Campos de catálogo tal como suben: `controlledGroup: null` es la
+ * desclasificación (SPEC 64), que viaja solo cuando la foto del servidor tenía grupo.
+ */
+export type CatalogPushFields = Partial<Omit<ProductFieldsPayload, 'controlledGroup'>> & {
+  controlledGroup?: ProductFieldsPayload['controlledGroup'] | null;
+};
+
 /** Producto pendiente de subir desde el módulo de edición de catálogo. */
 export interface PendingCatalogProduct {
   id: string;
   /** `null` = alta nueva (nunca sincronizó); si tiene valor, es una edición. */
   remoteId: string | null;
   fields: ProductFieldsPayload;
+  /**
+   * Edición con foto (SPEC 56): solo los campos que difieren de `baseFields`;
+   * eso es lo que sube el PATCH. `null`/ausente = sin foto (alta, o producto de
+   * antes de la migración): sube `fields` completo, como siempre.
+   */
+  changes?: CatalogPushFields | null;
+  /** `updatedAt` remoto de la foto; `null` sin foto o con "Forzar el mío". */
+  baseUpdatedAt?: string | null;
+  /** Campos de catálogo completos tal como quedarán arriba; la foto nueva al confirmar. */
+  snapshot?: CatalogPushFields;
   catalogPushError: string | null;
   /** `updatedAt` del producto al leer la cola; se devuelve a `markCatalogSynced`. */
   version?: string | null;
+}
+
+/** Lo que el servidor ya tiene tras un push de catálogo: renueva la foto `baseFields`. */
+export interface CatalogSyncedSnapshot {
+  fields: CatalogPushFields;
+  /** `updatedAt` que respondió el servidor (ISO o `Timestamp` serializado). */
+  remoteUpdatedAt?: unknown;
+}
+
+/** Valor actual del panel en un 409 `CATALOG_CONFLICT` (SPEC 56). */
+export interface CatalogConflictCurrent {
+  salePrice: number | null;
+  isActive: boolean | null;
+}
+
+/** "Usar el del panel" o "Forzar el mío". */
+export type CatalogConflictChoice = 'panel' | 'mine';
+
+/** Respuesta de `GET /v1/products/:id/stock` (SPEC 57), tal como se guarda en SQLite. */
+export interface ProductStockSnapshot {
+  id: string;
+  totalStock: number;
+  updatedAt?: unknown;
+  /** Solo lotes con piezas; misma forma que los de `/products/sync`. */
+  batches: Array<{ id: string; lotNumber?: string | null; expiryDate?: unknown; quantity: number }>;
+}
+
+/** Producto y lotes tras guardar la existencia fresca (lo pendiente ya descontado). */
+export interface ProductStockRefreshResult {
+  product: Product;
+  batches: ProductBatch[];
 }
 
 export interface StockEntryLocalResult {
@@ -212,6 +261,11 @@ export interface BlockedSyncRecord {
    * `remoteId`). Vacío si el bloqueo es un rechazo del servidor.
    */
   blockers?: PosBlocker[];
+  /**
+   * Solo productos con 409 `CATALOG_CONFLICT` (SPEC 56): lo que dice el panel.
+   * Con él se ofrecen "Usar el del panel" y "Forzar el mío".
+   */
+  conflict?: CatalogConflictCurrent;
 }
 
 export type BlockedCode =
@@ -223,6 +277,7 @@ export type BlockedCode =
   | 'listo-para-reintentar'
   | 'entrada-a-medias'
   | 'entrada-en-curso'
+  | 'entrada-posible-duplicada'
   | 'turno-duplicado'
   | 'turno-abierto-existente'
   | 'turno-ajeno'
@@ -231,6 +286,8 @@ export type BlockedCode =
   | 'sin-stock'
   | 'promocion-no-vigente'
   | 'anulacion-rechazada'
+  | 'catalogo-en-conflicto'
+  | 'producto-duplicado'
   | 'desconocido';
 
 export interface BlockedDiagnosis {
@@ -305,6 +362,13 @@ declare global {
       getAppVersion: () => Promise<string>;
       getDeviceInfo: () => Promise<unknown>;
       openCashDrawer: (printerName: string) => Promise<boolean>;
+      products?: {
+        /** SPEC 57: guarda la existencia fresca de un producto; `null` si no está en la caja. */
+        refreshOne: (
+          remoteId: string,
+          snapshot: ProductStockSnapshot,
+        ) => Promise<ProductStockRefreshResult | null>;
+      };
       catalog: {
         search: (term: string) => Promise<Product[]>;
         /** Productos (activos o no) con el mismo nombre; el servidor no admite repetidos. */
@@ -326,6 +390,11 @@ declare global {
         clearStockEntryPushError: (batchLocalId: string) => Promise<void>;
         /** Borra un lote que nunca subió y descuenta sus piezas del stock local. */
         discardStockEntry: (batchLocalId: string) => Promise<void>;
+        /**
+         * "Sí, es otra partida" (SPEC 58): reenvía la entrada con `confirmDuplicate: true`
+         * tras un 409 `ENTRY_POSSIBLE_DUPLICATE`. `false` si ya no estaba pendiente.
+         */
+        confirmDuplicateStockEntry: (batchLocalId: string) => Promise<boolean>;
         /** Altas o ediciones de catálogo que el servidor rechazó. */
         listBlockedProducts: () => Promise<BlockedSyncRecord[]>;
         markStockEntrySynced: (batchLocalId: string, remoteProductId?: string | null) => Promise<void>;
@@ -333,9 +402,18 @@ declare global {
         /** Acepta id local o `remoteId`; devuelve `null` si no existe. */
         getProductById: (id: string) => Promise<Product | null>;
         createCatalogProduct: (fields: ProductFieldsPayload) => Promise<Product>;
-        updateCatalogProduct: (id: string, fields: Partial<ProductFieldsPayload>) => Promise<Product>;
+        updateCatalogProduct: (id: string, fields: CatalogPushFields) => Promise<Product>;
         getPendingCatalogPush: () => Promise<PendingCatalogProduct[]>;
-        markCatalogSynced: (localId: string, remoteId?: string | null, pushedVersion?: string | null) => Promise<void>;
+        markCatalogSynced: (
+          localId: string,
+          remoteId?: string | null,
+          pushedVersion?: string | null,
+          synced?: CatalogSyncedSnapshot | null,
+        ) => Promise<void>;
+        /** 409 `CATALOG_CONFLICT`: bloquea la edición visible con el valor del panel. */
+        markCatalogConflict: (localId: string, current: CatalogConflictCurrent) => Promise<void>;
+        /** `false` si el producto no tiene conflicto que resolver. */
+        resolveCatalogConflict: (localId: string, choice: CatalogConflictChoice) => Promise<boolean>;
         markCatalogPushFailed: (localId: string, message: string) => Promise<void>;
         clearCatalogPushError: (localId: string) => Promise<void>;
         /**
@@ -426,8 +504,11 @@ declare global {
         list: (limit?: number) => Promise<PosSyncLogEntry[]>;
       };
       diagnostics: {
-        /** Foto para `POST /pos/diagnostics`, con la identidad del equipo. */
-        buildSnapshot: () => Promise<PosDiagnosticsInput>;
+        /**
+         * Foto para `POST /pos/diagnostics`, con la identidad del equipo.
+         * `includeStockSample` (SPEC 67) agrega la muestra diaria de stock.
+         */
+        buildSnapshot: (options?: { includeStockSample?: boolean }) => Promise<PosDiagnosticsInput>;
       };
       cashSessions: {
         /** El único turno sin cerrar de este cajero, si existe. */

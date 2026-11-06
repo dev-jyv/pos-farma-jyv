@@ -8,6 +8,44 @@ import { PosCommand, PosCommandResult } from '../../shared/models';
 import { environment } from '../../../environments/environment';
 import { RepairOutcome, SyncRepairService } from './sync-repair.service';
 import { ClockSkewService } from '../time/clock-skew.service';
+import { EXPIRY_TIME_ZONE, zonedTodayYmd } from '../../shared/utils/expiry';
+
+/** Hora local (México) desde la que sale la muestra diaria de stock (SPEC 67). */
+export const STOCK_SAMPLE_HOUR = 7;
+/** Día (`YYYY-MM-DD`, México) de la última muestra que el servidor recibió. */
+export const STOCK_SAMPLE_DAY_KEY = 'farmajyv.diagnostics.stockSampleDay';
+
+function zonedHour(now: Date, timeZone = EXPIRY_TIME_ZONE): number {
+  const hour = new Intl.DateTimeFormat('en-US', { timeZone, hour: '2-digit', hourCycle: 'h23' })
+    .formatToParts(now)
+    .find((part) => part.type === 'hour')?.value;
+  return Number(hour ?? 0);
+}
+
+/**
+ * ¿Toca mandar la muestra de stock? Una vez al día: el primer diagnóstico
+ * después de las 07:00 de México cuyo día aún no tiene muestra recibida. Antes
+ * de las 7 la caja suele estar a medio abrir y el stock aún no es el del día.
+ */
+export function stockSampleDue(now: Date, lastDay: string | null): boolean {
+  return lastDay !== zonedTodayYmd(now) && zonedHour(now) >= STOCK_SAMPLE_HOUR;
+}
+
+function readStockSampleDay(): string | null {
+  try {
+    return localStorage.getItem(STOCK_SAMPLE_DAY_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStockSampleDay(day: string): void {
+  try {
+    localStorage.setItem(STOCK_SAMPLE_DAY_KEY, day);
+  } catch {
+    // Sin almacenamiento: mañana (o al reiniciar) se manda otra vez, nada más.
+  }
+}
 
 /**
  * Diagnóstico remoto: manda al backend la foto de salud del sync de esta caja
@@ -62,12 +100,21 @@ export class PosDiagnosticsService {
 
   private async doReport(): Promise<void> {
     const api = window.electronAPI!;
-    const foto = await api.diagnostics.buildSnapshot();
+    const now = new Date();
+    // SPEC 67: la muestra de stock cuesta hasta 300 lecturas en el servidor; va
+    // una vez al día y el día solo se da por cubierto si el servidor la recibió.
+    const includeStockSample = stockSampleDue(now, readStockSampleDay());
+    const foto = includeStockSample
+      ? await api.diagnostics.buildSnapshot({ includeStockSample: true })
+      : await api.diagnostics.buildSnapshot();
     // El desfase lo mide el renderer (interceptor), no SQLite: se agrega aquí.
     // Sin medición se omite; el panel no debe leer "0 min" de una caja sin red.
     const skew = this.clock.skewMs();
     const snapshot = skew !== null ? { ...foto, clockSkewMs: skew } : foto;
     const response = await firstValueFrom(this.http.post<unknown>(`${this.apiUrl}/pos/diagnostics`, snapshot));
+    if (includeStockSample && Array.isArray(snapshot.stockSample)) {
+      writeStockSampleDay(zonedTodayYmd(now));
+    }
     const commands = unwrapEntity<{ commands?: PosCommand[] } | null>(response)?.commands ?? [];
 
     for (const command of commands) {

@@ -4,13 +4,96 @@ import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, las
 
 import { getApiErrorMessage, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
 import { AutoPushService } from '../../../core/sync/auto-push.service';
-import { PendingCatalogProduct } from '../../../core/electron/window.d';
+import {
+  CatalogPushFields,
+  CatalogConflictChoice,
+  CatalogConflictCurrent,
+  CatalogSyncedSnapshot,
+  PendingCatalogProduct,
+} from '../../../core/electron/window.d';
 import { Product, ProductFieldsPayload } from '../../../shared/models';
+import {
+  PRODUCT_DUPLICATE,
+  duplicateProductMessage,
+  isSameProduct,
+} from '../../../shared/utils/product-match';
 import { environment } from '../../../../environments/environment';
 
 interface ProductSummaryDto {
   id: string;
   sku: string;
+  name?: string;
+  concentration?: string | null;
+  barcode?: string | null;
+  updatedAt?: unknown;
+}
+
+/** Códigos de `details.code` con que el backend rechaza un alta duplicada (SPEC 60). */
+export const PRODUCT_DUPLICATE_CODES = ['PRODUCT_DUPLICATE', 'PRODUCT_SKU_TAKEN', 'PRODUCT_NAME_TAKEN'] as const;
+export type ProductDuplicateCode = (typeof PRODUCT_DUPLICATE_CODES)[number];
+
+/** 409 de producto duplicado: código y datos del existente, si el backend los manda. */
+export interface ProductDuplicateError {
+  code: ProductDuplicateCode;
+  existing: { id: string; name: string; sku: string; barcode: string | null } | null;
+}
+
+/**
+ * 409 con `details.code` de duplicado (SPEC 60). `null` si es otro error o un
+ * backend viejo que solo manda el texto.
+ */
+export function productDuplicateOf(error: unknown): ProductDuplicateError | null {
+  if (!(error instanceof HttpErrorResponse) || error.status !== 409) {
+    return null;
+  }
+  const body = error.error as {
+    error?: { details?: { code?: unknown; existing?: Record<string, unknown> | null } };
+  } | null;
+  const details = body?.error?.details;
+  const code = details?.code;
+  if (typeof code !== 'string' || !(PRODUCT_DUPLICATE_CODES as readonly string[]).includes(code)) {
+    return null;
+  }
+  const raw = details?.existing;
+  const existing =
+    raw && typeof raw['id'] === 'string'
+      ? {
+          id: raw['id'],
+          name: typeof raw['name'] === 'string' ? raw['name'] : '',
+          sku: typeof raw['sku'] === 'string' ? raw['sku'] : '',
+          barcode: typeof raw['barcode'] === 'string' ? raw['barcode'] : null,
+        }
+      : null;
+  return { code: code as ProductDuplicateCode, existing };
+}
+
+/** Motivo visible de un alta que choca con **otro** producto, con su código al final. */
+export function duplicateConflictReason(existingName: string | null | undefined, code: string): string {
+  const message = duplicateProductMessage(existingName, code === 'PRODUCT_NAME_TAKEN' ? 'name' : 'sku');
+  return `${message} [${code}]`;
+}
+
+/**
+ * 409 `CATALOG_CONFLICT` del `PATCH /products/:id` (SPEC 56): el precio o el
+ * estado cambiaron en el panel después de la foto que mandó la caja. Devuelve el
+ * valor actual del servidor (`details.current`), o `null` si es otro error.
+ */
+export function catalogConflictOf(error: unknown): CatalogConflictCurrent | null {
+  if (!(error instanceof HttpErrorResponse) || error.status !== 409) {
+    return null;
+  }
+  const body = error.error as {
+    error?: { details?: { code?: unknown; current?: { salePrice?: unknown; isActive?: unknown } } };
+  } | null;
+  const details = body?.error?.details;
+  if (!details || details.code !== 'CATALOG_CONFLICT') {
+    return null;
+  }
+  const current = details.current ?? {};
+  return {
+    salePrice: typeof current.salePrice === 'number' ? current.salePrice : null,
+    isActive: typeof current.isActive === 'boolean' ? current.isActive : null,
+  };
 }
 
 /**
@@ -50,8 +133,18 @@ export class ProductCatalogService {
     return from(this.api().createCatalogProduct(fields)).pipe(tap(() => this.afterLocalWrite()));
   }
 
-  update(id: string, fields: Partial<ProductFieldsPayload>): Observable<Product> {
+  update(id: string, fields: CatalogPushFields): Observable<Product> {
     return from(this.api().updateCatalogProduct(id, fields)).pipe(tap(() => this.afterLocalWrite()));
+  }
+
+  /**
+   * Resuelve un 409 `CATALOG_CONFLICT` (SPEC 56): "Usar el del panel" (`panel`)
+   * o "Forzar el mío" (`mine`). Lo resuelto vuelve a la cola; quien llama empuja.
+   */
+  async resolveConflict(localId: string, choice: CatalogConflictChoice): Promise<boolean> {
+    const resolved = await this.api().resolveCatalogConflict(localId, choice);
+    this.refreshPending();
+    return resolved;
   }
 
   /** Reintenta un producto que el servidor rechazó, tras corregir la causa. */
@@ -161,8 +254,23 @@ flushQueueAsync(): Promise<void> {
       );
   }
 
-  /** Confirma la subida con la versión leída de la cola, para no dar por subida una edición posterior. */
-  private markSynced(item: PendingCatalogProduct, remoteId: string | null): Promise<void> {
+  /**
+   * Confirma la subida con la versión leída de la cola, para no dar por subida una
+   * edición posterior. Con `remoteUpdatedAt` (lo que respondió el servidor) se
+   * renueva la foto `baseFields` contra la que compara el siguiente PATCH.
+   */
+  private markSynced(
+    item: PendingCatalogProduct,
+    remoteId: string | null,
+    remoteUpdatedAt?: unknown,
+  ): Promise<void> {
+    const synced: CatalogSyncedSnapshot | null =
+      item.snapshot && remoteUpdatedAt !== undefined
+        ? { fields: item.snapshot, remoteUpdatedAt }
+        : null;
+    if (synced) {
+      return this.api().markCatalogSynced(item.id, remoteId, item.version ?? null, synced);
+    }
     return item.version
       ? this.api().markCatalogSynced(item.id, remoteId, item.version)
       : this.api().markCatalogSynced(item.id, remoteId);
@@ -170,27 +278,24 @@ flushQueueAsync(): Promise<void> {
 
   private pushOne(item: PendingCatalogProduct): Observable<unknown> {
     if (item.remoteId) {
-      return this.http.patch<unknown>(`${this.apiUrl}/products/${item.remoteId}`, item.fields).pipe(
-        switchMap(() => from(this.markSynced(item, item.remoteId))),
-        catchError((error: unknown) => this.handleFailure(item.id, error)),
-      );
+      return this.patchOne(item, item.remoteId);
     }
     return this.findExistingBySku(item.fields.sku).pipe(
-      switchMap((existingId) => {
-        if (existingId) {
-          return from(this.markSynced(item, existingId));
+      switchMap((existing) => {
+        if (existing) {
+          // SPEC 60: el mismo SKU no basta; solo se adopta si es el mismo producto.
+          return this.adoptOrConflict(item, existing, PRODUCT_DUPLICATE);
         }
         return this.http.post<unknown>(`${this.apiUrl}/products`, item.fields).pipe(
           switchMap((response) => {
             const created = unwrapEntity<ProductSummaryDto>(response);
-            return from(this.markSynced(item, created.id));
+            return from(this.markSynced(item, created.id, created.updatedAt));
           }),
-          // 409 = el SKU ya existe (p. ej. backend sin el filtro `sku`, que
-          // ignora el parámetro): se adopta el producto existente en vez de
-          // dejarlo rechazado. Camino raro, por eso puede usar la búsqueda amplia.
+          // 409 = ya existe por SKU o por nombre: se consulta el remoto y se
+          // adopta solo si es el mismo producto (SPEC 60).
           catchError((error: unknown) =>
             error instanceof HttpErrorResponse && error.status === 409
-              ? this.adoptBySearch(item)
+              ? this.adoptAfterConflict(item, error)
               : throwError(() => error),
           ),
         );
@@ -199,7 +304,78 @@ flushQueueAsync(): Promise<void> {
     );
   }
 
-  private adoptBySearch(item: PendingCatalogProduct): Observable<unknown> {
+  /**
+   * Regla única de adopción (SPEC 60, `shared/utils/product-match.ts`): mismo
+   * código de barras, o mismo `nameKey` si alguno no tiene. Si es otro producto,
+   * el alta queda bloqueada visible y **no** se pierden su nombre ni su precio.
+   */
+  private adoptOrConflict(
+    item: PendingCatalogProduct,
+    remote: ProductSummaryDto,
+    code: string,
+  ): Observable<unknown> {
+    if (isSameProduct(item.fields, { ...remote, name: remote.name ?? '' })) {
+      return from(this.markSynced(item, remote.id));
+    }
+    return from(
+      this.api().markCatalogPushFailed(item.id, duplicateConflictReason(remote.name, code)),
+    ).pipe(switchMap(() => EMPTY));
+  }
+
+  /**
+   * 409 del `POST /products`. Con `details.existing` (SPEC 60) se lee ese
+   * producto completo (1 lectura: la regla necesita concentración y código); un
+   * backend viejo solo manda el texto y se busca por SKU como antes.
+   */
+  private adoptAfterConflict(item: PendingCatalogProduct, error: HttpErrorResponse): Observable<unknown> {
+    const duplicate = productDuplicateOf(error);
+    if (!duplicate?.existing) {
+      return this.adoptBySearch(item, error);
+    }
+    return this.http.get<unknown>(`${this.apiUrl}/products/${duplicate.existing.id}`).pipe(
+      switchMap((response) =>
+        this.adoptOrConflict(item, unwrapEntity<ProductSummaryDto>(response), duplicate.code),
+      ),
+    );
+  }
+
+  /**
+   * Edición de un producto que ya existe arriba (SPEC 56). Con foto sube **solo
+   * lo cambiado** más `baseUpdatedAt`; el servidor responde 409
+   * `CATALOG_CONFLICT` si el precio o el estado cambiaron en el panel después, y
+   * la edición queda bloqueada visible con el valor del panel. Sin cambios
+   * respecto a la foto no hay nada que subir: se da por subida sin red.
+   */
+  private patchOne(item: PendingCatalogProduct, remoteId: string): Observable<unknown> {
+    const changes = item.changes ?? null;
+    if (changes && !Object.keys(changes).length) {
+      return from(this.markSynced(item, remoteId, null));
+    }
+    const body: Record<string, unknown> = { ...(changes ?? item.fields) };
+    if (changes && item.baseUpdatedAt) {
+      body['baseUpdatedAt'] = item.baseUpdatedAt;
+    }
+    return this.http.patch<unknown>(`${this.apiUrl}/products/${remoteId}`, body).pipe(
+      switchMap((response) => {
+        const updated = response ? unwrapEntity<Partial<ProductSummaryDto>>(response) : null;
+        return from(this.markSynced(item, remoteId, updated?.updatedAt ?? null));
+      }),
+      catchError((error: unknown) => {
+        const current = catalogConflictOf(error);
+        if (current) {
+          return from(this.api().markCatalogConflict(item.id, current)).pipe(switchMap(() => EMPTY));
+        }
+        return this.handleFailure(item.id, error);
+      }),
+    );
+  }
+
+  /**
+   * Backend sin `details.existing`: busca el SKU con la búsqueda amplia (camino
+   * raro) y aplica la misma regla. Sin coincidencia de SKU (p. ej. chocó por
+   * nombre) queda el 409 original, que se marca con su mensaje.
+   */
+  private adoptBySearch(item: PendingCatalogProduct, original: HttpErrorResponse): Observable<unknown> {
     const params = new HttpParams()
       .set('search', item.fields.sku)
       .set('activeOnly', 'false')
@@ -211,14 +387,14 @@ flushQueueAsync(): Promise<void> {
           (product) => product.sku.trim().toLowerCase() === normalized,
         );
         return match
-          ? from(this.api().markCatalogSynced(item.id, match.id))
-          : throwError(() => new HttpErrorResponse({ status: 409 }));
+          ? this.adoptOrConflict(item, match, PRODUCT_DUPLICATE)
+          : throwError(() => original);
       }),
     );
   }
 
   /** Defensa contra duplicados: busca por SKU exacto antes de crear. */
-  private findExistingBySku(sku: string): Observable<string | null> {
+  private findExistingBySku(sku: string): Observable<ProductSummaryDto | null> {
     // `sku` exacto = 1 lectura en Firestore. `search` con un SKU que no existe
     // (el caso normal de un alta) recorre hasta 500 productos.
     const params = new HttpParams().set('sku', sku.trim()).set('activeOnly', 'false').set('limit', '1');
@@ -226,8 +402,7 @@ flushQueueAsync(): Promise<void> {
       map((response) => {
         const items = unwrapList<ProductSummaryDto>(response);
         const normalized = sku.trim().toLowerCase();
-        const match = items.find((product) => product.sku.trim().toLowerCase() === normalized);
-        return match?.id ?? null;
+        return items.find((product) => product.sku.trim().toLowerCase() === normalized) ?? null;
       }),
       catchError(() => of(null)),
     );

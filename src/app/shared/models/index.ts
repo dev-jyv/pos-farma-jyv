@@ -1066,6 +1066,17 @@ export interface PosDiagnosticsInput {
    * SPEC 65). Se omite sin medición. El panel lo pinta en rojo con más de 5 min.
    */
   clockSkewMs?: number;
+  /**
+   * Muestra diaria de stock (SPEC 67): el primer diagnóstico después de las 07:00
+   * (México). Máx. 300, solo productos sin pendientes de subida, primero los más
+   * vendidos de 7 días; `productId` es el id remoto. El backend la compara con
+   * `products.totalStock` y guarda `stockDrift`. Ausente el resto del día.
+   */
+  stockSample?: Array<{ productId: string; localStock: number }>;
+  /** Último error del actualizador automático (SPEC 67); ausente si la última consulta salió bien. */
+  updateError?: string;
+  /** Cuándo respondió por última vez la consulta de actualizaciones (ISO, SPEC 67). */
+  updateCheckedAt?: string;
 }
 
 export type PosCommandType = 'retrySale' | 'retryCashSession' | 'retryProduct' | 'sendSaleToUnreconciled';

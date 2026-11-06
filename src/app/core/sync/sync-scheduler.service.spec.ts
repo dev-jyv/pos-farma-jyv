@@ -9,7 +9,7 @@ import { CashSessionService } from '../../features/pos/services/cash-session.ser
 import { ProductCatalogService } from '../../features/pos/services/product-catalog.service';
 import { SaleService } from '../../features/pos/services/sale.service';
 import { StockEntryService } from '../../features/pos/services/stock-entry.service';
-import { DIAGNOSTICS_HEARTBEAT_MS, SyncScheduler } from './sync-scheduler.service';
+import { DIAGNOSTICS_HEARTBEAT_MS, SyncScheduler, nextProductsCursor } from './sync-scheduler.service';
 import { PosDiagnosticsService } from './pos-diagnostics.service';
 import { AuthService } from '../auth/auth.service';
 
@@ -1119,5 +1119,194 @@ describe('SyncScheduler — diagnóstico remoto', () => {
       scheduler.stop();
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * SPEC 56: el pull de productos va en la misma fila que los empujes (C5) y su
+ * cursor se traslapa 120 s con la hora del servidor (C4).
+ */
+describe('SyncScheduler — pull de productos en cadena y cursor con traslape (SPEC 56)', () => {
+  let scheduler: SyncScheduler;
+  let http: HttpTestingController;
+  let pasos: string[];
+  let recordRun: Mock;
+  let getStatus: Mock;
+  let puerta: { activa: boolean; abrir: () => void; espera: Promise<void> };
+
+  beforeEach(() => {
+    localStorage.clear();
+    pasos = [];
+    let abrir!: () => void;
+    const espera = new Promise<void>((resolve) => {
+      abrir = resolve;
+    });
+    puerta = { activa: false, abrir, espera };
+    recordRun = vi.fn().mockResolvedValue({ id: 'r1' });
+    getStatus = vi.fn().mockResolvedValue([]);
+    window.electronAPI = {
+      catalog: { upsertMany: vi.fn(async () => pasos.push('upsert')) },
+      sales: {},
+      sync: { getStatus, recordRun },
+      cashSessions: {},
+      cashMovements: {},
+      pharmacyServices: { upsertMany: vi.fn(), upsertProviders: vi.fn() },
+      promotions: { upsertMany: vi.fn() },
+    } as unknown as Window['electronAPI'];
+
+    const paso = (nombre: string) => vi.fn(async () => {
+      pasos.push(nombre);
+    });
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ApiHealthService, useValue: { checkNow: vi.fn() } },
+        { provide: AuthService, useValue: { user: () => ({ uid: 'uid-cajero' }), isAdmin: () => false } },
+        { provide: PosDiagnosticsService, useValue: { report: vi.fn().mockResolvedValue(undefined) } },
+        { provide: SaleService, useValue: { flushQueue: vi.fn(), flushQueueAsync: paso('ventas') } },
+        { provide: StockEntryService, useValue: { flushQueue: vi.fn(), flushQueueAsync: paso('entradas') } },
+        {
+          provide: ProductCatalogService,
+          useValue: {
+            flushQueue: vi.fn(),
+            flushQueueAsync: vi.fn(async () => {
+              pasos.push('catalogo');
+              if (puerta.activa) {
+                puerta.activa = false;
+                await puerta.espera;
+              }
+            }),
+          },
+        },
+        {
+          provide: CashSessionService,
+          useValue: {
+            flushQueue: vi.fn(),
+            flushQueueAsync: paso('turnos'),
+            flushClosesAsync: paso('cierres'),
+            pullAdjustmentStatus: vi.fn(),
+          },
+        },
+        { provide: CashMovementService, useValue: { flushQueue: vi.fn(), flushQueueAsync: paso('movimientos') } },
+      ],
+    });
+    scheduler = TestBed.inject(SyncScheduler);
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  /** El pull de productos, por dentro: los caminos públicos ya empujan antes. */
+  const pull = () => (scheduler as unknown as { pullProducts: () => Promise<{ ok: boolean }> }).pullProducts();
+
+  /** Responde vacío todo lo que el pull de catálogos secundarios pida después. */
+  async function responderCatalogosSecundarios(): Promise<void> {
+    for (const ruta of ['/pharmacy-services/sync', '/service-providers/sync', '/promotions/sync']) {
+      await flushMicrotareas();
+      http.expectOne((req) => req.url.endsWith(ruta)).flush({ data: [] });
+    }
+    await flushMicrotareas();
+  }
+
+  it('un pull lanzado durante un push espera a que termine', async () => {
+    puerta.activa = true;
+    const empuje = scheduler.flushPendingNow();
+    await flushMicrotareas();
+    const resultado = pull();
+    await flushMicrotareas();
+
+    // El push sigue atorado en el catálogo: el GET todavía no sale.
+    http.expectNone((req) => req.url.endsWith('/products/sync'));
+
+    puerta.abrir();
+    await empuje;
+    await flushMicrotareas();
+    http.expectOne((req) => req.url.endsWith('/products/sync')).flush({ data: [] });
+    await responderCatalogosSecundarios();
+    expect((await resultado).ok).toBe(true);
+    expect(pasos.at(-1)).toBe('ventas');
+  });
+
+  it('un push lanzado durante el pull espera a que el pull termine', async () => {
+    const resultado = pull();
+    await flushMicrotareas();
+    const peticion = http.expectOne((req) => req.url.endsWith('/products/sync'));
+
+    const empuje = scheduler.flushPendingNow();
+    await flushMicrotareas();
+    expect(pasos).toEqual([]);
+
+    peticion.flush({ data: [{ id: 'r-1', updatedAt: '2026-11-06T10:00:00.000Z' }] });
+    await responderCatalogosSecundarios();
+    await resultado;
+    await empuje;
+
+    // El upsert del pull quedó antes que cualquier paso del push.
+    expect(pasos[0]).toBe('upsert');
+    expect(pasos).toContain('catalogo');
+  });
+
+  it('el cursor es meta.serverTime menos 120 s', async () => {
+    const resultado = pull();
+    await flushMicrotareas();
+    http.expectOne((req) => req.url.endsWith('/products/sync')).flush({
+      data: [{ id: 'r-1', updatedAt: '2026-11-06T10:00:00.000Z' }],
+      meta: { serverTime: '2026-11-06T10:05:00.000Z' },
+    });
+    await responderCatalogosSecundarios();
+    await resultado;
+
+    expect(recordRun).toHaveBeenCalledWith(
+      expect.objectContaining({ entity: 'products', status: 'ok', cursor: '2026-11-06T10:03:00.000Z' }),
+    );
+  });
+
+  it('backend viejo sin serverTime: el updatedAt más nuevo menos 120 s', async () => {
+    const resultado = pull();
+    await flushMicrotareas();
+    http.expectOne((req) => req.url.endsWith('/products/sync')).flush({
+      data: [
+        { id: 'r-1', updatedAt: '2026-11-06T10:00:00.000Z' },
+        { id: 'r-2', updatedAt: { _seconds: Date.parse('2026-11-06T11:00:00.000Z') / 1000 } },
+      ],
+    });
+    await responderCatalogosSecundarios();
+    await resultado;
+
+    expect(recordRun).toHaveBeenCalledWith(
+      expect.objectContaining({ entity: 'products', status: 'ok', cursor: '2026-11-06T10:58:00.000Z' }),
+    );
+  });
+
+  it('el pull manda el cursor guardado como updatedSince', async () => {
+    getStatus.mockResolvedValue([
+      { entity: 'products', direction: 'pull', status: 'ok', cursor: '2026-11-06T10:03:00.000Z' },
+    ]);
+    const resultado = pull();
+    await flushMicrotareas();
+    const peticion = http.expectOne((req) => req.url.endsWith('/products/sync'));
+    expect(peticion.request.params.get('updatedSince')).toBe('2026-11-06T10:03:00.000Z');
+    peticion.flush({ data: [] });
+    await responderCatalogosSecundarios();
+    await resultado;
+  });
+});
+
+describe('nextProductsCursor', () => {
+  it('con hora del servidor resta el traslape', () => {
+    expect(nextProductsCursor('2026-11-06T10:05:00.000Z', null, '2026-11-06T09:00:00.000Z')).toBe(
+      '2026-11-06T10:03:00.000Z',
+    );
+  });
+
+  it('sin hora del servidor no retrocede del cursor anterior', () => {
+    expect(
+      nextProductsCursor(undefined, '2026-11-06T10:01:00.000Z', '2026-11-06T10:00:30.000Z'),
+    ).toBe('2026-11-06T10:00:30.000Z');
+  });
+
+  it('sin nada nuevo conserva el cursor anterior', () => {
+    expect(nextProductsCursor(undefined, null, '2026-11-06T10:00:00.000Z')).toBe('2026-11-06T10:00:00.000Z');
+    expect(nextProductsCursor(undefined, null, null)).toBeNull();
   });
 });

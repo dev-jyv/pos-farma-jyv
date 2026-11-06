@@ -42,6 +42,19 @@ describe('describeBlocked', () => {
     expect(describeBlocked(registro({ diagnosis: { code: 'turno-cerrado' } })).recommended).toBe('avisar-admin');
   });
 
+  it('posible factura recapturada (SPEC 58): explica las dos salidas', () => {
+    const ayuda = describeBlocked(
+      registro({
+        kind: 'stockEntry',
+        diagnosis: { code: 'entrada-posible-duplicada', syncCode: 'ENTRY_POSSIBLE_DUPLICATE' },
+      }),
+    );
+
+    expect(ayuda.title).toBe('¿Factura capturada dos veces?');
+    expect(ayuda.explanation).toContain('Sí, es otra partida');
+    expect(ayuda.explanation).toContain('Descartar');
+  });
+
   it('sin diagnóstico (IPC viejo) cae en desconocido y manda con el admin', () => {
     const ayuda = describeBlocked(registro());
 
@@ -110,5 +123,21 @@ describe('describeBlocked', () => {
     for (const code of codes) {
       expect(['reintentar', 'corregir', 'avisar-admin']).toContain(describeBlocked(registro({ diagnosis: { code } })).recommended);
     }
+  });
+});
+
+describe('describeBlocked — conflicto de catálogo (SPEC 56)', () => {
+  it('explica que el panel cambió el producto y nombra las dos salidas', () => {
+    const record = registro({
+      kind: 'product',
+      reason: 'El precio cambió en el panel: $58.00 [CATALOG_CONFLICT]',
+      diagnosis: { code: 'catalogo-en-conflicto', syncCode: 'CATALOG_CONFLICT' },
+    });
+
+    expect(blockedCodeOf(record)).toBe('catalogo-en-conflicto');
+    const ayuda = describeBlocked(record);
+    expect(ayuda.title).toBe('El producto cambió en el panel');
+    expect(ayuda.explanation).toContain('Usar el del panel');
+    expect(ayuda.explanation).toContain('Forzar el mío');
   });
 });

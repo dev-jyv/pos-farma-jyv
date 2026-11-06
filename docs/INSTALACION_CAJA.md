@@ -98,10 +98,25 @@ pendientes.
 
 ## Cómo se actualiza después
 
-No hay que reinstalar. La app consulta al arrancar el feed de actualizaciones en
-`https://farma-jyv-updates.web.app`, descarga la versión nueva en segundo plano
-y **la instala al cerrar la aplicación**. En la práctica: la caja se actualiza
-sola de un día para otro.
+La app consulta al arrancar el feed de actualizaciones en
+`https://farma-jyv-updates.web.app`. Lo que pasa después depende del sistema:
+
+- **Windows:** descarga la versión nueva en segundo plano y **la instala al
+  cerrar la aplicación**. No hay que reinstalar: la caja se actualiza sola de un
+  día para otro.
+- **macOS: la actualización es manual.** La app no está firmada con un
+  certificado de Apple (`identity: null`) y macOS rechaza instalar una
+  actualización sin firma, así que la actualización automática **falla**. Para
+  actualizar: descarga el `.dmg` de la versión nueva, cierra la app, arrástrala
+  otra vez a Aplicaciones (reemplazando la anterior) y ábrela. La base local no
+  se toca: vive en `~/Library/Application Support`, fuera de la app. Si vuelve a
+  aparecer el aviso de desarrollador no identificado, autorízala como la primera
+  vez.
+
+El error del actualizador no se queda escondido: cada fallo queda en la bitácora
+local (`SyncLog`, entidad `actualizacion`) y viaja en el diagnóstico de la caja
+(`updateError`, `updateCheckedAt`), así que el panel de salud de cajas muestra
+qué equipo no se pudo actualizar y en qué versión sigue.
 
 Para publicar una versión nueva, desde desarrollo:
 

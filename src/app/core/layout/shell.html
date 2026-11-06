@@ -384,7 +384,41 @@
                 (onClick)="askAdmin(record)"
               />
             }
-            @if (canRetryBlocked(record)) {
+            @if (canResolveConflict(record)) {
+              <!-- SPEC 56: el panel cambió precio o estado; reintentar volvería a chocar. -->
+              <p-button
+                label="Usar el del panel"
+                icon="pi pi-check"
+                size="small"
+                severity="primary"
+                data-testid="conflict-use-panel"
+                [loading]="retryingBlockedId() === record.id"
+                [disabled]="retryingBlockedId() !== null || repairingId() !== null"
+                (onClick)="resolveConflict(record, 'panel')"
+              />
+              <p-button
+                label="Forzar el mío"
+                icon="pi pi-upload"
+                size="small"
+                severity="warn"
+                [outlined]="true"
+                data-testid="conflict-force-mine"
+                [disabled]="retryingBlockedId() !== null || repairingId() !== null"
+                (onClick)="resolveConflict(record, 'mine')"
+              />
+            } @else if (isPossibleDuplicate(record)) {
+              <!-- SPEC 58: posible factura recapturada; reintentar sin confirmar volvería a chocar. -->
+              <p-button
+                label="Sí, es otra partida"
+                icon="pi pi-check"
+                size="small"
+                severity="primary"
+                data-testid="duplicate-confirm"
+                [loading]="retryingBlockedId() === record.id"
+                [disabled]="retryingBlockedId() !== null || repairingId() !== null"
+                (onClick)="confirmDuplicateEntry(record)"
+              />
+            } @else if (canRetryBlocked(record)) {
               <p-button
                 label="Reintentar"
                 icon="pi pi-refresh"

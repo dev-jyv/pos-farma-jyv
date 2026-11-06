@@ -227,4 +227,22 @@ describe('list / getById / remove', () => {
     expect(prisma.invoiceEmbedding.rows).toHaveLength(0);
     expect(fs.readdirSync(storageDir)).toEqual([]);
   });
+
+  it('no borra un documento cuya mercancía ya se aplicó (SPEC 58)', async () => {
+    const { document } = await upload();
+    await confirm(prisma, document.id, embeddingOf([1]));
+    await prisma.invoiceDocument.update({
+      where: { id: document.id },
+      data: { stockAppliedAt: new Date('2026-11-06T15:00:00.000Z'), stockAppliedBy: 'user-1' },
+    });
+
+    await expect(remove(prisma, document.id)).rejects.toThrow(
+      'Ya se dio entrada a esta factura; cancela la entrada desde el panel',
+    );
+
+    // Nada se borró: ni el documento, ni su embedding, ni el archivo.
+    expect(prisma.invoiceDocument.rows).toHaveLength(1);
+    expect(prisma.invoiceEmbedding.rows).toHaveLength(1);
+    expect(fs.readdirSync(storageDir)).toEqual([`${document.id}.png`]);
+  });
 });
