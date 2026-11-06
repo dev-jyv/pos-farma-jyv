@@ -478,6 +478,10 @@ function registrarIPCHandlers() {
     productsDb.upsertMany(await getPrisma(), products));
   ipcMain.handle('catalog:getBatchesByProduct', async (_event, productId) =>
     productsDb.getBatchesByProduct(await getPrisma(), productId));
+  // SPEC 57: el renderer ya pidió `GET /products/:id/stock` (la sesión y el
+  // token viven allá); aquí solo se guarda stock y lotes de ese producto.
+  ipcMain.handle('products:refreshOne', async (_event, remoteId, snapshot) =>
+    productsDb.refreshOne(await getPrisma(), remoteId, snapshot));
   ipcMain.handle('catalog:getPendingStockEntries', async (_event, options) =>
     productsDb.getPendingStockEntries(await getPrisma(), options));
   ipcMain.handle('catalog:listBlockedStockEntries', async () =>

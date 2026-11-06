@@ -2,6 +2,7 @@ const { randomUUID } = require('node:crypto');
 const { toDate } = require('./timestamps');
 const { diagnoseReason } = require('./blocked-diagnosis');
 const { appendSafe } = require('./sync-log');
+const { isExpiredLocal } = require('./expiry');
 
 /** Forma que consume el POS (búsqueda/carrito), igual a `shared/models`' `Product`. */
 function toProductDto(row) {
@@ -419,30 +420,76 @@ async function upsertMany(prisma, remoteProducts) {
       }
 
       if (Array.isArray(remote.batches)) {
-        // Los remotos son la foto autoritativa de este producto: se reemplazan
-        // completos en cada sync. `POST /stock-entries` no devuelve el id del
-        // lote creado, así que un lote local ya sincronizado se queda con
-        // `remoteId: null` — filtrar solo por `remoteId` lo duplicaría en cuanto
-        // ese mismo lote vuelva por el pull. Lo que de verdad distingue "ya no
-        // hay nada que reemplazar en local" es `pendingPush: false`; un lote
-        // todavía `pendingPush: true` sigue esperando su propio push y no se toca.
-        await tx.batch.deleteMany({ where: { productId: product.id, pendingPush: false } });
-        if (remote.batches.length) {
-          await tx.batch.createMany({
-            data: remote.batches.map((batch) => ({
-              remoteId: batch.id,
-              productId: product.id,
-              lotNumber: batch.lotNumber ?? null,
-              expiryDate: toDate(batch.expiryDate),
-              quantity: batch.quantity,
-              pendingPush: false,
-            })),
-          });
-        }
+        await replaceSyncedBatches(tx, product.id, remote.batches);
       }
     });
   }
   return { count: remoteProducts.length };
+}
+
+/**
+ * Los lotes remotos son la foto autoritativa del producto: se reemplazan
+ * completos. `POST /stock-entries` no devuelve el id del lote creado, así que un
+ * lote local ya sincronizado se queda con `remoteId: null` — filtrar solo por
+ * `remoteId` lo duplicaría en cuanto ese mismo lote vuelva por el pull. Lo que de
+ * verdad distingue "ya no hay nada que reemplazar en local" es
+ * `pendingPush: false`; un lote todavía `pendingPush: true` sigue esperando su
+ * propio push y no se toca.
+ */
+async function replaceSyncedBatches(tx, localProductId, remoteBatches) {
+  await tx.batch.deleteMany({ where: { productId: localProductId, pendingPush: false } });
+  if (remoteBatches.length) {
+    await tx.batch.createMany({
+      data: remoteBatches.map((batch) => ({
+        remoteId: batch.id,
+        productId: localProductId,
+        lotNumber: batch.lotNumber ?? null,
+        expiryDate: toDate(batch.expiryDate),
+        quantity: batch.quantity,
+        pendingPush: false,
+      })),
+    });
+  }
+}
+
+/**
+ * Existencia fresca de **un** producto (SPEC 57): la respuesta de
+ * `GET /products/:id/stock` que el renderer pidió antes de negar una venta por
+ * stock local insuficiente. Solo toca stock y lotes —nunca el catálogo ni
+ * `remoteUpdatedAt`: la foto de SPEC 56 y el cursor del pull siguen siendo del
+ * pull—, con la misma regla que el pull: gana el servidor más lo pendiente
+ * (`pendingStockDelta`), también cuando el servidor trae menos que la copia local.
+ *
+ * Devuelve el producto y sus lotes ya con lo pendiente descontado, o `null` si el
+ * producto no está en la caja (o la respuesta no sirve): la venta se niega igual.
+ */
+async function refreshOne(prisma, remoteId, snapshot) {
+  if (!remoteId || !snapshot || typeof snapshot !== 'object') {
+    return null;
+  }
+  const remoteStock = Number(snapshot.totalStock ?? snapshot.stock);
+  if (!Number.isFinite(remoteStock)) {
+    return null;
+  }
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.product.findUnique({ where: { remoteId } });
+    if (!existing) {
+      return null;
+    }
+    const { sold, entries } = await pendingStockDelta(tx, existing.id);
+    const totalStock = Math.max(0, remoteStock + entries - sold);
+    const updated = await tx.product.update({
+      where: { id: existing.id },
+      data: { totalStock },
+    });
+    if (Array.isArray(snapshot.batches)) {
+      await replaceSyncedBatches(tx, existing.id, snapshot.batches);
+    }
+    return {
+      product: toProductDto(updated),
+      batches: await getBatchesByProduct(tx, existing.id),
+    };
+  });
 }
 
 /** Lotes de un producto (local + ya sincronizados), para caducidad/FEFO al agregar al carrito. */
@@ -460,10 +507,11 @@ async function getBatchesByProduct(prisma, productId) {
   // habían vendido. Lo pendiente de subir se descuenta de los lotes vigentes
   // (los vencidos no se consumen), igual que lo hará el servidor.
   let toConsume = Math.max(0, (await pendingStockDelta(prisma, productId)).sold);
-  const now = Date.now();
+  // Caducidad por día de México (SPEC 57): el lote que caduca hoy se vende hoy.
+  const now = new Date();
   return rows.map((row) => {
     let quantity = row.quantity;
-    const vencido = row.expiryDate && row.expiryDate.getTime() < now;
+    const vencido = isExpiredLocal(row.expiryDate, now);
     if (!vencido && toConsume > 0 && !row.pendingPush) {
       const taken = Math.min(quantity, toConsume);
       quantity -= taken;
@@ -1124,6 +1172,7 @@ module.exports = {
   getByIds,
   recordStockEntry,
   upsertMany,
+  refreshOne,
   getBatchesByProduct,
   getPendingStockEntries,
   markStockEntrySynced,

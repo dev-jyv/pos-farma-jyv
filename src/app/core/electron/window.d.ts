@@ -68,6 +68,21 @@ export interface CatalogConflictCurrent {
 /** "Usar el del panel" o "Forzar el mío". */
 export type CatalogConflictChoice = 'panel' | 'mine';
 
+/** Respuesta de `GET /v1/products/:id/stock` (SPEC 57), tal como se guarda en SQLite. */
+export interface ProductStockSnapshot {
+  id: string;
+  totalStock: number;
+  updatedAt?: unknown;
+  /** Solo lotes con piezas; misma forma que los de `/products/sync`. */
+  batches: Array<{ id: string; lotNumber?: string | null; expiryDate?: unknown; quantity: number }>;
+}
+
+/** Producto y lotes tras guardar la existencia fresca (lo pendiente ya descontado). */
+export interface ProductStockRefreshResult {
+  product: Product;
+  batches: ProductBatch[];
+}
+
 export interface StockEntryLocalResult {
   product: Product;
   stock: number;
@@ -327,6 +342,13 @@ declare global {
       getAppVersion: () => Promise<string>;
       getDeviceInfo: () => Promise<unknown>;
       openCashDrawer: (printerName: string) => Promise<boolean>;
+      products?: {
+        /** SPEC 57: guarda la existencia fresca de un producto; `null` si no está en la caja. */
+        refreshOne: (
+          remoteId: string,
+          snapshot: ProductStockSnapshot,
+        ) => Promise<ProductStockRefreshResult | null>;
+      };
       catalog: {
         search: (term: string) => Promise<Product[]>;
         /** Productos (activos o no) con el mismo nombre; el servidor no admite repetidos. */

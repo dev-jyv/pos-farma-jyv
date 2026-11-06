@@ -4,7 +4,7 @@ import { provideTranslateService } from '@ngx-translate/core';
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
 import { of, throwError } from 'rxjs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ScanSoundService } from '../../../core/audio/scan-sound.service';
 import { ServiceCatalogService } from '../services/service-catalog.service';
@@ -24,6 +24,7 @@ import { CartStorageService } from '../services/cart-storage.service';
 import { CashSessionService } from '../services/cash-session.service';
 import { HeldSaleStorageService } from '../services/held-sale-storage.service';
 import { ProductService } from '../services/product.service';
+import { ProductStockService } from '../services/product-stock.service';
 import { PromoService } from '../services/promo.service';
 import { CouponService } from '../services/coupon.service';
 import { SaleService } from '../services/sale.service';
@@ -85,6 +86,8 @@ describe('Sale', () => {
   /** Cupones de la SQLite simulada, por código normalizado. */
   let cupones: Record<string, CouponDto>;
   let doctores: ServiceProvider[];
+  /** `ProductStockService.refresh` (SPEC 57); por defecto no consulta (`null` en el acto). */
+  let refreshStock: ReturnType<typeof vi.fn>;
   let saleServiceMock: {
     pendingCount: ReturnType<typeof signal<number>>;
     pendingSales: ReturnType<typeof signal<unknown[]>>;
@@ -104,6 +107,7 @@ describe('Sale', () => {
     notifyWarn = vi.fn();
     notifySuccess = vi.fn();
     batches = [batch()];
+    refreshStock = vi.fn(() => null);
     searchResults = null;
     cupones = {};
     servicios = [servicio()];
@@ -161,6 +165,7 @@ describe('Sale', () => {
           },
         },
         { provide: BatchService, useValue: { listByProduct: () => of(batches) } },
+        { provide: ProductStockService, useValue: { refresh: refreshStock } },
         { provide: SaleService, useValue: saleServiceMock },
         { provide: SyncScheduler, useValue: syncSchedulerMock },
         {
@@ -400,6 +405,110 @@ describe('Sale', () => {
 
       expect(component.cart()).toHaveLength(0);
       expect(component.cashSessionDialogVisible()).toBe(true);
+    });
+
+    describe('stock fresco antes de negar (SPEC 57)', () => {
+      const flush = async () => {
+        for (let i = 0; i < 5; i += 1) {
+          await Promise.resolve();
+        }
+      };
+
+      it('con stock local 0 y servidor 5, agregar 2 piezas funciona tras la consulta', async () => {
+        const fresco = product({ remoteId: 'RmtP1', stock: 5 });
+        refreshStock.mockImplementation(() => {
+          batches = [batch({ quantity: 5 })];
+          return Promise.resolve({ product: fresco, batches });
+        });
+
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 0 }), 2);
+        await flush();
+
+        expect(refreshStock).toHaveBeenCalledTimes(1);
+        expect(component.cart()).toHaveLength(1);
+        expect(component.cart()[0].quantity).toBe(2);
+        expect(notifyError).not.toHaveBeenCalledWith('Producto sin stock disponible.');
+      });
+
+      it('también al pasar del stock local con piezas ya en el ticket', async () => {
+        batches = [batch({ quantity: 2 })];
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 2 }), 2);
+        refreshStock.mockImplementation(() => {
+          batches = [batch({ quantity: 6 })];
+          return Promise.resolve({ product: product({ remoteId: 'RmtP1', stock: 6 }), batches });
+        });
+
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 2 }), 3);
+        await flush();
+
+        expect(component.cart()[0].quantity).toBe(5);
+      });
+
+      it('si no consulta (sin red, sin remoteId o en antirrebote) niega en el acto como siempre', () => {
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 0 }));
+
+        expect(refreshStock).toHaveBeenCalledTimes(1);
+        expect(component.cart()).toHaveLength(0);
+        expect(notifyError).toHaveBeenCalledWith('Producto sin stock disponible.');
+      });
+
+      it('si el servidor tampoco tiene, niega sin volver a consultar', async () => {
+        refreshStock.mockImplementation(() =>
+          Promise.resolve({ product: product({ remoteId: 'RmtP1', stock: 1 }), batches: [batch({ quantity: 1 })] }),
+        );
+        batches = [batch({ quantity: 1 })];
+
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 1 }), 3);
+        await flush();
+
+        expect(refreshStock).toHaveBeenCalledTimes(1);
+        expect(component.cart()).toHaveLength(0);
+        expect(notifyError).toHaveBeenCalledWith('Sin stock suficiente para agregar otra unidad.');
+      });
+
+      it('subir la cantidad en el ticket también consulta antes de negar', async () => {
+        component.addToCart(product({ remoteId: 'RmtP1', stock: 2 }), 1);
+        refreshStock.mockImplementation(() =>
+          Promise.resolve({ product: product({ remoteId: 'RmtP1', stock: 8 }), batches: [batch({ quantity: 8 })] }),
+        );
+
+        component.updateQuantity('product:p1', 4);
+        await flush();
+
+        const [linea] = component.cart();
+        expect(linea.quantity).toBe(4);
+        expect(linea.kind === 'product' ? linea.product.stock : null).toBe(8);
+      });
+    });
+
+    describe('caducidad por día de México (SPEC 57)', () => {
+      afterEach(() => vi.useRealTimers());
+
+      it('un lote que caduca hoy se vende hasta las 20:00 hora de México (y después)', () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        // 2026-11-06 20:00 en México = 2026-11-07 02:00 UTC.
+        vi.setSystemTime(new Date('2026-11-07T02:00:00Z'));
+        batches = [batch({ expiryDate: new Date('2026-11-06T00:00:00Z'), quantity: 3 })];
+
+        component.addToCart(product());
+
+        expect(component.cart()).toHaveLength(1);
+        expect(notifyError).not.toHaveBeenCalledWith('El stock disponible está vencido.');
+        expect(
+          notifyError.mock.calls.some(([message]) => String(message).includes('vence el 6/11/2026 (0 días)')),
+        ).toBe(true);
+      });
+
+      it('al día siguiente en México ya no se vende', () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-11-07T06:30:00Z'));
+        batches = [batch({ expiryDate: new Date('2026-11-06T00:00:00Z'), quantity: 3 })];
+
+        component.addToCart(product());
+
+        expect(component.cart()).toHaveLength(0);
+        expect(notifyError).toHaveBeenCalledWith('El stock disponible está vencido.');
+      });
     });
 
     it('un rol sin permiso de venta se entera aquí y no con un 403 al cobrar', () => {

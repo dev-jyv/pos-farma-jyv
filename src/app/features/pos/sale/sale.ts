@@ -58,12 +58,14 @@ import {
   stockLabel,
 } from '../../../shared/utils/cart-line';
 import { getControlledRule } from '../../../shared/utils/controlled';
+import { daysUntilExpiryLocal, expiryYmd, isExpiredLocal } from '../../../shared/utils/expiry';
 import { roundMoney } from '../../../shared/utils/money';
 import { BatchService } from '../services/batch.service';
 import { CartStorageService } from '../services/cart-storage.service';
 import { CashSessionService } from '../services/cash-session.service';
 import { HeldSaleStorageService } from '../services/held-sale-storage.service';
 import { ProductService } from '../services/product.service';
+import { ProductStockService } from '../services/product-stock.service';
 import { ServiceCatalogService } from '../services/service-catalog.service';
 import { PromoService, PromotionStepHint } from '../services/promo.service';
 import {
@@ -99,13 +101,14 @@ const MIN_SEARCH_LENGTH = 2;
  */
 const PROMOTION_RECOVERY_TIMEOUT_MS = 8_000;
 
-function startOfToday(): Date {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
-}
-
-function daysUntil(date: Date): number {
-  return Math.ceil((date.getTime() - startOfToday().getTime()) / 86_400_000);
+/** `D/M/AAAA` del día guardado de la caducidad, sin pasar por la zona del equipo. */
+function formatExpiry(expiryDate: Date | string | null | undefined): string {
+  const ymd = expiryYmd(expiryDate);
+  if (!ymd) {
+    return '';
+  }
+  const [year, month, day] = ymd.split('-');
+  return `${Number(day)}/${Number(month)}/${year}`;
 }
 
 /** Unidad que el cajero elige al agregar o en la línea (SPEC 46). */
@@ -170,6 +173,7 @@ export class Sale {
   private readonly productService = inject(ProductService);
   private readonly serviceCatalog = inject(ServiceCatalogService);
   private readonly batchService = inject(BatchService);
+  private readonly productStock = inject(ProductStockService);
   private readonly saleService = inject(SaleService);
   private readonly cashSessionService = inject(CashSessionService);
   private readonly authService = inject(AuthService);
@@ -988,13 +992,34 @@ export class Sale {
    * cuenta cajas y el stock se valida en piezas (`cajas × boxQuantity`).
    */
   addToCart(product: Product, qty = 1, fromScanner = false, unit: SaleUnitChoice = 'piece'): void {
+    this.addToCartChecked(product, qty, fromScanner, unit, false);
+  }
+
+  /**
+   * `refreshed`: el stock de este producto ya se consultó al servidor en este
+   * intento (SPEC 57); si vuelve a faltar, se niega sin otra consulta.
+   */
+  private addToCartChecked(
+    product: Product,
+    qty: number,
+    fromScanner: boolean,
+    unit: SaleUnitChoice,
+    refreshed: boolean,
+  ): void {
     if (!this.ensureShiftOpen()) {
       return;
     }
     const addQty = Math.max(1, Math.floor(qty));
     if (product.stock < 1) {
-      this.sounds.error();
-      this.openSubstitutes(product, 'Producto sin stock disponible.');
+      this.denyUnlessFresher(
+        product,
+        refreshed,
+        () => {
+          this.sounds.error();
+          this.openSubstitutes(product, 'Producto sin stock disponible.');
+        },
+        (fresh) => this.addToCartChecked(fresh, qty, fromScanner, unit, true),
+      );
       return;
     }
     const asBox = unit === 'box' && hasBoxSale(product);
@@ -1004,17 +1029,58 @@ export class Sale {
       return;
     }
     if (asBox && fullBoxes(product) < 1) {
-      this.sounds.error();
-      this.notifications.error(
-        `No hay una caja completa de ${product.name}: hay ${stockLabel(product)}.`,
+      this.denyUnlessFresher(
+        product,
+        refreshed,
+        () => {
+          this.sounds.error();
+          this.notifications.error(
+            `No hay una caja completa de ${product.name}: hay ${stockLabel(product)}.`,
+          );
+        },
+        (fresh) => this.addToCartChecked(fresh, qty, fromScanner, unit, true),
       );
       return;
     }
 
     this.batchService.listByProduct(product.id).subscribe({
-      next: (batches) => this.commitAdd(product, addQty, batches, fromScanner, asBox),
-      error: () => this.commitAdd(product, addQty, null, fromScanner, asBox),
+      next: (batches) => this.commitAdd(product, addQty, batches, fromScanner, asBox, refreshed, unit),
+      error: () => this.commitAdd(product, addQty, null, fromScanner, asBox, refreshed, unit),
     });
+  }
+
+  /**
+   * Antes de negar por stock local insuficiente (SPEC 57): con red, pregunta al
+   * servidor por **ese** producto (tope 3 s, una vez cada 30 s) y, si respondió,
+   * reintenta con lo fresco. Sin red, sin `remoteId`, dentro del antirrebote o
+   * con error, niega con el mensaje de siempre.
+   */
+  private denyUnlessFresher(
+    product: Product,
+    refreshed: boolean,
+    deny: () => void,
+    retry: (fresh: Product) => void,
+  ): void {
+    const pending = refreshed ? null : this.productStock.refresh(product);
+    if (!pending) {
+      deny();
+      return;
+    }
+    void pending.then(
+      (result) => {
+        if (!result) {
+          deny();
+          return;
+        }
+        // La lista de búsqueda muestra la existencia: que diga la fresca.
+        const fresh = result.product;
+        this.results.update((list) =>
+          list.map((item) => (item.id === fresh.id ? { ...item, stock: fresh.stock } : item)),
+        );
+        retry(fresh);
+      },
+      () => deny(),
+    );
   }
 
   /** Botón "Caja (N)" del resultado de búsqueda. */
@@ -1036,6 +1102,10 @@ export class Sale {
   }
 
   updateQuantity(productId: string, rawQuantity: number | null): void {
+    this.updateQuantityChecked(productId, rawQuantity, false);
+  }
+
+  private updateQuantityChecked(productId: string, rawQuantity: number | null, refreshed: boolean): void {
     // Campo vacío mientras el cajero reescribe la cantidad: no es un 0 deliberado.
     if (rawQuantity === null || !Number.isFinite(rawQuantity)) {
       return;
@@ -1055,21 +1125,39 @@ export class Sale {
     // la cantidad no se limita. Una caja se limita a las cajas completas que
     // quedan después de lo que aparta la línea por pieza (y al revés).
     const max = this.maxFor(line);
-    if (max !== null && quantity > max) {
-      this.sounds.error();
-      this.notifications.error(
-        isBoxLine(line)
-          ? `No hay cajas completas suficientes: hay ${stockLabel(line.product)}.`
-          : 'Cantidad supera el stock disponible.',
+    if (max !== null && quantity > max && isProductLine(line)) {
+      this.denyUnlessFresher(
+        line.product,
+        refreshed,
+        () => {
+          this.sounds.error();
+          this.notifications.error(
+            isBoxLine(line)
+              ? `No hay cajas completas suficientes: hay ${stockLabel(line.product)}.`
+              : 'Cantidad supera el stock disponible.',
+          );
+          // El campo dispara el cambio con cada tecla: al teclear «20» con 19 en
+          // existencia, el «2» entra y el «0» se rechaza. El modelo sigue valiendo 2,
+          // así que Angular no reescribe el campo y la pantalla mostraba 20 mientras
+          // se cobraba 2. Se devuelve el campo a la cantidad real.
+          const input = this.lastQtyInput()?.nativeElement;
+          const current = this.cart().find((item) => lineKey(item) === productId) ?? line;
+          if (input && lineKey(line) === this.lastLineId()) {
+            input.value = String(current.quantity);
+          }
+        },
+        (fresh) => {
+          // Solo la existencia: precio y banderas los revisa `refreshStaleProducts`.
+          this.setCart(
+            this.cart().map((item) =>
+              isProductLine(item) && item.product.id === fresh.id
+                ? { ...item, product: { ...item.product, stock: fresh.stock } }
+                : item,
+            ),
+          );
+          this.updateQuantityChecked(productId, rawQuantity, true);
+        },
       );
-      // El campo dispara el cambio con cada tecla: al teclear «20» con 19 en
-      // existencia, el «2» entra y el «0» se rechaza. El modelo sigue valiendo 2,
-      // así que Angular no reescribe el campo y la pantalla mostraba 20 mientras
-      // se cobraba 2. Se devuelve el campo a la cantidad real.
-      const input = this.lastQtyInput()?.nativeElement;
-      if (input && lineKey(line) === this.lastLineId()) {
-        input.value = String(line.quantity);
-      }
       return;
     }
     this.setCart(
@@ -1599,25 +1687,31 @@ export class Sale {
     batches: ProductBatch[] | null,
     fromScanner: boolean,
     asBox = false,
+    refreshed = false,
+    unit: SaleUnitChoice = asBox ? 'box' : 'piece',
   ): void {
     product = cartProduct(product);
+    const retryFresh = (fresh: Product) =>
+      this.addToCartChecked(fresh, addQty, fromScanner, unit, true);
     let sellableQty = product.stock;
+    let nearest: ProductBatch | undefined;
     if (batches) {
       const sellable = this.sellableBatches(batches);
       sellableQty = sellable.reduce((sum, batch) => sum + batch.quantity, 0);
       if (sellableQty < 1) {
-        this.sounds.error();
-        this.openSubstitutes(product, 'El stock disponible está vencido.');
+        const source = product;
+        this.denyUnlessFresher(
+          product,
+          refreshed,
+          () => {
+            this.sounds.error();
+            this.openSubstitutes(source, 'El stock disponible está vencido.');
+          },
+          retryFresh,
+        );
         return;
       }
-      const nearest = sellable[0];
-      const days = daysUntil(nearest.expiryDate);
-      if (days <= environment.expiryWarningDays) {
-        this.sounds.warn();
-        this.notifications.error(
-          `Caducidad próxima: lote ${nearest.lotNumber} vence el ${nearest.expiryDate.toLocaleDateString('es-MX')} (${days} días).`,
-        );
-      }
+      nearest = sellable[0];
     }
 
     // Pieza y caja del mismo producto son dos líneas (SPEC 46) que comparten
@@ -1635,21 +1729,39 @@ export class Sale {
     const nextQty = (existing?.quantity ?? 0) + addQty;
     const piezas = nextQty * perUnit + this.piecesInOtherLines(product.id, key);
     if (piezas > sellableQty || piezas > product.stock) {
-      this.sounds.error();
-      this.notifications.error(
-        asBox
-          ? `Sin stock suficiente para otra caja completa: hay ${stockLabel(product)}.`
-          : 'Sin stock suficiente para agregar otra unidad.',
+      const source = product;
+      this.denyUnlessFresher(
+        product,
+        refreshed,
+        () => {
+          this.sounds.error();
+          this.notifications.error(
+            asBox
+              ? `Sin stock suficiente para otra caja completa: hay ${stockLabel(source)}.`
+              : 'Sin stock suficiente para agregar otra unidad.',
+          );
+        },
+        retryFresh,
       );
       return;
     }
+    this.warnIfExpiringSoon(nearest);
 
     const yaEnTicket = this.cart().some(
       (line) => isProductLine(line) && line.product.id === product.id,
     );
+    // Tras la consulta al servidor (SPEC 57) las líneas del mismo producto toman
+    // la existencia fresca: si no, `maxFor` seguiría topando con la vieja.
+    const current = refreshed
+      ? this.cart().map((line) =>
+          isProductLine(line) && line.product.id === product.id
+            ? { ...line, product: { ...line.product, stock: product.stock } }
+            : line,
+        )
+      : this.cart();
     const nextLines: CartLine[] = existing
-      ? this.cart().map((line) => (lineKey(line) === key ? { ...line, quantity: nextQty } : line))
-      : [...this.cart(), nueva];
+      ? current.map((line) => (lineKey(line) === key ? { ...line, quantity: nextQty } : line))
+      : [...current, nueva];
 
     this.setCart(nextLines);
     // El aviso de receta, una vez por producto: la caja del mismo medicamento
@@ -1712,11 +1824,29 @@ export class Sale {
     });
   }
 
+  /**
+   * Lotes vendibles, más próximo a caducar primero (FEFO). La caducidad se mide
+   * por día de México (SPEC 57): el lote que caduca hoy se vende todo el día,
+   * igual que en el servidor. Sin fecha no caduca y va al final.
+   */
   private sellableBatches(batches: ProductBatch[]): ProductBatch[] {
-    const today = startOfToday();
+    const now = new Date();
+    const order = (batch: ProductBatch) => expiryYmd(batch.expiryDate) ?? '9999-12-31';
     return batches
-      .filter((batch) => batch.quantity > 0 && batch.expiryDate >= today)
-      .sort((a, b) => a.expiryDate.getTime() - b.expiryDate.getTime());
+      .filter((batch) => batch.quantity > 0 && !isExpiredLocal(batch.expiryDate, now))
+      .sort((a, b) => order(a).localeCompare(order(b)));
+  }
+
+  /** Aviso de próxima caducidad (`expiryWarningDays`), contado en días de México. */
+  private warnIfExpiringSoon(nearest: ProductBatch | undefined): void {
+    const days = nearest ? daysUntilExpiryLocal(nearest.expiryDate) : null;
+    if (!nearest || days === null || days > environment.expiryWarningDays) {
+      return;
+    }
+    this.sounds.warn();
+    this.notifications.error(
+      `Caducidad próxima: lote ${nearest.lotNumber} vence el ${formatExpiry(nearest.expiryDate)} (${days} días).`,
+    );
   }
 
   private restoreCart(): void {

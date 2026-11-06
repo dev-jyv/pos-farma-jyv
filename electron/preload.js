@@ -59,6 +59,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     retryProductPush: (localId) => ipcRenderer.invoke('catalog:retryProductPush', localId),
   },
 
+  products: {
+    /**
+     * SPEC 57: guarda en SQLite la existencia fresca de un producto (respuesta de
+     * `GET /products/:id/stock`, pedida por el renderer) respetando lo pendiente.
+     */
+    refreshOne: (remoteId, snapshot) => ipcRenderer.invoke('products:refreshOne', remoteId, snapshot),
+  },
+
   sales: {
     createLocal: (sale) => ipcRenderer.invoke('sales:createLocal', sale),
     list: (filters) => ipcRenderer.invoke('sales:list', filters),
