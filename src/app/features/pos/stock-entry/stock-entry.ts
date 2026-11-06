@@ -25,6 +25,7 @@ import { todayLocalDateString } from '../../../shared/utils/local-date';
 import { suggestProductName } from '../../../shared/utils/product-name';
 import { roundMoney } from '../../../shared/utils/money';
 import { DEFAULT_UNIT, buildUnitOptions } from '../../../shared/utils/units';
+import { PendingUpload } from '../../../core/sync/pending-upload/pending-upload';
 import { CategoryService } from '../services/category.service';
 import { ProductService } from '../services/product.service';
 import {
@@ -55,6 +56,7 @@ type ProductMode = 'none' | 'existing' | 'new';
   selector: 'app-stock-entry',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    PendingUpload,
     DecimalPipe,
     FormsModule,
     TranslatePipe,

@@ -37,6 +37,11 @@ export interface PushOnlyFlusher {
  * - **Backoff** exponencial con variación si el servidor no confirma nada, y
  *   pausa de 15 min tras 5 intentos sin avance. Un rechazo definitivo no
  *   reintenta en bucle: sale de la cola (queda en "Rechazados").
+ * - **El backoff y la pausa solo frenan los reintentos**, nunca un cambio nuevo:
+ *   `notifyChange()` siempre programa un envío tras el debounce. Basta un
+ *   pendiente que se cuenta pero nunca avanza (una entrada esperando a un
+ *   producto rechazado) para encadenar backoff y pausa; cuando la pausa se
+ *   tragaba el aviso, la entrada recién capturada no subía hasta el horario fijo.
  */
 @Injectable({ providedIn: 'root' })
 export class AutoPushService {
@@ -45,7 +50,6 @@ export class AutoPushService {
   private flusher: PushOnlyFlusher | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private firstChangeAt: number | null = null;
-  private nextAllowedAt = 0;
   private pausedUntil = 0;
   private failures = 0;
   private running = false;
@@ -75,15 +79,17 @@ export class AutoPushService {
       this.dirtyDuringRun = true;
       return;
     }
-    if (now < this.pausedUntil || !navigator.onLine) {
+    if (!navigator.onLine) {
       return;
     }
+    // Sin mirar la pausa ni el backoff: esos frenan los reintentos de lo que ya
+    // estaba en cola, no lo que el cajero acaba de capturar.
     this.firstChangeAt ??= now;
     const debounce = Math.min(
       AUTO_PUSH_DEBOUNCE_MS,
       Math.max(0, this.firstChangeAt + AUTO_PUSH_MAX_WAIT_MS - now),
     );
-    this.arm(Math.max(debounce, this.nextAllowedAt - now));
+    this.arm(debounce);
   }
 
   private arm(delay: number): void {
@@ -110,6 +116,7 @@ export class AutoPushService {
     }
     this.running = true;
     this.dirtyDuringRun = false;
+    const wasPaused = Date.now() < this.pausedUntil;
     try {
       const before = await flusher.countPending();
       if (before === 0) {
@@ -124,7 +131,7 @@ export class AutoPushService {
         this.log.warn('auto-push-error', { message: (error as Error)?.message });
       }
       this.log.info('auto-push', { before, after });
-      this.afterAttempt(before, after);
+      this.afterAttempt(before, after, wasPaused);
     } catch (error) {
       this.log.warn('auto-push-error', { message: (error as Error)?.message });
     } finally {
@@ -136,7 +143,7 @@ export class AutoPushService {
     }
   }
 
-  private afterAttempt(before: number, after: number): void {
+  private afterAttempt(before: number, after: number, wasPaused: boolean): void {
     if (after === 0) {
       this.resetFailures();
       return;
@@ -151,6 +158,11 @@ export class AutoPushService {
       this.arm(AUTO_PUSH_DEBOUNCE_MS);
       return;
     }
+    if (wasPaused) {
+      // Un cambio nuevo dentro de la pausa no avanzó: sigue la pausa tal cual,
+      // sin escalar ni armar reintentos.
+      return;
+    }
     this.failures += 1;
     if (this.failures >= AUTO_PUSH_MAX_FAILURES) {
       this.pausedUntil = Date.now() + AUTO_PUSH_PAUSE_MS;
@@ -160,13 +172,12 @@ export class AutoPushService {
     }
     const base = AUTO_PUSH_BACKOFF_MS[this.failures - 1];
     const delay = Math.round(base * (0.8 + Math.random() * 0.4));
-    this.nextAllowedAt = Date.now() + delay;
     this.log.warn('auto-push-backoff', { failures: this.failures, delayMs: delay, pending: after });
     this.arm(delay);
   }
 
   private resetFailures(): void {
     this.failures = 0;
-    this.nextAllowedAt = 0;
+    this.pausedUntil = 0;
   }
 }

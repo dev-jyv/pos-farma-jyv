@@ -303,7 +303,7 @@ describe('SyncLog', () => {
 describe('snapshot de diagnóstico', () => {
   it('arma PosDiagnosticsInput desde SQLite', async () => {
     await turno('cs-1', { pushError: 'rechazado' });
-    await producto('p-1', { catalogPushError: 'SKU duplicado' });
+    await producto('p-1', { catalogPushError: 'SKU duplicado', createdAt: new Date('2026-11-05T17:00:00Z') });
     await venta([partida('p-1')], { cashSessionId: 'cs-1', folio: 'PENDIENTE-9' });
     await venta([partida(ID_FIRESTORE)], { folio: 'PENDIENTE-10' });
     await agotarIntentos();
@@ -327,7 +327,15 @@ describe('snapshot de diagnóstico', () => {
     expect(foto.blockedSales[0]).toMatchObject({ folio: 'PENDIENTE-9', waitingFor: 'turno', total: 100 });
     expect(foto.blockedSales[0].blockers.map((b) => b.kind)).toEqual(['cashSession', 'product']);
     expect(foto.blockedCashSessions[0]).toMatchObject({ localId: 'cs-1', remoteId: null, pushError: 'rechazado' });
-    expect(foto.unsyncedProducts[0]).toMatchObject({ localId: 'p-1', catalogPushError: 'SKU duplicado' });
+    expect(foto.unsyncedProducts[0]).toMatchObject({
+      localId: 'p-1',
+      catalogPushError: 'SKU duplicado',
+      sku: 'p-1',
+      barcode: null,
+      // 10 de alta menos la pieza de la venta pendiente.
+      stock: 9,
+    });
+    expect(foto.unsyncedProducts[0].createdAt).toBe('2026-11-05T17:00:00.000Z');
     expect(foto.recentSyncRuns[0]).toMatchObject({ entity: 'products', status: 'error', errorMessage: '503' });
     expect(foto.syncLog.some((r) => r.entity === 'sale' && r.level === 'warn')).toBe(true);
   });

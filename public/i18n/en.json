@@ -562,7 +562,6 @@
     "searching": "Searching…",
     "searchHint": "Type to search the local catalog.",
     "notFound": "No product found for that term.",
-    "pendingSync": "{{count}} not synced",
     "new": "New product",
     "newTitle": "New product",
     "editTitle": "Edit product",
@@ -677,5 +676,9 @@
     "saveError": "Could not record the movement.",
     "loadError": "Could not read the cash box balance.",
     "shiftOwner": "Shift of"
+  },
+  "pendingUpload": {
+    "count": "{{count}} not uploaded",
+    "upload": "Upload now"
   }
 }

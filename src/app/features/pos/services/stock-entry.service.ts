@@ -1,6 +1,18 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { Injectable, inject } from '@angular/core';
-import { EMPTY, Observable, catchError, concatMap, defaultIfEmpty, finalize, lastValueFrom, from, map, tap } from 'rxjs';
+import { Injectable, inject, signal } from '@angular/core';
+import {
+  EMPTY,
+  Observable,
+  catchError,
+  concatMap,
+  defaultIfEmpty,
+  defer,
+  finalize,
+  lastValueFrom,
+  from,
+  map,
+  tap,
+} from 'rxjs';
 import { HttpErrorResponse } from '@angular/common/http';
 
 import { getApiErrorMessage, toDate, unwrapEntity, unwrapList } from '../../../core/api/api.utils';
@@ -69,6 +81,30 @@ export class StockEntryService {
 
   private flushing = false;
 
+  /**
+   * Entradas locales sin subir, contando las que esperan a su producto
+   * (`includeWaiting`), para el aviso "N sin subir" de Productos y Entrada de
+   * stock. Las rechazadas no cuentan: viven en "Rechazados".
+   */
+  readonly pendingCount = signal(0);
+
+  constructor() {
+    this.refreshPending();
+  }
+
+  /** Relee el conteo de la cola local. Barato (SQLite por IPC) y sin red. */
+  refreshPending(): void {
+    const api = window.electronAPI;
+    if (!api) {
+      return;
+    }
+    // `defer`: si la llamada revienta (o el preload es viejo y no la expone) el
+    // error cae en `catchError` y no tumba al servicio.
+    defer(() => api.catalog.getPendingStockEntries({ includeWaiting: true }))
+      .pipe(catchError(() => EMPTY))
+      .subscribe((pending) => this.pendingCount.set(pending.length));
+  }
+
   /** Últimas facturas registradas, de la más reciente a la más vieja. */
   listRecentInvoices(limit = 10): Observable<PurchaseInvoice[]> {
     const params = new HttpParams().set('limit', String(limit));
@@ -78,7 +114,12 @@ export class StockEntryService {
   }
 
   create(payload: CreateStockEntryPayload): Observable<StockEntryResult> {
-    return from(this.api().recordStockEntry(payload)).pipe(tap(() => this.autoPush.notifyChange()));
+    return from(this.api().recordStockEntry(payload)).pipe(
+      tap(() => {
+        this.refreshPending();
+        this.autoPush.notifyChange();
+      }),
+    );
   }
 
   /**
@@ -180,6 +221,7 @@ flushQueueAsync(): Promise<void> {
         ),
         finalize(() => {
           this.flushing = false;
+          this.refreshPending();
         }),
       );
   }

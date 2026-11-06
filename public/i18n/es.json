@@ -562,7 +562,6 @@
     "searching": "Buscando…",
     "searchHint": "Escribe para buscar en el catálogo local.",
     "notFound": "No se encontró ningún producto con ese término.",
-    "pendingSync": "{{count}} sin sincronizar",
     "new": "Nuevo producto",
     "newTitle": "Nuevo producto",
     "editTitle": "Editar producto",
@@ -677,5 +676,9 @@
     "saveError": "No se pudo registrar el movimiento.",
     "loadError": "No se pudo leer el saldo de la caja.",
     "shiftOwner": "Turno de"
+  },
+  "pendingUpload": {
+    "count": "{{count}} sin subir",
+    "upload": "Subir ahora"
   }
 }

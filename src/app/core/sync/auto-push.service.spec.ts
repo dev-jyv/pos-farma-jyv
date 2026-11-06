@@ -118,30 +118,63 @@ describe('AutoPushService', () => {
       expect(flush).toHaveBeenCalledTimes(calls);
     }
 
-    // Tras el último intento sin avance: pausa. Ni el tiempo ni nuevas ventas lo despiertan.
+    // Tras el último intento sin avance: pausa. El tiempo solo no la despierta.
     await vi.advanceTimersByTimeAsync(AUTO_PUSH_PAUSE_MS - 60_000);
-    service.notifyChange();
-    await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS * 2);
     expect(flush).toHaveBeenCalledTimes(calls);
 
-    // Pasada la pausa vuelve a intentar con un cambio nuevo.
-    await vi.advanceTimersByTimeAsync(120_000);
+    // Un cambio nuevo sí sube tras el debounce, aunque siga la pausa.
     service.notifyChange();
-    await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS + 100);
+    await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+    expect(flush).toHaveBeenCalledTimes(calls + 1);
+
+    // No avanzó: sigue en pausa, sin reintentos nuevos.
+    await vi.advanceTimersByTimeAsync(AUTO_PUSH_PAUSE_MS);
     expect(flush).toHaveBeenCalledTimes(calls + 1);
   });
 
-  it('un nuevo cambio durante el backoff no lo salta', async () => {
+  it('un cambio nuevo durante el backoff no espera al backoff: sube tras el debounce', async () => {
     pending = 1;
     flush.mockImplementation(async () => undefined);
     service.notifyChange();
     await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
     expect(flush).toHaveBeenCalledTimes(1);
-    service.notifyChange(); // otra venta, pero hay backoff de 15 s
-    await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS + 1_000);
-    expect(flush).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(AUTO_PUSH_BACKOFF_MS[0]);
+    // Backoff armado (15 s); a los 2 s llega otra entrada.
+    await vi.advanceTimersByTimeAsync(2_000);
+    service.notifyChange();
+    await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
     expect(flush).toHaveBeenCalledTimes(2);
+    // Sin avance: el siguiente reintento vuelve a esperar con backoff (30 s).
+    await vi.advanceTimersByTimeAsync(AUTO_PUSH_BACKOFF_MS[1] - 1);
+    expect(flush).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(flush).toHaveBeenCalledTimes(3);
+  });
+
+  it('un pendiente atorado no retiene la entrada nueva: sube en el debounce y sale de la pausa', async () => {
+    // Una entrada esperando a un producto rechazado: se cuenta y nunca baja.
+    pending = 1;
+    flush.mockImplementation(async () => {
+      pending = 1;
+    });
+    service.notifyChange();
+    await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+    for (const wait of AUTO_PUSH_BACKOFF_MS.slice(0, AUTO_PUSH_MAX_FAILURES - 1)) {
+      await vi.advanceTimersByTimeAsync(wait);
+    }
+    const enPausa = flush.mock.calls.length;
+    expect(enPausa).toBe(AUTO_PUSH_MAX_FAILURES);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(flush).toHaveBeenCalledTimes(enPausa); // en pausa
+
+    // El cajero captura una entrada: la cola sube a 2 y el envío la deja en 1.
+    pending = 2;
+    service.notifyChange();
+    await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+    expect(flush).toHaveBeenCalledTimes(enPausa + 1);
+
+    // Hubo avance: sale de la pausa y reintenta lo atorado tras el debounce.
+    await vi.advanceTimersByTimeAsync(AUTO_PUSH_DEBOUNCE_MS);
+    expect(flush).toHaveBeenCalledTimes(enPausa + 2);
   });
 
   it('si flush lanza, no revienta y entra a backoff', async () => {
