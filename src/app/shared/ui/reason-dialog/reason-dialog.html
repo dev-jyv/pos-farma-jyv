@@ -1,0 +1,71 @@
+<p-dialog
+  [visible]="visible()"
+  (visibleChange)="$event ? null : dismiss()"
+  [modal]="true"
+  [draggable]="false"
+  [style]="{ width: '26rem', maxWidth: '95vw' }"
+  [header]="header()"
+>
+  @if (description()) {
+    <p class="mb-3 text-sm text-slate-600">{{ description() }}</p>
+  }
+
+  @if (quickReasons().length) {
+    <div class="mb-3 flex flex-wrap gap-2" role="group" [attr.aria-label]="reasonLabel()">
+      @for (option of quickReasons(); track option) {
+        <button
+          type="button"
+          data-testid="reason-option"
+          class="rounded-full border px-3 py-1 text-sm transition"
+          [class.border-red-400]="selected() === option"
+          [class.bg-red-50]="selected() === option"
+          [class.text-red-900]="selected() === option"
+          [class.border-slate-300]="selected() !== option"
+          [attr.aria-pressed]="selected() === option"
+          (click)="choose(option)"
+        >
+          {{ option }}
+        </button>
+      }
+    </div>
+  }
+
+  <label class="mb-1 block text-xs font-semibold text-slate-600" for="reason-dialog-text">
+    {{ reasonLabel() }}
+  </label>
+  <textarea
+    id="reason-dialog-text"
+    data-testid="reason-text"
+    rows="3"
+    class="w-full rounded-lg border border-slate-300 p-2 text-sm"
+    [attr.maxlength]="maxLength"
+    [placeholder]="placeholder()"
+    [value]="text()"
+    (input)="onInput($event)"
+  ></textarea>
+  <p class="mt-1 text-xs" [class.text-slate-500]="valid()" [class.text-red-700]="!valid()">
+    {{ hint() }}
+  </p>
+
+  <ng-template #footer>
+    <div class="flex w-full gap-2">
+      <p-button
+        [label]="cancelLabel()"
+        severity="secondary"
+        [text]="true"
+        styleClass="flex-1"
+        [disabled]="busy()"
+        (onClick)="dismiss()"
+      />
+      <p-button
+        data-testid="reason-confirm"
+        [label]="confirmLabel()"
+        severity="danger"
+        styleClass="flex-1"
+        [disabled]="!valid()"
+        [loading]="busy()"
+        (onClick)="confirm()"
+      />
+    </div>
+  </ng-template>
+</p-dialog>

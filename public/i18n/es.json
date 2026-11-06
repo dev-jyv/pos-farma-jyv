@@ -358,6 +358,21 @@
       "stock": "Revisión: faltante de stock",
       "late": "Revisión: cobrada con turno cerrado",
       "catalog": "Revisión: producto inactivo"
+    },
+    "voidRejected": "Anulación rechazada en el servidor",
+    "voidDialog": {
+      "title": "Anular venta",
+      "description": "El stock se repone y la venta queda anulada también en el servidor. El motivo queda en la bitácora.",
+      "reasonLabel": "Motivo de la anulación",
+      "placeholder": "Escribe el motivo o agrega un detalle…",
+      "hint": "Obligatorio, mínimo 5 caracteres.",
+      "cancel": "Cancelar",
+      "options": {
+        "typo": "Error de captura",
+        "desisted": "Cliente desistió",
+        "wrongProduct": "Producto equivocado",
+        "other": "Otro"
+      }
     }
   },
   "payment": {

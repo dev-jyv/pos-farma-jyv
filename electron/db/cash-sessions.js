@@ -243,7 +243,9 @@ async function getLiveSummary(prisma, cashSessionId) {
   }
   const [sales, movements] = await Promise.all([
     prisma.sale.findMany({
-      where: { cashSessionId },
+      // Una venta descartada (SPEC 62) nunca existió para el corte: antes se
+      // borraba la fila; ahora queda como rastro y aquí no cuenta.
+      where: { cashSessionId, discardedAt: null },
       select: {
         paymentMethod: true,
         amountReceived: true,
@@ -431,7 +433,10 @@ async function getPendingClosePush(prisma, { ownerUid, sinHijosPendientes = fals
        * firmado) y el cajero se queda sin poder aplicarla: el servidor conserva
        * como buena una venta que en la caja no existe.
        */
-      prisma.sale.count({ where: { cashSessionId: row.id, needsRemoteVoid: true } }),
+      // Solo las recuperables, igual que arriba: una anulación que el servidor
+      // rechazó (`voidError`, SPEC 62) espera a un admin y no puede dejar el
+      // turno abierto allá para siempre.
+      prisma.sale.count({ where: { cashSessionId: row.id, needsRemoteVoid: true, voidError: null } }),
     ]);
     if (ventas > 0 || movimientos > 0 || anulacionesRemotas > 0) {
       conHijos.add(row.id);

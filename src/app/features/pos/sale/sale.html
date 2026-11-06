@@ -858,3 +858,19 @@
   (closed)="closeSubstitutes()"
   (selected)="selectSubstitute($event)"
 />
+
+<!-- Descartar una venta pendiente pide motivo (SPEC 62). -->
+@if (discardPendingTarget(); as target) {
+  <app-reason-dialog
+    [visible]="true"
+    [header]="'Descartar venta pendiente (' + target.folioHint + ')'"
+    description="Se retira de este equipo y nunca subirá como venta; el stock se repone. Queda el rastro de quién, cuándo y por qué."
+    reasonLabel="Motivo del descarte"
+    placeholder="Por ejemplo: venta de prueba, ticket capturado dos veces…"
+    hint="Obligatorio, mínimo 5 caracteres."
+    confirmLabel="Descartar"
+    [busy]="discardingPending()"
+    (confirmed)="confirmDiscardPending($event)"
+    (dismissed)="cancelDiscardPending()"
+  />
+}

@@ -123,6 +123,22 @@ model Sale {
   invoiceStatus          String?
   voidedAt               DateTime?
   voidedBy               String?
+  /// Motivo de la anulación (SPEC 62): obligatorio desde esta versión, viaja en
+  /// el `POST /sales/:id/void`. Null en ventas anuladas antes de pedir motivo.
+  voidReason             String?
+  /// El servidor rechazó la anulación remota con un 4xx (SPEC 62): la venta ya
+  /// está anulada aquí y activa allá. Visible en "Rechazados"; no se reintenta
+  /// sola hasta que un admin pulse "Reintentar" (`clearVoidError`).
+  voidError              String?
+  /// Descarte lógico (SPEC 62): la venta sale de la cola, del historial y del
+  /// corte, pero la fila queda como rastro de quién, cuándo y por qué.
+  discardedAt            DateTime?
+  discardedBy            String?
+  discardReason          String?
+  /// Veces que la venta salió hacia el servidor (alta por `/sales/bulk`). Con
+  /// un intento la venta **pudo** llegar aunque se perdiera la respuesta, así
+  /// que ya no se puede descartar (SPEC 62).
+  pushAttempts           Int            @default(0)
   pendingPush            Boolean        @default(true)
   pushError              String?
   /// Se anuló en local justo mientras el push seguía en vuelo: el servidor ya

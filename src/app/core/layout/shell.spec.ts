@@ -112,6 +112,9 @@ describe('Shell', () => {
             discard: vi.fn(),
             canFix: () => false,
             canDiscard: () => false,
+            canRetry: (record: BlockedSyncRecord) => record.kind !== 'saleVoid',
+            needsAdmin: (record: BlockedSyncRecord) => record.kind === 'saleVoid',
+            needsDiscardReason: (record: BlockedSyncRecord) => record.kind === 'sale',
             canRepair: (record: BlockedSyncRecord) => (record.blockers?.length ?? 0) > 0,
             canSendToUnreconciled: (_record: BlockedSyncRecord, fixFailed: boolean) => fixFailed,
           },
@@ -176,6 +179,51 @@ describe('Shell', () => {
         },
       ],
     };
+
+    describe('anulación rechazada y descarte con motivo (SPEC 62)', () => {
+      const anulacion: BlockedSyncRecord = {
+        kind: 'saleVoid',
+        id: 'sale-2',
+        label: 'Anulación de V-2',
+        detail: '$50.00',
+        occurredAt: '2026-11-06T10:00:00Z',
+        reason: 'Solo un administrador puede anular [VOID_FORBIDDEN]',
+        diagnosis: { code: 'anulacion-rechazada' },
+      };
+
+      it('una anulación rechazada vista por el cajero ofrece "Pedir a un admin", no Reintentar', () => {
+        expect(component.needsAdminBlocked(anulacion)).toBe(true);
+        expect(component.canRetryBlocked(anulacion)).toBe(false);
+        component.askAdmin(anulacion);
+        expect(notifications.warn).toHaveBeenCalledWith(
+          expect.stringContaining('administrador'),
+          'Anulación de V-2: necesita a un administrador',
+        );
+      });
+
+      it('descartar una venta abre el diálogo del motivo y descarta con él', async () => {
+        const blocked = TestBed.inject(BlockedSyncService);
+
+        await component.discardBlocked(venta);
+        expect(component.discardTarget()?.id).toBe('sale-1');
+        expect(blocked.discard).not.toHaveBeenCalled();
+
+        await component.confirmDiscard('Venta de prueba');
+        expect(blocked.discard).toHaveBeenCalledWith(venta, 'Venta de prueba');
+        expect(component.discardTarget()).toBeNull();
+      });
+
+      it('si la caja rechaza el descarte, avisa y deja el diálogo abierto', async () => {
+        const blocked = TestBed.inject(BlockedSyncService);
+        blocked.discard = vi.fn().mockRejectedValue(new Error('Ya está en el servidor; anúlala.'));
+
+        await component.discardBlocked(venta);
+        await component.confirmDiscard('Venta de prueba');
+
+        expect(notifications.error).toHaveBeenCalledWith('Ya está en el servidor; anúlala.');
+        expect(component.discardTarget()?.id).toBe('sale-1');
+      });
+    });
 
     // Sin `detectChanges`: la plantilla completa del shell necesita el router
     // real (routerLink, router-outlet). Se prueba lo que decide qué botones

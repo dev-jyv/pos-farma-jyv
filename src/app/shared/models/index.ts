@@ -631,6 +631,17 @@ export interface Sale {
   coupon?: SaleCoupon | null;
   voidedAt: Date | null;
   voidedBy?: string | null;
+  /** Motivo de la anulación (SPEC 62); `null` en anulaciones anteriores al motivo. */
+  voidReason?: string | null;
+  /**
+   * El servidor rechazó la anulación remota con un 4xx (SPEC 62): aquí está
+   * anulada y allá sigue activa hasta que un admin la reintente.
+   */
+  voidError?: string | null;
+  /** Descarte lógico (SPEC 62): la venta nunca llegó al servidor y se retiró. */
+  discardedAt?: Date | null;
+  discardedBy?: string | null;
+  discardReason?: string | null;
   /**
    * El servidor no pudo registrar la venta (stock, producto) y quedó guardada
    * en `unreconciledSales`: el dinero entró y el movimiento está, pero el

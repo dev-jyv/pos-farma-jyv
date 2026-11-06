@@ -5,6 +5,8 @@ import { AuthService } from '../auth/auth.service';
 import { BlockedSyncRecord } from '../electron/window.d';
 import { PosBlocker } from '../../shared/models';
 import { BlockedSyncService } from './blocked-sync.service';
+import { SaleService } from '../../features/pos/services/sale.service';
+import { describeBlocked } from './sync-diagnosis';
 
 function build(isAdmin: boolean) {
   TestBed.configureTestingModule({
@@ -139,6 +141,74 @@ describe('BlockedSyncService', () => {
       await build(true).discard(entrada);
       expect(discardStockEntry).toHaveBeenCalledWith('b1');
     });
+  });
+});
+
+/** Anulación rechazada y descarte con motivo (SPEC 62). */
+describe('BlockedSyncService — anulaciones y descarte (SPEC 62)', () => {
+  afterEach(() => {
+    TestBed.resetTestingModule();
+    window.electronAPI = undefined;
+  });
+
+  const anulacion: BlockedSyncRecord = {
+    kind: 'saleVoid',
+    id: 's-9',
+    label: 'Anulación de V-9',
+    detail: '$10.00',
+    occurredAt: '2026-11-06T10:00:00Z',
+    reason: 'Solo un administrador puede anular [VOID_FORBIDDEN]',
+    diagnosis: { code: 'anulacion-rechazada' },
+  };
+
+  it('el cajero no la reintenta: el panel le pide a un admin; nadie la descarta', () => {
+    const cajero = build(false);
+    expect(cajero.canRetry(anulacion)).toBe(false);
+    expect(cajero.needsAdmin(anulacion)).toBe(true);
+    expect(cajero.canDiscard(anulacion)).toBe(false);
+    TestBed.resetTestingModule();
+    const admin = build(true);
+    expect(admin.canRetry(anulacion)).toBe(true);
+    expect(admin.needsAdmin(anulacion)).toBe(false);
+    expect(admin.canDiscard(anulacion)).toBe(false);
+  });
+
+  it('el "Reintentar" del admin la devuelve a la cola de anulaciones remotas', async () => {
+    const clearVoidError = vi.fn().mockResolvedValue(undefined);
+    window.electronAPI = {
+      sales: { listBlocked: vi.fn().mockResolvedValue([]), clearVoidError },
+      cashMovements: { listBlocked: vi.fn().mockResolvedValue([]) },
+      cashSessions: { listBlocked: vi.fn().mockResolvedValue([]) },
+      catalog: {
+        listBlockedStockEntries: vi.fn().mockResolvedValue([]),
+        listBlockedProducts: vi.fn().mockResolvedValue([]),
+      },
+    } as unknown as typeof window.electronAPI;
+
+    await build(false).retry(anulacion);
+    expect(clearVoidError).not.toHaveBeenCalled();
+    TestBed.resetTestingModule();
+    await build(true).retry(anulacion);
+    expect(clearVoidError).toHaveBeenCalledWith('s-9');
+  });
+
+  it('el panel la explica como anulación rechazada y recomienda avisar al admin', () => {
+    const ayuda = describeBlocked(anulacion);
+    expect(ayuda.title).toBe('El servidor rechazó la anulación');
+    expect(ayuda.recommended).toBe('avisar-admin');
+  });
+
+  it('descartar una venta pide motivo y va por SaleService.discardSale', async () => {
+    const discardSale = vi.fn().mockResolvedValue(undefined);
+    window.electronAPI = { sales: {} } as unknown as typeof window.electronAPI;
+    TestBed.configureTestingModule({ providers: [{ provide: SaleService, useValue: { discardSale } }] });
+    const admin = build(true);
+
+    expect(admin.needsDiscardReason(venta)).toBe(true);
+    expect(admin.needsDiscardReason(gasto)).toBe(false);
+    await admin.discard(venta, 'Venta de prueba');
+
+    expect(discardSale).toHaveBeenCalledWith('s1', 'Venta de prueba');
   });
 });
 

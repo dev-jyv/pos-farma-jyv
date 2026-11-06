@@ -2,7 +2,7 @@ import { DatePipe, DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { DialogModule } from 'primeng/dialog';
 import { InputTextModule } from 'primeng/inputtext';
@@ -18,6 +18,7 @@ import { PaymentMethod, Sale } from '../../../shared/models';
 import { CashSessionService } from '../services/cash-session.service';
 import { SaleMovement } from '../../../core/electron/window.d';
 import { SaleService } from '../services/sale.service';
+import { ReasonDialog } from '../../../shared/ui/reason-dialog/reason-dialog';
 import { SaleTicket } from '../ticket/sale-ticket';
 import { TicketPrintService } from '../ticket/ticket-print.service';
 
@@ -41,6 +42,7 @@ const PAGE_LIMIT = 100;
     TableModule,
     TagModule,
     TooltipModule,
+    ReasonDialog,
     SaleTicket,
   ],
   templateUrl: './sale-history.html',
@@ -51,6 +53,7 @@ export class SaleHistory {
   private readonly authService = inject(AuthService);
   private readonly notifications = inject(NotificationService);
   private readonly ticketPrint = inject(TicketPrintService);
+  private readonly translate = inject(TranslateService);
 
   readonly sales = signal<Sale[]>([]);
   readonly loading = signal(false);
@@ -67,6 +70,21 @@ export class SaleHistory {
   readonly loadError = signal<string | null>(null);
   /** Venta cuya anulación está viajando; bloquea el doble POST /sales/:id/void. */
   readonly voiding = signal<string | null>(null);
+  /** Venta para la que se está pidiendo el motivo de anulación (SPEC 62). */
+  readonly voidTarget = signal<Sale | null>(null);
+  /**
+   * Opciones rápidas del motivo. "Otro" no vale sola: pide escribirlo. Se leen
+   * del diccionario al abrir, no al construir: el idioma puede no estar cargado.
+   */
+  readonly voidReasons = computed(() =>
+    [
+      'history.voidDialog.options.typo',
+      'history.voidDialog.options.desisted',
+      'history.voidDialog.options.wrongProduct',
+      'history.voidDialog.options.other',
+    ].map((key) => this.translate.instant(key)),
+  );
+  readonly voidOtherOption = computed(() => this.translate.instant('history.voidDialog.options.other'));
 
   readonly isAdmin = this.authService.isAdmin;
   /**
@@ -172,19 +190,35 @@ export class SaleHistory {
     this.ticketPrint.printSale(sale, this.cashierLabel(sale));
   }
 
+  /**
+   * Abre el diálogo del motivo (SPEC 62): sin motivo no se anula. Sin PIN de
+   * supervisor por decisión del negocio; quién puede anular no cambia.
+   */
   voidSale(sale: Sale): void {
     if (sale.voidedAt || !this.canVoid() || this.voiding()) {
       return;
     }
-    if (!window.confirm(`¿Anular la venta ${sale.folio}?`)) {
+    this.voidTarget.set(sale);
+  }
+
+  cancelVoid(): void {
+    if (!this.voiding()) {
+      this.voidTarget.set(null);
+    }
+  }
+
+  confirmVoid(reason: string): void {
+    const sale = this.voidTarget();
+    if (!sale || sale.voidedAt || !this.canVoid() || this.voiding()) {
       return;
     }
     this.voiding.set(sale.id);
     this.saleService
-      .void(sale)
+      .void(sale, reason)
       .pipe(finalize(() => this.voiding.set(null)))
       .subscribe({
         next: (voided) => {
+          this.voidTarget.set(null);
           this.sales.update((list) =>
             list.map((item) =>
               item.id === sale.id

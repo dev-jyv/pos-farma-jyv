@@ -545,7 +545,15 @@ function registrarIPCHandlers() {
     salesDb.voidLocal(await getPrisma(), localId, voidedBy, voidedByLabel, reason));
   ipcMain.handle('sales:clearPushError', async (_event, localId) =>
     salesDb.clearPushError(await getPrisma(), localId));
-  ipcMain.handle('sales:discard', async (_event, localId) => salesDb.discard(await getPrisma(), localId));
+  ipcMain.handle('sales:discard', async (_event, localId, options) =>
+    salesDb.discard(await getPrisma(), localId, options));
+  ipcMain.handle('sales:markVoidFailed', async (_event, localId, message) => {
+    const prisma = await getPrisma();
+    await salesDb.markVoidFailed(prisma, localId, message);
+    await bitacoraFallo(prisma, 'sale', localId, `Anulación rechazada por el servidor: ${message}`);
+  });
+  ipcMain.handle('sales:clearVoidError', async (_event, localId) =>
+    salesDb.clearVoidError(await getPrisma(), localId));
   ipcMain.handle('sales:getPendingVoided', async (_event, filters) =>
     salesDb.getPendingVoided(await getPrisma(), filters));
   ipcMain.handle('sales:getNeedingRemoteVoid', async (_event, filters) =>

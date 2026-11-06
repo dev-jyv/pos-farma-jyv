@@ -189,7 +189,8 @@ export interface LocalCashMovementInput {
  * alguien tiene que leer el motivo y decidir, así que la caja debe mostrarlo.
  */
 export interface BlockedSyncRecord {
-  kind: 'sale' | 'cashMovement' | 'cashSession' | 'stockEntry' | 'product';
+  /** `saleVoid`: anulación de una venta ya subida que el servidor rechazó (SPEC 62). */
+  kind: 'sale' | 'saleVoid' | 'cashMovement' | 'cashSession' | 'stockEntry' | 'product';
   id: string;
   /** Folio, motivo del gasto o tipo de operación: con qué lo reconoce el cajero. */
   label: string;
@@ -222,6 +223,7 @@ export type BlockedCode =
   | 'turno-no-encontrado'
   | 'sin-stock'
   | 'promocion-no-vigente'
+  | 'anulacion-rechazada'
   | 'desconocido';
 
 export interface BlockedDiagnosis {
@@ -351,8 +353,10 @@ declare global {
          * Anuladas que nunca llegaron al servidor: se crean y se anulan allá,
          * para que el movimiento quede completo.
          */
-        getPendingVoided: (filters?: { ownerUid?: string }) => Promise<
-          Array<PendingSale & { voidedAt: string | null; voidedBy: string | null }>
+        getPendingVoided: (filters?: { ownerUid?: string; contarIntentos?: boolean }) => Promise<
+          Array<
+            PendingSale & { voidedAt: string | null; voidedBy: string | null; voidReason?: string | null }
+          >
         >;
         /** `review`: marcas con las que el servidor aceptó la venta offline (SPEC 52). */
         markSynced: (
@@ -377,10 +381,27 @@ declare global {
         /** Bitácora de la venta: un renglón por movimiento, con quién y cuándo. */
         listMovements: (saleId: string) => Promise<SaleMovement[]>;
         clearPushError: (localId: string) => Promise<void>;
-        discard: (localId: string) => Promise<void>;
+        /**
+         * Descarte lógico (SPEC 62): motivo obligatorio; lanza si la venta ya está
+         * en el servidor o ya salió hacia él. `null` si no existe o ya se descartó.
+         */
+        discard: (
+          localId: string,
+          options: { discardedBy: string; reason: string },
+        ) => Promise<Sale | null>;
+        /** El servidor rechazó la anulación remota con un 4xx: visible en "Rechazados". */
+        markVoidFailed: (localId: string, message: string) => Promise<void>;
+        /** "Reintentar" de un admin: la anulación remota vuelve a la cola. */
+        clearVoidError: (localId: string) => Promise<void>;
         /** Ventas ya sincronizadas que se anularon en local durante la carrera de `markSynced`. */
         getNeedingRemoteVoid: (filters?: { ownerUid?: string }) => Promise<
-          Array<{ id: string; remoteId: string; voidedAt: string | null; voidedBy: string | null }>
+          Array<{
+            id: string;
+            remoteId: string;
+            voidedAt: string | null;
+            voidedBy: string | null;
+            voidReason?: string | null;
+          }>
         >;
         /** Anulada sin red: queda pendiente de anularse también en el servidor. */
         markNeedsRemoteVoid: (localId: string) => Promise<void>;

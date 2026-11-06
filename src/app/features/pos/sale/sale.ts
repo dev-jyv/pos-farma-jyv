@@ -78,6 +78,7 @@ import { CashSessionDialog } from '../cash-session/cash-session-dialog';
 import { PerformerDialog } from './performer-dialog';
 import { TicketPrintService } from '../ticket/ticket-print.service';
 import { SubstitutesDialog } from './substitutes-dialog';
+import { ReasonDialog } from '../../../shared/ui/reason-dialog/reason-dialog';
 
 /**
  * Longitud mínima para consultar el catálogo. El backend resuelve la búsqueda
@@ -154,6 +155,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
     CashSessionDialog,
     PerformerDialog,
     SubstitutesDialog,
+    ReasonDialog,
   ],
   templateUrl: './sale.html',
   host: {
@@ -1507,18 +1509,43 @@ export class Sale {
     if (!this.isAdmin()) {
       return;
     }
-    const confirmado = window.confirm(
-      `¿Descartar la venta pendiente (${item.folioHint})?\n\n` +
-        'Se borra de este equipo y nunca llegará al servidor. Si ya se cobró, ' +
-        'quedará sin folio ni registro. El stock se repone.',
-    );
-    if (!confirmado) {
+    // Con motivo obligatorio (SPEC 62): el diálogo explica la consecuencia.
+    this.discardPendingTarget.set(item);
+  }
+
+  /** Venta pendiente para la que se pide el motivo del descarte. */
+  readonly discardPendingTarget = signal<{ queueId: string; folioHint: string } | null>(null);
+  readonly discardingPending = signal(false);
+
+  cancelDiscardPending(): void {
+    if (!this.discardingPending()) {
+      this.discardPendingTarget.set(null);
+    }
+  }
+
+  /**
+   * Descarte lógico: la SQLite lo rechaza si la venta ya salió hacia el servidor
+   * (pudo registrarse allá), y entonces el mensaje lo dice.
+   */
+  async confirmDiscardPending(reason: string): Promise<void> {
+    const item = this.discardPendingTarget();
+    if (!item || !this.isAdmin() || this.discardingPending()) {
       return;
     }
-    this.saleService.discardBlockedSale(item.queueId);
-    this.notifications.success('Venta pendiente descartada.');
-    if (this.pendingOfflineSales() === 0) {
-      this.pendingDialogVisible.set(false);
+    this.discardingPending.set(true);
+    try {
+      await this.saleService.discardSale(item.queueId, reason);
+      this.discardPendingTarget.set(null);
+      this.notifications.success('Venta pendiente descartada.');
+      if (this.pendingOfflineSales() === 0) {
+        this.pendingDialogVisible.set(false);
+      }
+    } catch (error: unknown) {
+      this.notifications.error(
+        error instanceof Error ? error.message : 'No se pudo descartar la venta.',
+      );
+    } finally {
+      this.discardingPending.set(false);
     }
   }
 
@@ -1535,12 +1562,13 @@ export class Sale {
     this.notifications.success('Enviando las ventas pendientes.');
   }
 
-  voidLastSale(): void {
+  /** Anula la última venta; el motivo es obligatorio (SPEC 62). */
+  voidLastSale(reason: string): void {
     const sale = this.lastSale();
     if (!sale || this.lastSaleQueueId()) {
       return;
     }
-    this.saleService.void(sale).subscribe({
+    this.saleService.void(sale, reason).subscribe({
       next: (voided) => {
         this.lastSale.set(voided);
         this.adjustResultsStock(voided.items, 1);

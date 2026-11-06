@@ -85,6 +85,7 @@ describe('SaleService', () => {
     getNeedingRemoteVoid: ReturnType<typeof vi.fn>;
     markNeedsRemoteVoid: ReturnType<typeof vi.fn>;
     markRemoteVoided: ReturnType<typeof vi.fn>;
+    markVoidFailed: ReturnType<typeof vi.fn>;
     listMovements: ReturnType<typeof vi.fn>;
   };
 
@@ -104,6 +105,7 @@ describe('SaleService', () => {
       markNeedsRemoteVoid: vi.fn().mockResolvedValue(undefined),
       listMovements: vi.fn().mockResolvedValue([]),
       markRemoteVoided: vi.fn().mockResolvedValue(undefined),
+      markVoidFailed: vi.fn().mockResolvedValue(undefined),
     };
     window.electronAPI = {
       getAppVersion: vi.fn(),
@@ -364,8 +366,8 @@ describe('SaleService', () => {
 
   describe('void', () => {
     it('venta pendiente de sync: se anula solo local, sin red', () => {
-      service.void(localSale()).subscribe();
-      expect(sales.voidLocal).toHaveBeenCalledWith('local-1', 'u1', 'caja@farmajyv.mx');
+      service.void(localSale(), 'Cliente desistió').subscribe();
+      expect(sales.voidLocal).toHaveBeenCalledWith('local-1', 'u1', 'caja@farmajyv.mx', 'Cliente desistió');
       http.expectNone(`${SALES_URL}/local-1/void`);
     });
 
@@ -373,10 +375,12 @@ describe('SaleService', () => {
       const synced: Sale = { ...localSale(), id: 'v1', remoteId: 'v1', pendingPush: false };
       sales.voidLocal.mockResolvedValue({ ...synced, voidedAt: new Date('2026-08-08T10:00:00.000Z') });
       let result: Sale | undefined;
-      service.void(synced).subscribe((sale) => (result = sale));
+      service.void(synced, 'Error de captura').subscribe((sale) => (result = sale));
 
       const request = http.expectOne(`${SALES_URL}/v1/void`);
       expect(request.request.method).toBe('POST');
+      // SPEC 62: el motivo viaja en el cuerpo de la anulación.
+      expect(request.request.body).toEqual({ reason: 'Error de captura' });
       request.flush({
         data: {
           id: 'v1',
@@ -397,7 +401,7 @@ describe('SaleService', () => {
       });
       await flushMicrotasks();
 
-      expect(sales.voidLocal).toHaveBeenCalledWith('v1', 'u1', 'caja@farmajyv.mx');
+      expect(sales.voidLocal).toHaveBeenCalledWith('v1', 'u1', 'caja@farmajyv.mx', 'Error de captura');
       expect(sales.markRemoteVoided).toHaveBeenCalledWith('v1');
       expect(sales.markNeedsRemoteVoid).not.toHaveBeenCalled();
       expect(result?.id).toBe('v1');
@@ -406,7 +410,7 @@ describe('SaleService', () => {
     it('lista con pendingPush viejo pero remoteId: igual intenta el void remoto', async () => {
       const stale: Sale = { ...localSale(), id: 'v1', remoteId: 'remote-1', pendingPush: true };
       sales.voidLocal.mockResolvedValue({ ...stale, voidedAt: new Date() });
-      service.void(stale).subscribe();
+      service.void(stale, 'Cliente desistió').subscribe();
 
       http.expectOne(`${SALES_URL}/remote-1/void`).flush({
         data: {
@@ -435,7 +439,7 @@ describe('SaleService', () => {
     it('sin red: anula en local y la deja marcada para anularse en el servidor', async () => {
       const synced: Sale = { ...localSale(), id: 'v1', remoteId: 'v1', pendingPush: false };
       let voided: Sale | undefined;
-      service.void(synced).subscribe((result) => (voided = result));
+      service.void(synced, 'Producto equivocado').subscribe((result) => (voided = result));
 
       http
         .expectOne(`${SALES_URL}/v1/void`)
@@ -444,7 +448,12 @@ describe('SaleService', () => {
 
       // El cliente está enfrente y el dinero ya se devolvió: la anulación no
       // puede esperar a que vuelva el internet.
-      expect(sales.voidLocal).toHaveBeenCalledWith('v1', 'u1', 'caja@farmajyv.mx');
+      expect(sales.voidLocal).toHaveBeenCalledWith(
+        'v1',
+        'u1',
+        'caja@farmajyv.mx',
+        'Producto equivocado',
+      );
       expect(sales.markNeedsRemoteVoid).toHaveBeenCalledWith('v1');
       expect(voided?.voidedAt).toBeInstanceOf(Date);
     });
@@ -452,7 +461,7 @@ describe('SaleService', () => {
     it('un rechazo del servidor NO se anula en local: las dos bases quedarían discrepando', async () => {
       const synced: Sale = { ...localSale(), id: 'v1', remoteId: 'v1', pendingPush: false };
       let failed: unknown;
-      service.void(synced).subscribe({ error: (error) => (failed = error) });
+      service.void(synced, 'Cliente desistió').subscribe({ error: (error) => (failed = error) });
 
       http.expectOne(`${SALES_URL}/v1/void`).flush(
         { error: { message: 'La venta ya está anulada' } },
@@ -542,7 +551,9 @@ describe('SaleService', () => {
       const request = http.expectOne(`${SALES_URL}/remote-1/void`);
       // Sin esto el backend sellaría la anulación con la hora del sync y a
       // nombre de quien sincronizó.
+      // Sin motivo guardado (anulada antes de SPEC 62): el texto de POS anterior.
       expect(request.request.body).toEqual({
+        reason: 'Sin motivo (POS anterior)',
         voidedAt: '2026-09-03T18:20:00.000Z',
         voidedBy: 'u9',
       });
@@ -613,6 +624,11 @@ describe('SaleService', () => {
 
       // Con código, el texto ("anulada") ya no decide.
       expect(sales.markRemoteVoided).not.toHaveBeenCalled();
+      // SPEC 62: ya no se reintenta en silencio; queda visible en "Rechazados".
+      expect(sales.markVoidFailed).toHaveBeenCalledWith(
+        'v1',
+        expect.stringContaining('[HAS_RETURNS]'),
+      );
     });
   });
 
@@ -921,6 +937,7 @@ describe('SaleService', () => {
           ...localSale({ id: 'local-9', payload: { idempotencyKey: 'key-9' } }),
           voidedAt: '2026-09-03T18:20:00.000Z',
           voidedBy: 'u9',
+          voidReason: 'Cliente desistió',
         },
       ]);
 
@@ -938,6 +955,7 @@ describe('SaleService', () => {
 
       const voided = http.expectOne(`${SALES_URL}/remote-9/void`);
       expect(voided.request.body).toEqual({
+        reason: 'Cliente desistió',
         voidedAt: '2026-09-03T18:20:00.000Z',
         voidedBy: 'u9',
       });
@@ -1004,6 +1022,167 @@ describe('SaleService', () => {
       expect(sales.markSynced).toHaveBeenCalledWith('local-7', 'remote-7', 'V-7');
       expect(sales.markRemoteVoided).toHaveBeenCalledWith('local-7');
       expect(sales.markPushFailed).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('alta OK y anulación fallida (SPEC 62)', () => {
+    function anuladaSinSubir(): void {
+      sales.getPendingVoided.mockResolvedValue([
+        {
+          ...localSale({ id: 'local-5', payload: { idempotencyKey: 'key-5' } }),
+          voidedAt: '2026-09-03T18:20:00.000Z',
+          voidedBy: 'u1',
+          voidReason: 'Cliente desistió',
+        },
+      ]);
+    }
+
+    it('el void falla por red: queda subida (markSynced) y pendiente de anular, sin pushError', async () => {
+      anuladaSinSubir();
+
+      service.flushQueue();
+      await flushMicrotasks();
+      http
+        .expectOne(`${SALES_URL}/bulk`)
+        .flush({ data: [{ ok: true, sale: { id: 'remote-5', folio: 'V-5' } }] });
+      await flushMicrotasks();
+      // `markSynced` sobre la venta anulada guarda el remoteId y la deja
+      // `needsRemoteVoid` (electron/db/sales.js): ya no se descarta por error.
+      expect(sales.markSynced).toHaveBeenCalledWith('local-5', 'remote-5', 'V-5');
+
+      sales.getNeedingRemoteVoid.mockResolvedValue([]);
+      http
+        .expectOne(`${SALES_URL}/remote-5/void`)
+        .error(new ProgressEvent('error'), { status: 0, statusText: '' });
+      await flushMicrotasks();
+
+      expect(sales.markPushFailed).not.toHaveBeenCalled();
+      expect(sales.markVoidFailed).not.toHaveBeenCalled();
+      expect(sales.markRemoteVoided).not.toHaveBeenCalled();
+    });
+
+    it('el void falla con 5xx: igual, sigue en cola sin ruido', async () => {
+      anuladaSinSubir();
+
+      service.flushQueue();
+      await flushMicrotasks();
+      http
+        .expectOne(`${SALES_URL}/bulk`)
+        .flush({ data: [{ ok: true, sale: { id: 'remote-5', folio: 'V-5' } }] });
+      await flushMicrotasks();
+      http
+        .expectOne(`${SALES_URL}/remote-5/void`)
+        .flush({ error: { message: 'Error interno' } }, { status: 503, statusText: 'Unavailable' });
+      await flushMicrotasks();
+
+      expect(sales.markSynced).toHaveBeenCalledWith('local-5', 'remote-5', 'V-5');
+      expect(sales.markPushFailed).not.toHaveBeenCalled();
+      expect(sales.markVoidFailed).not.toHaveBeenCalled();
+    });
+
+    it('el void falla con 4xx: queda subida y con voidError visible', async () => {
+      anuladaSinSubir();
+
+      service.flushQueue();
+      await flushMicrotasks();
+      http
+        .expectOne(`${SALES_URL}/bulk`)
+        .flush({ data: [{ ok: true, sale: { id: 'remote-5', folio: 'V-5' } }] });
+      await flushMicrotasks();
+      http.expectOne(`${SALES_URL}/remote-5/void`).flush(
+        {
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Solo un administrador puede anular una venta de un turno cerrado',
+            details: { code: 'VOID_FORBIDDEN', retryable: false },
+          },
+        },
+        { status: 403, statusText: 'Forbidden' },
+      );
+      await flushMicrotasks();
+
+      expect(sales.markSynced).toHaveBeenCalledWith('local-5', 'remote-5', 'V-5');
+      expect(sales.markPushFailed).not.toHaveBeenCalled();
+      expect(sales.markVoidFailed).toHaveBeenCalledWith(
+        'local-5',
+        expect.stringContaining('[VOID_FORBIDDEN]'),
+      );
+    });
+  });
+
+  describe('anulación remota pendiente (SPEC 62)', () => {
+    beforeEach(() => {
+      sales.getNeedingRemoteVoid.mockResolvedValue([
+        { id: 'v1', remoteId: 'remote-1', voidedAt: null, voidedBy: null, voidReason: 'Error de captura' },
+      ]);
+    });
+
+    it('viaja con su motivo', async () => {
+      service.flushQueue();
+      await flushMicrotasks();
+
+      const request = http.expectOne(`${SALES_URL}/remote-1/void`);
+      expect(request.request.body).toEqual({ reason: 'Error de captura' });
+      request.flush({ data: {} });
+      await flushMicrotasks();
+    });
+
+    it('un 4xx VOID_FORBIDDEN queda en Rechazados y deja de reintentarse en silencio', async () => {
+      service.flushQueue();
+      await flushMicrotasks();
+      http.expectOne(`${SALES_URL}/remote-1/void`).flush(
+        {
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Solo un administrador puede anular esta venta',
+            details: { code: 'VOID_FORBIDDEN', retryable: false },
+          },
+        },
+        { status: 403, statusText: 'Forbidden' },
+      );
+      await flushMicrotasks();
+
+      // `markVoidFailed` pone `voidError`: `getNeedingRemoteVoid` ya no la
+      // devuelve (electron/db/sales.js) y `listBlocked` la pinta en el panel.
+      expect(sales.markVoidFailed).toHaveBeenCalledWith(
+        'v1',
+        'Solo un administrador puede anular esta venta [VOID_FORBIDDEN]',
+      );
+      expect(sales.markRemoteVoided).not.toHaveBeenCalled();
+    });
+
+    it('un 4xx sin código (backend viejo) tampoco se reintenta en silencio', async () => {
+      service.flushQueue();
+      await flushMicrotasks();
+      http
+        .expectOne(`${SALES_URL}/remote-1/void`)
+        .flush({ error: { message: 'Turno de otro cajero' } }, { status: 403, statusText: 'Forbidden' });
+      await flushMicrotasks();
+
+      expect(sales.markVoidFailed).toHaveBeenCalledWith('v1', expect.stringContaining('Turno de otro cajero'));
+    });
+
+    it('red o 5xx: sigue en cola, sin voidError', async () => {
+      service.flushQueue();
+      await flushMicrotasks();
+      http
+        .expectOne(`${SALES_URL}/remote-1/void`)
+        .flush({ error: { message: 'Error interno' } }, { status: 500, statusText: 'Error' });
+      await flushMicrotasks();
+
+      expect(sales.markVoidFailed).not.toHaveBeenCalled();
+      expect(sales.markRemoteVoided).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('void sin motivo (SPEC 62)', () => {
+    it('no anula ni llama al servidor', () => {
+      let failed: unknown;
+      service.void(localSale(), '  ab ').subscribe({ error: (error) => (failed = error) });
+
+      expect(failed).toBeInstanceOf(Error);
+      expect(sales.voidLocal).not.toHaveBeenCalled();
+      http.expectNone(`${SALES_URL}/local-1/void`);
     });
   });
 
@@ -1424,9 +1603,60 @@ describe('SaleService', () => {
     });
   });
 
-  it('discardBlockedSale descarta la venta local', () => {
-    service.discardBlockedSale('local-1');
-    expect(sales.discard).toHaveBeenCalledWith('local-1');
+  describe('descarte con motivo (SPEC 62)', () => {
+    it('sin motivo no llega a la caja', async () => {
+      await expect(service.discardSale('local-1', ' ok ')).rejects.toThrow(/motivo/);
+      expect(sales.discard).not.toHaveBeenCalled();
+    });
+
+    it('descarta con autor y motivo y deja rastro en el servidor como no conciliada', async () => {
+      sales.discard.mockResolvedValue(localSale({ id: 'local-1' }));
+      (sales as Record<string, unknown>)['prepareUnreconciled'] = vi.fn().mockResolvedValue({
+        ...localSale({ id: 'local-1' }),
+        unreconciledAt: null,
+        payload: { items: [] },
+      });
+
+      const hecho = service.discardSale('local-1', 'Venta de prueba');
+      await flushMicrotasks();
+      const request = http.expectOne(`${SALES_URL}/unreconciled`);
+      expect(request.request.body).toMatchObject({
+        localId: 'local-1',
+        reason: 'descartada: Venta de prueba',
+      });
+      request.flush({ data: {} });
+      await hecho;
+
+      expect(sales.discard).toHaveBeenCalledWith('local-1', { discardedBy: 'u1', reason: 'Venta de prueba' });
+      // El descarte no es una conciliación: la venta no se marca como tal.
+      expect(sales.markUnreconciled).not.toHaveBeenCalled();
+    });
+
+    it('el aviso al servidor es best-effort: sin red el descarte igual queda', async () => {
+      sales.discard.mockResolvedValue(localSale({ id: 'local-1' }));
+      (sales as Record<string, unknown>)['prepareUnreconciled'] = vi.fn().mockResolvedValue({
+        ...localSale({ id: 'local-1' }),
+        unreconciledAt: null,
+        payload: { items: [] },
+      });
+
+      const hecho = service.discardSale('local-1', 'Venta de prueba');
+      await flushMicrotasks();
+      http
+        .expectOne(`${SALES_URL}/unreconciled`)
+        .error(new ProgressEvent('error'), { status: 0, statusText: '' });
+
+      await expect(hecho).resolves.toBeUndefined();
+    });
+
+    it('si la caja lo rechaza (ya está en el servidor) el error llega al llamador', async () => {
+      sales.discard.mockRejectedValue(new Error('Ya está en el servidor; anúlala.'));
+
+      await expect(service.discardSale('local-1', 'Venta de prueba')).rejects.toThrow(
+        'Ya está en el servidor; anúlala.',
+      );
+      http.expectNone(`${SALES_URL}/unreconciled`);
+    });
   });
 });
 

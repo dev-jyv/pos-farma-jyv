@@ -413,6 +413,49 @@ function chunk<T>(items: T[], size: number): T[][] {
   return trozos;
 }
 
+/** Motivo de anulación o descarte (SPEC 62): de 5 a 300 caracteres. */
+export const VOID_REASON_MIN_LENGTH = 5;
+export const VOID_REASON_MAX_LENGTH = 300;
+
+/**
+ * Motivo que viaja con una anulación local hecha **antes** de pedir motivo: el
+ * backend exige `reason` y usa este mismo texto con un POS viejo, así el reporte
+ * de cancelaciones no distingue entre los dos caminos.
+ */
+export const LEGACY_VOID_REASON = 'Sin motivo (POS anterior)';
+
+/** Motivo recortado y acotado; `null` si no llega al mínimo. */
+export function normalizeVoidReason(reason: string | null | undefined): string | null {
+  const trimmed = (reason ?? '').trim();
+  return trimmed.length >= VOID_REASON_MIN_LENGTH ? trimmed.slice(0, VOID_REASON_MAX_LENGTH) : null;
+}
+
+/**
+ * Qué hacer con un fallo del `POST /sales/:id/void` remoto (SPEC 62):
+ *
+ * - `done`: ya estaba anulada allá (`ALREADY_VOIDED`, o el texto de un backend
+ *   sin código);
+ * - `rejected`: cualquier otro 4xx (`VOID_FORBIDDEN`, `HAS_RETURNS`,
+ *   `SESSION_FORBIDDEN`…): reintentar lo mismo no lo va a cambiar, se muestra en
+ *   "Rechazados" y espera a un admin;
+ * - `retry`: red, 5xx o `retryable`: sigue en cola sin ruido. 401/408/429 también:
+ *   hablan de la sesión o del tráfico, no de la venta.
+ */
+export function remoteVoidOutcome(failure: SyncFailure): 'done' | 'rejected' | 'retry' {
+  const action = syncActionFor(failure);
+  if (action === 'done' || (action === null && legacyAlreadyVoided(failure.message))) {
+    return 'done';
+  }
+  if (action === 'retry') {
+    return 'retry';
+  }
+  const status = failure.status;
+  if (status === null || status < 400 || status >= 500 || [401, 408, 429].includes(status)) {
+    return 'retry';
+  }
+  return 'rejected';
+}
+
 /** 4xx que describen un problema del contenido del lote, no de la ruta o el permiso. */
 const BULK_REJECTION_STATUSES: ReadonlySet<number> = new Set([400, 409, 413, 422]);
 
@@ -648,11 +691,19 @@ export class SaleService {
    * `remoteId` en SQLite, y con el criterio viejo la anulación quedaba solo en
    * local sin encolar el void remoto.
    */
-  void(sale: Sale): Observable<Sale> {
+  void(sale: Sale, reason: string): Observable<Sale> {
+    // Motivo obligatorio (SPEC 62): se guarda en la venta local y viaja con la
+    // anulación, en línea o diferida.
+    const motivo = normalizeVoidReason(reason);
+    if (!motivo) {
+      return throwError(
+        () => new Error(`Escribe el motivo de la anulación (mínimo ${VOID_REASON_MIN_LENGTH} caracteres).`),
+      );
+    }
     const voidedBy = this.auth.user()?.uid ?? '';
     const voidedByLabel = this.auth.user()?.email ?? undefined;
     if (!sale.remoteId) {
-      return defer(() => this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel)).pipe(
+      return defer(() => this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel, motivo)).pipe(
         switchMap((voided) =>
           voided ? of(voided) : throwError(() => new Error('Venta no encontrada.')),
         ),
@@ -663,9 +714,9 @@ export class SaleService {
       );
     }
     const remoteId = sale.remoteId;
-    return this.http.post<unknown>(`${this.apiUrl}/sales/${remoteId}/void`, {}).pipe(
+    return this.http.post<unknown>(`${this.apiUrl}/sales/${remoteId}/void`, { reason: motivo }).pipe(
       switchMap(() =>
-        from(this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel)).pipe(
+        from(this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel, motivo)).pipe(
           switchMap((voided) => {
             if (!voided) {
               return throwError(() => new Error('Venta no encontrada.'));
@@ -693,7 +744,7 @@ export class SaleService {
         if (getApiErrorStatus(error) !== 0) {
           throw error;
         }
-        return from(this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel)).pipe(
+        return from(this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel, motivo)).pipe(
           switchMap((voided) =>
             voided
               ? from(this.api().sales.markNeedsRemoteVoid(sale.id)).pipe(
@@ -713,9 +764,38 @@ export class SaleService {
     return defer(() => this.api().sales.listMovements(saleId));
   }
 
-  /** Descarta una venta rechazada por el servidor (decisión explícita del cajero). */
-  discardBlockedSale(queueId: string): void {
-    from(this.api().sales.discard(queueId)).subscribe(() => this.refreshPending());
+  /**
+   * Descarta una venta que nunca llegó al servidor (SPEC 62). Es lógico: la caja
+   * guarda quién, cuándo y por qué, y lo asienta en `SyncLog`. La SQLite rechaza
+   * la venta que ya está allá (`remoteId`) o que ya salió hacia allá
+   * (`pushAttempts`): el error llega con el texto para el cajero.
+   *
+   * Después, **best-effort**, deja rastro en el servidor como venta no conciliada
+   * con motivo `descartada: <razón>`: el admin ve que hubo un cobro que esta
+   * caja retiró. Sin red o con error, el rastro local basta.
+   */
+  async discardSale(localId: string, reason: string): Promise<void> {
+    const motivo = normalizeVoidReason(reason);
+    if (!motivo) {
+      throw new Error(`Escribe el motivo del descarte (mínimo ${VOID_REASON_MIN_LENGTH} caracteres).`);
+    }
+    const api = this.api();
+    const discarded = await api.sales.discard(localId, {
+      discardedBy: this.auth.user()?.uid ?? '',
+      reason: motivo,
+    });
+    this.refreshPending();
+    if (!discarded) {
+      return;
+    }
+    try {
+      const draft = await api.sales.prepareUnreconciled(localId);
+      if (draft) {
+        await firstValueFrom(this.postUnreconciled$(draft, `descartada: ${motivo}`, draft.payload));
+      }
+    } catch {
+      // Best-effort: el descarte ya quedó en la caja y en su bitácora.
+    }
   }
 
   /**
@@ -1091,7 +1171,8 @@ flushQueueAsync(): Promise<void> {
     if (!api) {
       return of(null);
     }
-    return from(api.sales.getPendingVoided(pushOwnerFilter(this.auth)))
+    // `contarIntentos`: este es el envío real (SPEC 62: ya no se puede descartar).
+    return from(api.sales.getPendingVoided({ ...pushOwnerFilter(this.auth), contarIntentos: true }))
       .pipe(
         catchError(() => of([])),
         switchMap((pending) => {
@@ -1114,29 +1195,34 @@ flushQueueAsync(): Promise<void> {
                   if (!result.ok) {
                     throw new SyncRejectionError(syncFailureFromResult(result));
                   }
-                  return result.sale;
+                  return result;
+                }),
+                // El alta funcionó: la venta **ya existe** allá. Se marca subida en
+                // el acto (SPEC 62): `markSynced` sobre una venta anulada guarda el
+                // `remoteId` y la deja `needsRemoteVoid`. Antes, si el `void` fallaba
+                // por red, se marcaba `pushError` sin `remoteId` y la venta quedaba
+                // bloqueada —y descartable— mientras el servidor la tenía activa.
+                switchMap((result) => {
+                  const created = result.sale;
+                  const review = syncReviewOf(created);
+                  return from(
+                    review
+                      ? api.sales.markSynced(item.id, created.id, created.folio, review)
+                      : api.sales.markSynced(item.id, created.id, created.folio),
+                  ).pipe(map(() => created));
                 }),
                 switchMap((created) =>
                   this.http
-                    .post<unknown>(`${this.apiUrl}/sales/${created.id}/void`, {
-                      ...(item.voidedAt ? { voidedAt: item.voidedAt } : {}),
-                      ...(item.voidedBy ? { voidedBy: item.voidedBy } : {}),
-                    })
+                    .post<unknown>(`${this.apiUrl}/sales/${created.id}/void`, this.voidBody(item))
                     .pipe(
-                      // `ALREADY_VOIDED`: un intento anterior ya la anuló allá.
-                      catchError((error: unknown) =>
-                        syncActionFor(syncFailureFromError(error)) === 'done'
-                          ? of(null)
-                          : throwError(() => error),
-                      ),
-                      switchMap(() =>
-                        from(api.sales.markSynced(item.id, created.id, created.folio)),
-                      ),
                       switchMap(() => from(api.sales.markRemoteVoided(item.id))),
+                      // Red/5xx: sigue `needsRemoteVoid`, sin `pushError`; 4xx:
+                      // además `voidError` visible. `ALREADY_VOIDED` la cierra.
+                      catchError((error: unknown) => this.handleRemoteVoidFailure$(item.id, error)),
                     ),
                 ),
-                // Un fallo deja la venta como estaba: se reintenta en el próximo
-                // sync. Crear sin anular queda cubierto por `needsRemoteVoid`.
+                // Solo fallos del **alta**: la venta sigue como estaba y se
+                // reintenta en el próximo sync.
                 catchError((error: unknown) => {
                   const failure = syncFailureFromError(error);
                   // Transitorio con código (SPEC 49): se queda como estaba, sin
@@ -1176,31 +1262,54 @@ flushQueueAsync(): Promise<void> {
           }
           const voids = pending.map((item) =>
             this.http
-              .post<unknown>(`${this.apiUrl}/sales/${item.remoteId}/void`, {
-                // Sin esto el backend sellaría la anulación con la hora del sync
-                // y a nombre de quien sincronizó, que puede ser otro turno.
-                ...(item.voidedAt ? { voidedAt: item.voidedAt } : {}),
-                ...(item.voidedBy ? { voidedBy: item.voidedBy } : {}),
-              })
+              // Sin `voidedAt`/`voidedBy` el backend sellaría la anulación con la
+              // hora del sync y a nombre de quien sincronizó (otro turno, quizá).
+              .post<unknown>(`${this.apiUrl}/sales/${item.remoteId}/void`, this.voidBody(item))
               .pipe(
                 switchMap(() => from(api.sales.markRemoteVoided(item.id))),
-                catchError((error: unknown) => {
-                  const failure = syncFailureFromError(error);
-                  const action = syncActionFor(failure);
-                  // Ya estaba anulada allá (`ALREADY_VOIDED`, o el texto de un
-                  // backend sin código): el objetivo se cumplió.
-                  if (action === 'done' || (action === null && legacyAlreadyVoided(failure.message))) {
-                    return from(api.sales.markRemoteVoided(item.id));
-                  }
-                  // Red / 5xx: se reintenta en el próximo sync.
-                  return of(undefined);
-                }),
+                catchError((error: unknown) => this.handleRemoteVoidFailure$(item.id, error)),
               ),
           );
           return forkJoin(voids);
         }),
         catchError(() => of(null)),
       );
+  }
+
+  /**
+   * Cuerpo del `POST /sales/:id/void` diferido: el motivo, el instante y el autor
+   * de **entonces**. Una anulación local anterior al motivo obligatorio viaja con
+   * el texto que el backend usa para un POS viejo (`LEGACY_VOID_REASON`).
+   */
+  private voidBody(item: {
+    voidedAt: string | null;
+    voidedBy: string | null;
+    voidReason?: string | null;
+  }): { reason: string; voidedAt?: string; voidedBy?: string } {
+    return {
+      reason: normalizeVoidReason(item.voidReason) ?? LEGACY_VOID_REASON,
+      ...(item.voidedAt ? { voidedAt: item.voidedAt } : {}),
+      ...(item.voidedBy ? { voidedBy: item.voidedBy } : {}),
+    };
+  }
+
+  /**
+   * Fallo de una anulación remota (SPEC 62), por código y no por texto:
+   * `ALREADY_VOIDED` cierra el pendiente; cualquier otro 4xx deja `voidError`
+   * visible en "Rechazados" (ya no se reintenta en silencio); red/5xx sigue en
+   * cola tal cual.
+   */
+  private handleRemoteVoidFailure$(localId: string, error: unknown): Observable<unknown> {
+    const api = this.api();
+    const failure = syncFailureFromError(error);
+    const outcome = remoteVoidOutcome(failure);
+    if (outcome === 'done') {
+      return from(api.sales.markRemoteVoided(localId));
+    }
+    if (outcome === 'rejected') {
+      return from(api.sales.markVoidFailed(localId, withSyncCode(failure.message, failure)));
+    }
+    return of(undefined);
   }
 
   private refreshPending(): void {

@@ -109,6 +109,13 @@
                 @if (sale.voidedBy) {
                   <span class="text-[11px] text-slate-500">{{ voidedByLabel(sale) }}</span>
                 }
+                @if (sale.voidReason) {
+                  <span class="text-[11px] text-slate-600" data-testid="void-reason">{{ sale.voidReason }}</span>
+                }
+                @if (sale.voidError) {
+                  <!-- SPEC 62: aquí está anulada; allá sigue activa hasta que un admin la reintente. -->
+                  <p-tag severity="warn" [value]="'history.voidRejected' | translate" />
+                }
               } @else {
                 <p-tag severity="success" [value]="'history.completed' | translate" />
               }
@@ -203,6 +210,9 @@
                 {{ 'history.movement.' + movement.type | translate }}
               </span>
               <span class="text-slate-600">{{ movementAuthor(movement) }}</span>
+              @if (movement.reason) {
+                <span class="truncate text-slate-500">· {{ movement.reason }}</span>
+              }
               <span class="ml-auto tabular-nums text-slate-500">
                 {{ movement.occurredAt | date: 'dd/MM HH:mm' }}
               </span>
@@ -236,3 +246,22 @@
     </div>
   </ng-template>
 </p-dialog>
+
+<!-- Montado solo al anular: las opciones se traducen al abrir, con el idioma ya cargado. -->
+@if (voidTarget(); as target) {
+  <app-reason-dialog
+    [visible]="true"
+    [header]="('history.voidDialog.title' | translate) + ' ' + target.folio"
+    [description]="'history.voidDialog.description' | translate"
+    [quickReasons]="voidReasons()"
+    [otherOption]="voidOtherOption()"
+    [reasonLabel]="'history.voidDialog.reasonLabel' | translate"
+    [placeholder]="'history.voidDialog.placeholder' | translate"
+    [hint]="'history.voidDialog.hint' | translate"
+    [confirmLabel]="'history.void' | translate"
+    [cancelLabel]="'history.voidDialog.cancel' | translate"
+    [busy]="voiding() !== null"
+    (confirmed)="confirmVoid($event)"
+    (dismissed)="cancelVoid()"
+  />
+}

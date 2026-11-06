@@ -141,6 +141,14 @@ const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => Blo
       'administrador: decide si se respeta el precio cobrado.',
     recommended: 'avisar-admin',
   }),
+  'anulacion-rechazada': () => ({
+    title: 'El servidor rechazó la anulación',
+    explanation:
+      'La venta está anulada en esta caja, pero en el servidor sigue activa. Pide a un ' +
+      'administrador que entre en esta caja y pulse Reintentar: con su sesión la anulación se ' +
+      'vuelve a enviar. No la cobres de nuevo.',
+    recommended: 'avisar-admin',
+  }),
   desconocido: (_dep, record) => ({
     title: 'Motivo no reconocido',
     explanation:
@@ -168,6 +176,11 @@ const POR_CODIGO_DE_SERVIDOR: Partial<Record<SyncErrorCode, BlockedCode>> = {
 
 /** Causa del panel para un registro: primero el código del servidor, luego el diagnóstico por texto. */
 export function blockedCodeOf(record: BlockedSyncRecord): BlockedCode {
+  // Una anulación rechazada se explica igual cualquiera que sea el código
+  // (`VOID_FORBIDDEN`, `SESSION_FORBIDDEN`…): el remedio siempre es el admin.
+  if (record.kind === 'saleVoid') {
+    return 'anulacion-rechazada';
+  }
   const syncCode = record.diagnosis?.syncCode;
   const porServidor = isSyncErrorCode(syncCode) ? POR_CODIGO_DE_SERVIDOR[syncCode] : undefined;
   return porServidor ?? record.diagnosis?.code ?? 'desconocido';

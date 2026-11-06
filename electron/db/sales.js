@@ -16,6 +16,19 @@ const syncLog = require('./sync-log');
  */
 const LEGACY_WAIT_MESSAGE = 'espera a que su turno o alguno de sus productos';
 
+/** Motivo de una anulación o de un descarte (SPEC 62): de 5 a 300 caracteres. */
+const REASON_MIN_LENGTH = 5;
+const REASON_MAX_LENGTH = 300;
+
+/** Motivo recortado y acotado; `null` si no hay texto. */
+function normalizeReason(reason) {
+  if (typeof reason !== 'string') {
+    return null;
+  }
+  const trimmed = reason.trim();
+  return trimmed ? trimmed.slice(0, REASON_MAX_LENGTH) : null;
+}
+
 /**
  * Partidas que mueven inventario. **La regla de "los servicios no tocan stock"
  * vive solo aquí**: `createLocal`, `voidLocal`, `discard` y
@@ -124,6 +137,11 @@ function toSaleDto(row) {
     unreconciledReason: row.unreconciledReason ?? null,
     voidedAt: row.voidedAt,
     voidedBy: row.voidedBy ?? null,
+    voidReason: row.voidReason ?? null,
+    voidError: row.voidError ?? null,
+    discardedAt: row.discardedAt ?? null,
+    discardedBy: row.discardedBy ?? null,
+    discardReason: row.discardReason ?? null,
     createdAt: row.createdAt,
   };
 }
@@ -345,6 +363,9 @@ async function voidLocal(prisma, localId, voidedBy, voidedByLabel, reason) {
       data: {
         voidedAt,
         voidedBy,
+        // Motivo (SPEC 62): viaja después en el `POST /sales/:id/void`, también
+        // en la anulación offline y en la de dos pasos.
+        voidReason: normalizeReason(reason),
         // Si ya existe en el servidor, el void remoto puede fallar (sin red) o
         // ni intentarse (lista con `pendingPush`/`remoteId` viejos). Encolar
         // siempre el cierre remoto: el éxito online lo limpia con
@@ -374,7 +395,15 @@ async function voidLocal(prisma, localId, voidedBy, voidedByLabel, reason) {
       where: { id: localId },
       data: {
         movements: {
-          create: [{ type: 'void', userId: voidedBy, userLabel: voidedByLabel ?? null, reason: reason ?? null, occurredAt: voidedAt }],
+          create: [
+            {
+              type: 'void',
+              userId: voidedBy,
+              userLabel: voidedByLabel ?? null,
+              reason: normalizeReason(reason),
+              occurredAt: voidedAt,
+            },
+          ],
         },
       },
       include: { items: true },
@@ -384,7 +413,9 @@ async function voidLocal(prisma, localId, voidedBy, voidedByLabel, reason) {
 }
 
 async function list(prisma, filters = {}) {
-  const where = {};
+  // Una venta descartada (SPEC 62) ya no existe para la caja: la fila queda solo
+  // como rastro. Antes se borraba; el historial tiene que verla igual que antes.
+  const where = { discardedAt: null };
   if (filters.cashSessionId) {
     where.cashSessionId = filters.cashSessionId;
   }
@@ -556,6 +587,25 @@ async function listBlocked(prisma, { ownerUid } = {}) {
       // muestra y decide si ofrece "Arreglar". Vacío en rechazos del servidor
       // que no dependen de nada local (stock, llave reciclada…).
       blockers: await blockersOfRow(prisma, row),
+    });
+  }
+  // Anulaciones que el servidor rechazó (SPEC 62): la venta ya subió y aquí está
+  // anulada, pero allá sigue activa. No se reintentan solas: un admin la anula
+  // desde su sesión con "Reintentar" (`clearVoidError`).
+  const anulaciones = await prisma.sale.findMany({
+    where: { voidError: { not: null }, ...(ownerUid ? { cashierId: ownerUid } : {}) },
+    orderBy: { createdAt: 'asc' },
+  });
+  for (const row of anulaciones) {
+    registros.push({
+      kind: 'saleVoid',
+      id: row.id,
+      label: `Anulación de ${row.remoteFolio ?? row.folio ?? row.id}`,
+      detail: `$${Number(row.total ?? 0).toFixed(2)}`,
+      occurredAt: row.voidedAt ?? row.createdAt,
+      reason: row.voidError,
+      diagnosis: { code: 'anulacion-rechazada' },
+      blockers: [],
     });
   }
   return registros;
@@ -806,6 +856,7 @@ async function getPendingPush(prisma, { ownerUid, contarIntentos = false } = {})
     where: {
       pendingPush: true,
       pushError: null,
+      discardedAt: null,
       NOT: { remoteId: null, voidedAt: { not: null } },
       ...(ownerUid ? { cashierId: ownerUid } : {}),
     },
@@ -872,8 +923,13 @@ async function getPendingPush(prisma, { ownerUid, contarIntentos = false } = {})
       }
       continue;
     }
-    if (contarIntentos && row.payloadResolveAttempts) {
-      await prisma.sale.update({ where: { id: row.id }, data: { payloadResolveAttempts: 0 } });
+    if (contarIntentos) {
+      // Sale hacia el servidor (SPEC 62): desde aquí la venta **pudo** llegar,
+      // aunque se pierda la respuesta, y ya no se puede descartar.
+      await prisma.sale.update({
+        where: { id: row.id },
+        data: { payloadResolveAttempts: 0, pushAttempts: { increment: 1 } },
+      });
     }
     pending.push({ ...toSaleDto(row), payload: conAutor(payload, row.cashierId) });
   }
@@ -885,14 +941,19 @@ async function getPendingPush(prisma, { ownerUid, contarIntentos = false } = {})
  * en dos pasos, para que el movimiento exista completo: la venta, su anulación,
  * el contra-asiento del libro de control y la auditoría. Sin esto, el backend no
  * se entera de que esa venta ocurrió.
+ *
+ * `contarIntentos`: **solo el envío real** lo pasa en `true` (SPEC 62): marca que
+ * la venta salió hacia el servidor (`pushAttempts`) y ya no se puede descartar.
+ * El conteo de pendientes (`SyncScheduler.countPending`) lee sin contar.
  */
-async function getPendingVoided(prisma, { ownerUid } = {}) {
+async function getPendingVoided(prisma, { ownerUid, contarIntentos = false } = {}) {
   const rows = await prisma.sale.findMany({
     where: {
       pendingPush: true,
       pushError: null,
       remoteId: null,
       voidedAt: { not: null },
+      discardedAt: null,
       ...(ownerUid ? { cashierId: ownerUid } : {}),
     },
     include: { items: true },
@@ -911,12 +972,21 @@ async function getPendingVoided(prisma, { ownerUid } = {}) {
     if (!payload) {
       continue;
     }
+    if (contarIntentos) {
+      // Sale hacia el servidor: desde aquí pudo llegar y ya no se puede descartar.
+      await prisma.sale.update({ where: { id: row.id }, data: { pushAttempts: { increment: 1 } } });
+    }
     pending.push({
       ...toSaleDto(row),
       // También sube por `/sales/bulk` (se crea y luego se anula): mismo autor.
-      payload: conAutor(payload, row.cashierId),
+      // El motivo viaja también en el alta (SPEC 62); el backend lo usa en el
+      // `POST /sales/:id/void` del segundo paso y lo ignora al crear.
+      payload: row.voidReason
+        ? { ...conAutor(payload, row.cashierId), voidReason: row.voidReason }
+        : conAutor(payload, row.cashierId),
       voidedAt: row.voidedAt ? row.voidedAt.toISOString() : null,
       voidedBy: row.voidedBy ?? null,
+      voidReason: row.voidReason ?? null,
     });
   }
   return pending;
@@ -1040,18 +1110,40 @@ async function getNeedingRemoteVoid(prisma, { ownerUid } = {}) {
     where: {
       needsRemoteVoid: true,
       remoteId: { not: null },
+      // Rechazada con un 4xx (SPEC 62): espera a un admin, no se reintenta sola.
+      voidError: null,
       ...(ownerUid ? { cashierId: ownerUid } : {}),
     },
-    // El instante y el cajero de **entonces**: el backend los usa para no sellar
-    // la anulación con la hora del sync ni a nombre de quien sincronizó.
-    select: { id: true, remoteId: true, voidedAt: true, voidedBy: true },
+    // El instante, el cajero y el motivo de **entonces**: el backend los usa
+    // para no sellar la anulación con la hora del sync ni a nombre de quien
+    // sincronizó.
+    select: { id: true, remoteId: true, voidedAt: true, voidedBy: true, voidReason: true },
   });
   return rows.map((row) => ({
     id: row.id,
     remoteId: row.remoteId,
     voidedAt: row.voidedAt ? row.voidedAt.toISOString() : null,
     voidedBy: row.voidedBy ?? null,
+    voidReason: row.voidReason ?? null,
   }));
+}
+
+/**
+ * El servidor rechazó la anulación remota con un 4xx (SPEC 62): `VOID_FORBIDDEN`,
+ * `HAS_RETURNS`, `SESSION_FORBIDDEN`… Reintentar lo mismo no la va a aceptar, así
+ * que deja de intentarse en silencio y aparece en "Rechazados". Sigue marcada
+ * `needsRemoteVoid`: el "Reintentar" de un admin solo limpia el error.
+ */
+async function markVoidFailed(prisma, localId, message) {
+  await prisma.sale.update({
+    where: { id: localId },
+    data: { voidError: String(message ?? 'El servidor rechazó la anulación.').slice(0, 1000) },
+  });
+}
+
+/** "Reintentar" del panel: la anulación remota vuelve a la cola. */
+async function clearVoidError(prisma, localId) {
+  await prisma.sale.update({ where: { id: localId }, data: { voidError: null } });
 }
 
 /**
@@ -1088,7 +1180,7 @@ async function markNeedsRemoteVoid(prisma, localId) {
 }
 
 async function markRemoteVoided(prisma, localId) {
-  await prisma.sale.update({ where: { id: localId }, data: { needsRemoteVoid: false } });
+  await prisma.sale.update({ where: { id: localId }, data: { needsRemoteVoid: false, voidError: null } });
 }
 
 /**
@@ -1121,33 +1213,85 @@ async function clearPushError(prisma, localId) {
 }
 
 /**
- * Descarta una venta que el servidor rechazó (nunca sincronizó): repone stock y borra.
- * Una venta que ya subió (`remoteId`) no se descarta: se anula.
+ * Descarta una venta que **nunca llegó** al servidor (SPEC 62). Es lógico: la fila
+ * queda con `discardedAt`/`discardedBy`/`discardReason` y sale de la cola, del
+ * historial y del corte; el stock se repone como antes. Deja renglón en `SyncLog`.
+ *
+ * Se rechaza si la venta tiene `remoteId` (existe allá: se anula, no se descarta)
+ * o si ya salió alguna vez hacia el servidor (`pushAttempts > 0`): pudo llegar
+ * aunque se perdiera la respuesta, y borrarla aquí dejaría las dos bases
+ * discrepando. El motivo es obligatorio.
  *
  * El stock solo se repone si la venta seguía viva: una anulada ya lo repuso en
- * `voidLocal`, y reponerlo otra vez dejaba la caja con piezas de más. El borrado
- * reclama la fila (`deleteMany`), así que dos descartes simultáneos no reponen dos veces.
+ * `voidLocal`. El descarte reclama la fila (`updateMany` con `discardedAt: null`),
+ * así que dos descartes simultáneos no reponen dos veces.
  */
-async function discard(prisma, localId) {
-  await prisma.$transaction(async (tx) => {
+async function discard(prisma, localId, { discardedBy, reason } = {}) {
+  const motivo = normalizeReason(reason);
+  if (!motivo || motivo.length < REASON_MIN_LENGTH) {
+    throw new Error(`El motivo del descarte es obligatorio (mínimo ${REASON_MIN_LENGTH} caracteres).`);
+  }
+  const discardedAt = new Date();
+  const resultado = await prisma.$transaction(async (tx) => {
     const sale = await tx.sale.findUnique({ where: { id: localId }, include: { items: true } });
-    // Con `remoteId` el servidor ya la tiene viva: borrarla aquí dejaría las dos
-    // bases discrepando (venta cobrada allá, sin rastro acá). Se anula, no se descarta.
-    if (!sale || sale.remoteId) {
-      return;
+    if (!sale || sale.discardedAt) {
+      return null;
     }
-    // `remoteId: null` en el borrado: si la venta sube entre la lectura y aquí, no se toca.
-    const deleted = await tx.sale.deleteMany({ where: { id: localId, remoteId: null } });
-    if (deleted.count === 0 || sale.voidedAt) {
-      return;
+    if (sale.remoteId) {
+      throw new Error('Ya está en el servidor; anúlala.');
     }
-    for (const item of productItemsOf(sale.items)) {
-      await tx.product.updateMany({
-        where: { id: item.productId },
-        data: { totalStock: { increment: item.quantity } },
-      });
+    if ((sale.pushAttempts ?? 0) > 0) {
+      throw new Error(
+        'Esta venta ya se envió al servidor y pudo registrarse allá: no se puede descartar. ' +
+          'Reinténtala o mándala a conciliación.',
+      );
     }
+    // `remoteId: null` y `pushAttempts: 0`: si la venta sale entre la lectura y
+    // aquí, no se toca.
+    const claimed = await tx.sale.updateMany({
+      where: { id: localId, remoteId: null, discardedAt: null, pushAttempts: 0 },
+      data: {
+        discardedAt,
+        discardedBy: discardedBy ?? null,
+        discardReason: motivo,
+        pendingPush: false,
+        pushError: null,
+        needsRemoteVoid: false,
+      },
+    });
+    if (claimed.count === 0) {
+      return null;
+    }
+    if (!sale.voidedAt) {
+      for (const item of productItemsOf(sale.items)) {
+        await tx.product.updateMany({
+          where: { id: item.productId },
+          data: { totalStock: { increment: item.quantity } },
+        });
+      }
+    }
+    return sale;
   });
+  if (resultado) {
+    await syncLog.appendSafe(prisma, {
+      level: 'warn',
+      entity: 'sale',
+      ref: localId,
+      message:
+        `Venta ${resultado.folio} ($${Number(resultado.total ?? 0).toFixed(2)}) descartada` +
+        `${discardedBy ? ` por ${discardedBy}` : ''}: ${motivo}`,
+    });
+  }
+  return resultado
+    ? toSaleDto({
+        ...resultado,
+        discardedAt,
+        discardedBy: discardedBy ?? null,
+        discardReason: motivo,
+        pendingPush: false,
+        pushError: null,
+      })
+    : null;
 }
 
 module.exports = {
@@ -1171,5 +1315,8 @@ module.exports = {
   listMovements,
   markNeedsRemoteVoid,
   markRemoteVoided,
+  markVoidFailed,
+  clearVoidError,
   requeueOrphanRemoteVoids,
+  REASON_MIN_LENGTH,
 };

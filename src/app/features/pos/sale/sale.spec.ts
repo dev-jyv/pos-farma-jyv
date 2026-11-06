@@ -90,7 +90,7 @@ describe('Sale', () => {
     pendingSales: ReturnType<typeof signal<unknown[]>>;
     void: ReturnType<typeof vi.fn>;
     flushQueue: ReturnType<typeof vi.fn>;
-    discardBlockedSale: ReturnType<typeof vi.fn>;
+    discardSale: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -116,7 +116,7 @@ describe('Sale', () => {
       pendingSales: signal<unknown[]>([]),
       void: vi.fn(() => of({ id: 'v1', folio: 'V-1' } as SaleModel)),
       flushQueue: vi.fn(),
-      discardBlockedSale: vi.fn(),
+      discardSale: vi.fn(() => Promise.resolve()),
     };
 
     await build();
@@ -674,7 +674,7 @@ describe('Sale', () => {
       component.onSaleCompleted({ ...sale, id: 'local-1', pendingPush: true } as SaleModel);
 
       expect(component.lastSaleQueueId()).toBe('local-1');
-      component.voidLastSale();
+      component.voidLastSale('Cliente desistió');
       expect(saleServiceMock.void).not.toHaveBeenCalled();
     });
 
@@ -682,7 +682,7 @@ describe('Sale', () => {
       saleServiceMock.void = vi.fn(() => throwError(() => new Error('Solo un administrador puede anular')));
       component.onSaleCompleted(sale);
 
-      component.voidLastSale();
+      component.voidLastSale('Cliente desistió');
 
       expect(notifyError).toHaveBeenCalledWith('Solo un administrador puede anular');
     });
@@ -1239,28 +1239,40 @@ describe('Sale', () => {
 
       component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
 
-      expect(saleServiceMock.discardBlockedSale).not.toHaveBeenCalled();
+      expect(component.discardPendingTarget()).toBeNull();
+      expect(saleServiceMock.discardSale).not.toHaveBeenCalled();
     });
 
-    it('pide confirmación antes de borrar: puede ser una venta ya cobrada', () => {
+    it('pide el motivo antes de borrar: puede ser una venta ya cobrada (SPEC 62)', () => {
       isAdmin.set(true);
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
       component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
 
-      expect(confirm).toHaveBeenCalled();
-      expect(saleServiceMock.discardBlockedSale).not.toHaveBeenCalled();
-      confirm.mockRestore();
+      expect(component.discardPendingTarget()?.queueId).toBe('v1');
+      expect(saleServiceMock.discardSale).not.toHaveBeenCalled();
+      component.cancelDiscardPending();
+      expect(component.discardPendingTarget()).toBeNull();
     });
 
-    it('confirmada, la descarta por el id local', () => {
+    it('con motivo, la descarta por el id local', async () => {
       isAdmin.set(true);
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
+      await component.confirmDiscardPending('Venta de prueba');
 
-      expect(saleServiceMock.discardBlockedSale).toHaveBeenCalledWith('v1');
-      confirm.mockRestore();
+      expect(saleServiceMock.discardSale).toHaveBeenCalledWith('v1', 'Venta de prueba');
+      expect(component.discardPendingTarget()).toBeNull();
+    });
+
+    it('si la caja la rechaza (ya salió al servidor) avisa y no la quita', async () => {
+      isAdmin.set(true);
+      saleServiceMock.discardSale.mockRejectedValueOnce(new Error('Ya está en el servidor; anúlala.'));
+
+      component.discardPendingSale({ queueId: 'v1', folioHint: '1 art. · $20.00' });
+      await component.confirmDiscardPending('Venta de prueba');
+
+      expect(notifyError).toHaveBeenCalledWith('Ya está en el servidor; anúlala.');
+      expect(component.discardPendingTarget()?.queueId).toBe('v1');
     });
   });
 

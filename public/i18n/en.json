@@ -157,6 +157,21 @@
       "stock": "Review: stock shortfall",
       "late": "Review: charged after shift close",
       "catalog": "Review: inactive product"
+    },
+    "voidRejected": "Void rejected by the server",
+    "voidDialog": {
+      "title": "Void sale",
+      "description": "Stock is restored and the sale is voided on the server too. The reason is logged.",
+      "reasonLabel": "Void reason",
+      "placeholder": "Type the reason or add a detail…",
+      "hint": "Required, at least 5 characters.",
+      "cancel": "Cancel",
+      "options": {
+        "typo": "Entry error",
+        "desisted": "Customer changed their mind",
+        "wrongProduct": "Wrong product",
+        "other": "Other"
+      }
     }
   },
   "payment": {
