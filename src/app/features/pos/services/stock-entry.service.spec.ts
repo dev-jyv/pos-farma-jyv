@@ -196,6 +196,82 @@ describe('StockEntryService', () => {
   });
 });
 
+describe('StockEntryService — autor de las entradas (SPEC 54)', () => {
+  let service: StockEntryService;
+  let http: HttpTestingController;
+  let catalog: {
+    getPendingStockEntries: ReturnType<typeof vi.fn>;
+    markStockEntrySynced: ReturnType<typeof vi.fn>;
+    markStockEntryPushFailed: ReturnType<typeof vi.fn>;
+  };
+  let getDeviceInfo: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    catalog = {
+      getPendingStockEntries: vi.fn().mockResolvedValue([
+        { id: 'b-1', payload: { invoiceId: 'inv-1', lotNumber: 'L-1', quantity: 5, productId: 'p1' } },
+      ]),
+      markStockEntrySynced: vi.fn().mockResolvedValue(undefined),
+      markStockEntryPushFailed: vi.fn().mockResolvedValue(undefined),
+    };
+    getDeviceInfo = vi.fn().mockResolvedValue({ id: 'aa:bb:cc:dd:ee:ff', hostname: 'caja-1' });
+    window.electronAPI = { getDeviceInfo, catalog } as unknown as Window['electronAPI'];
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    service = TestBed.inject(StockEntryService);
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    http.verify();
+    vi.useRealTimers();
+  });
+
+  async function enviar(): Promise<{ body: Record<string, unknown> | null; responder: (status: number, body: object, headers?: Record<string, string>) => Promise<void> }> {
+    const done = service.flushQueueAsync();
+    await flushMicrotasks();
+    const pendientes = http.match(BASE);
+    if (!pendientes.length) {
+      await done;
+      return { body: null, responder: async () => undefined };
+    }
+    const [request] = pendientes;
+    return {
+      body: request.request.body as Record<string, unknown>,
+      responder: async (status, body, headers) => {
+        request.flush(body, { status, statusText: 'x', headers });
+        await done;
+      },
+    };
+  }
+
+  it('cada entrada lleva el deviceId del equipo, con la llave estable de siempre', async () => {
+    const { body, responder } = await enviar();
+
+    expect(body).toMatchObject({ deviceId: 'aa:bb:cc:dd:ee:ff', idempotencyKey: 'b-1', productId: 'p1' });
+    await responder(201, { data: { product: { id: 'p1' }, stock: 5 } });
+    expect(catalog.markStockEntrySynced).toHaveBeenCalledWith('b-1', 'p1');
+  });
+
+  it('el reenvío de otro cajero desde el mismo equipo manda la misma llave y el mismo deviceId', async () => {
+    const primero = await enviar();
+    await primero.responder(503, { error: { message: 'Unavailable' } });
+    const segundo = await enviar();
+
+    expect(segundo.body).toMatchObject({ deviceId: primero.body!['deviceId'], idempotencyKey: 'b-1' });
+    await segundo.responder(201, { data: { product: { id: 'p1' }, stock: 5 } });
+    expect(getDeviceInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it('preload viejo sin getDeviceInfo: la entrada sale sin deviceId, como antes', async () => {
+    (window.electronAPI as unknown as { getDeviceInfo?: unknown }).getDeviceInfo = undefined;
+    const { body, responder } = await enviar();
+
+    expect(body).not.toHaveProperty('deviceId');
+    await responder(201, { data: { product: { id: 'p1' }, stock: 5 } });
+  });
+});
+
 async function flushMicrotasks(): Promise<void> {
   for (let i = 0; i < 8; i += 1) {
     await Promise.resolve();

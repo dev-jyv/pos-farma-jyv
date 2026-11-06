@@ -192,15 +192,45 @@ flushQueueAsync(): Promise<void> {
     return propia;
   }
 
+  /**
+   * Id de este equipo (`get-device-info`, el mismo que usa el diagnóstico
+   * remoto). Se manda en cada entrada (SPEC 54): el backend arma la llave de
+   * idempotencia con él (`<deviceId>:<key>`) y no con quien sincroniza, así que
+   * una entrada que un cajero empezó y otro reintenta no se aplica dos veces.
+   * Se pide una vez; si falla (preload viejo) la entrada va sin él, como antes.
+   */
+  private deviceIdPromise: Promise<string | null> | null = null;
+
+  private deviceId(): Promise<string | null> {
+    if (!this.deviceIdPromise) {
+      this.deviceIdPromise = Promise.resolve()
+        .then(() => window.electronAPI?.getDeviceInfo?.())
+        .then((info) => {
+          const id = (info as { id?: unknown } | null | undefined)?.id;
+          return typeof id === 'string' && id.trim() ? id.trim() : null;
+        })
+        .catch(() => null)
+        .then((id) => {
+          // Sin id no se guarda la respuesta: el siguiente envío lo vuelve a pedir.
+          if (!id) {
+            this.deviceIdPromise = null;
+          }
+          return id;
+        });
+    }
+    return this.deviceIdPromise;
+  }
+
   private flush$(): Observable<unknown> {
     this.flushing = true;
-    return from(this.api().getPendingStockEntries())
+    return from(Promise.all([this.api().getPendingStockEntries(), this.deviceId()]))
       .pipe(
-        concatMap((pending) => from(pending)),
-        concatMap((item) =>
+        concatMap(([pending, deviceId]) => from(pending.map((item) => ({ item, deviceId })))),
+        concatMap(({ item, deviceId }) =>
           this.http
             .post<unknown>(`${this.apiUrl}/stock-entries`, {
               ...(item.payload as Record<string, unknown>),
+              ...(deviceId ? { deviceId } : {}),
               /**
                * Llave estable por entrada: el id local, que no cambia entre
                * reintentos. Sin ella, un alta que sí se aplicó pero cuya
