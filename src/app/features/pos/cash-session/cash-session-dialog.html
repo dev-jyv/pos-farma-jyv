@@ -58,6 +58,11 @@
       </div>
     </div>
   } @else if (mode() === 'open') {
+    @if (clockBlocked()) {
+      <div data-testid="cut-clock-blocked" class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+        {{ 'cashCut.clockBlockedOpen' | translate: { minutes: clockSkewMinutes(), serverTime: serverTimeLabel() } }}
+      </div>
+    }
     <!--
       SPEC 63: el fondo heredado es referencia, no el fondo del turno. El cajero
       cuenta el cajón (campo vacío, obligatorio) y, si no coincide, explica la
@@ -287,6 +292,11 @@
       }
 
       @if (mode() === 'close') {
+        @if (clockBlocked()) {
+          <div data-testid="cut-clock-blocked" class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+            {{ 'cashCut.clockBlockedClose' | translate: { minutes: clockSkewMinutes(), serverTime: serverTimeLabel() } }}
+          </div>
+        }
         @if (!confirmingDifference()) {
           <label for="countedCash" class="mb-1.5 block text-sm font-medium text-slate-700">{{ 'cashCut.countedCash' | translate }}</label>
           <p-inputnumber
@@ -370,7 +380,7 @@
             [label]="'cashCut.close' | translate"
             styleClass="flex-[1.4]"
             [loading]="submitting()"
-            [disabled]="!summaryReady()"
+            [disabled]="!summaryReady() || clockBlocked()"
             (onClick)="requestClose()"
           />
         } @else {
@@ -387,6 +397,7 @@
             severity="warn"
             styleClass="flex-[1.4]"
             [loading]="submitting()"
+            [disabled]="clockBlocked()"
             (onClick)="confirmClose()"
           />
         }

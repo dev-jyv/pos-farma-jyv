@@ -241,7 +241,9 @@
   "shell": {
     "banner": {
       "offline": "Sin conexión a internet — las ventas se guardarán y sincronizarán al reconectar",
-      "apiDown": "El servidor no responde — operando en modo degradado"
+      "apiDown": "El servidor no responde — operando en modo degradado",
+      "clockSkew": "El reloj de esta caja está desfasado {{minutes}} min",
+      "clockUnverified": "Reloj sin verificar"
     }
   },
   "reports": {
@@ -474,7 +476,9 @@
     "openingCountedNoClose": "Este equipo no tiene cierres previos: captura el efectivo con el que abres.",
     "openingDifference": "Diferencia contra el cierre anterior",
     "openingNote": "Nota de la diferencia",
-    "openingNoteHint": "El contado no coincide con lo que dejó el turno anterior. Explica la diferencia: quedará registrada y no se cargará a tu corte."
+    "openingNoteHint": "El contado no coincide con lo que dejó el turno anterior. Explica la diferencia: quedará registrada y no se cargará a tu corte.",
+    "clockBlockedOpen": "El reloj de esta caja está desfasado {{minutes}} min. Corrige la fecha y hora del equipo antes de abrir el turno (hora del servidor: {{serverTime}}).",
+    "clockBlockedClose": "El reloj de esta caja está desfasado {{minutes}} min. Corrige la fecha y hora del equipo antes de cerrar el turno (hora del servidor: {{serverTime}})."
   },
   "checkout": {
     "activatePdv": "Activar PDV"

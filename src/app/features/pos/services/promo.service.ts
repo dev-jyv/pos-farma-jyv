@@ -1,5 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { Injectable, computed, signal } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
 
 import {
   CartLine,
@@ -17,6 +17,7 @@ import {
 } from '../../../shared/utils/promotions';
 import { PROMOTIONS_SYNCED_EVENT } from '../../../core/sync/sync-events';
 import { getApiErrorMessage } from '../../../core/api/api.utils';
+import { ClockSkewService } from '../../../core/time/clock-skew.service';
 
 /** Mismo texto que `badRequest(...)` en `backend-farma-jyv` (`sales.service.ts`). */
 const CLOSED_PROMOTION_PATTERN = /La promoción "(.+)" no está vigente/;
@@ -67,6 +68,8 @@ function stepHorizon(rule: PromotionRule): number {
  */
 @Injectable({ providedIn: 'root' })
 export class PromoService {
+  /** Hora corregida contra el servidor (SPEC 65): un reloj atrasado no aplica promos vencidas. */
+  private readonly clock = inject(ClockSkewService);
   private readonly promotions = signal<PromotionDto[]>([]);
   /** Cambia cada vez que llegan promociones: el ticket abierto se recalcula con ella. */
   readonly version = computed(() => this.promotions());
@@ -236,7 +239,7 @@ export class PromoService {
 
   private candidatesFor(product: Product): PromotionDto[] {
     const remoteId = product.remoteId ?? product.id;
-    const now = Date.now();
+    const now = this.clock.now();
     return this.promotions().filter(
       (promotion) =>
         promotion.productIds.includes(remoteId) &&

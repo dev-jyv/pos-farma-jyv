@@ -24,6 +24,7 @@ import { roundMoney } from '../../../shared/utils/money';
 import { CashSessionService } from '../services/cash-session.service';
 import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
 import { TicketPrintService } from '../ticket/ticket-print.service';
+import { ClockSkewService } from '../../../core/time/clock-skew.service';
 
 /**
  * Turno de caja — local-first: abrir/cerrar y ver el efectivo esperado no
@@ -51,6 +52,19 @@ export class CashSessionDialog {
   private readonly notifications = inject(NotificationService);
   private readonly ticketPrint = inject(TicketPrintService);
   private readonly translate = inject(TranslateService);
+  private readonly clock = inject(ClockSkewService);
+
+  /**
+   * Reloj desfasado más de 2 h contra el servidor (SPEC 65): ni se abre ni se
+   * cierra turno hasta corregirlo. La apertura y el corte fechan el turno, y la
+   * expiración del turno se decide con esa hora.
+   */
+  readonly clockBlocked = this.clock.blocked;
+  readonly clockSkewMinutes = this.clock.skewMinutes;
+  /** Hora del servidor (CDMX) para el mensaje; se recalcula al pintar. */
+  serverTimeLabel(): string {
+    return this.clock.serverTimeLabel();
+  }
 
   readonly visible = input(false);
   readonly session = input<CashSession | null>(null);
@@ -138,6 +152,7 @@ export class CashSessionDialog {
    */
   readonly canOpen = computed(
     () =>
+      !this.clockBlocked() &&
       !this.cashOnHandLoading() &&
       !this.cashOnHandError() &&
       this.openingCounted() !== null &&
@@ -344,7 +359,7 @@ export class CashSessionDialog {
     // El doble clic del mostrador llega en el mismo tick, antes de que el
     // `[loading]` del botón alcance a deshabilitarlo: sin este candado se
     // escribían DOS cierres del mismo turno (y dos cortes) en SQLite.
-    if (this.submitting() || !this.summaryReady()) {
+    if (this.submitting() || !this.summaryReady() || this.clockBlocked()) {
       return;
     }
     if (Math.abs(this.difference()) < 0.01) {
@@ -363,7 +378,7 @@ export class CashSessionDialog {
     const user = this.authService.user();
     // Mismo candado que `requestClose()`: a este método también se llega desde
     // el botón "cerrar de todos modos" del paso de confirmación.
-    if (!session || !user || this.submitting()) {
+    if (!session || !user || this.submitting() || this.clockBlocked()) {
       return;
     }
     this.confirmingDifference.set(false);

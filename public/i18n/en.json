@@ -40,7 +40,9 @@
   "shell": {
     "banner": {
       "offline": "No internet connection — sales will be saved and synced on reconnect",
-      "apiDown": "The server is not responding — running in degraded mode"
+      "apiDown": "The server is not responding — running in degraded mode",
+      "clockSkew": "This register's clock is off by {{minutes}} min",
+      "clockUnverified": "Clock not verified"
     }
   },
   "reports": {
@@ -273,7 +275,9 @@
     "openingCountedNoClose": "This device has no previous closes: enter the cash you are opening with.",
     "openingDifference": "Difference against the previous close",
     "openingNote": "Note about the difference",
-    "openingNoteHint": "The count does not match what the previous shift left. Explain the difference: it will be recorded and not charged to your cut."
+    "openingNoteHint": "The count does not match what the previous shift left. Explain the difference: it will be recorded and not charged to your cut.",
+    "clockBlockedOpen": "This register's clock is off by {{minutes}} min. Fix the computer's date and time before opening the shift (server time: {{serverTime}}).",
+    "clockBlockedClose": "This register's clock is off by {{minutes}} min. Fix the computer's date and time before closing the shift (server time: {{serverTime}})."
   },
   "checkout": {
     "activatePdv": "Activate PDV"

@@ -7,6 +7,7 @@ import { AuthService } from '../auth/auth.service';
 import { PosCommand, PosCommandResult } from '../../shared/models';
 import { environment } from '../../../environments/environment';
 import { RepairOutcome, SyncRepairService } from './sync-repair.service';
+import { ClockSkewService } from '../time/clock-skew.service';
 
 /**
  * Diagnóstico remoto: manda al backend la foto de salud del sync de esta caja
@@ -26,6 +27,7 @@ export class PosDiagnosticsService {
   private readonly http = inject(HttpClient);
   private readonly auth = inject(AuthService);
   private readonly repair = inject(SyncRepairService);
+  private readonly clock = inject(ClockSkewService);
   private readonly apiUrl = environment.apiUrl;
 
   /** Un reporte a la vez: el sync completo y el pull horario pueden coincidir. */
@@ -60,7 +62,11 @@ export class PosDiagnosticsService {
 
   private async doReport(): Promise<void> {
     const api = window.electronAPI!;
-    const snapshot = await api.diagnostics.buildSnapshot();
+    const foto = await api.diagnostics.buildSnapshot();
+    // El desfase lo mide el renderer (interceptor), no SQLite: se agrega aquí.
+    // Sin medición se omite; el panel no debe leer "0 min" de una caja sin red.
+    const skew = this.clock.skewMs();
+    const snapshot = skew !== null ? { ...foto, clockSkewMs: skew } : foto;
     const response = await firstValueFrom(this.http.post<unknown>(`${this.apiUrl}/pos/diagnostics`, snapshot));
     const commands = unwrapEntity<{ commands?: PosCommand[] } | null>(response)?.commands ?? [];
 

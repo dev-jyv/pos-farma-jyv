@@ -1061,6 +1061,11 @@ export interface PosDiagnosticsInput {
    * o `null` si no hay ninguna (SPEC 37). Opcional en el backend.
    */
   lastLocalBackupAt?: string | null;
+  /**
+   * Desfase del reloj de la caja contra el servidor (ms, `servidor − local`;
+   * SPEC 65). Se omite sin medición. El panel lo pinta en rojo con más de 5 min.
+   */
+  clockSkewMs?: number;
 }
 
 export type PosCommandType = 'retrySale' | 'retryCashSession' | 'retryProduct' | 'sendSaleToUnreconciled';

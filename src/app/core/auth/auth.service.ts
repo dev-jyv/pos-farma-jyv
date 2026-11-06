@@ -16,6 +16,7 @@ import { unwrapEntity } from '../api/api.utils';
 import { CashSessionService } from '../../features/pos/services/cash-session.service';
 import { NotificationService } from '../notifications/notification.service';
 import { getSessionExpiryMs, isSessionExpired } from '../../shared/utils/session-expiry';
+import { ClockSkewService } from '../time/clock-skew.service';
 import {
   PermissionArea,
   PermissionLevel,
@@ -49,6 +50,8 @@ export class AuthService {
    * resuelve un ciclo entre dos `providedIn: 'root'` que se inyectan mutuamente.
    */
   private readonly cashSessionService = inject(CashSessionService);
+  /** La sesión la vence el servidor: se mide con su hora, no con la de la caja (SPEC 65). */
+  private readonly clock = inject(ClockSkewService);
   private readonly apiUrl = environment.apiUrl;
   private profileRequest$: Observable<StaffProfile | null> | null = null;
   /** Último perfil resuelto, con el `uid` al que pertenece y cuándo se resolvió. */
@@ -140,13 +143,13 @@ export class AuthService {
     const expiresAtMs = getSessionExpiryMs(authTimeMs);
     this.sessionExpiresAt.set(new Date(expiresAtMs));
 
-    if (isSessionExpired(authTimeMs)) {
+    if (isSessionExpired(authTimeMs, this.clock.now())) {
       await this.endExpiredSession();
       return;
     }
     // `setTimeout` satura arriba de ~24.8 días; el turno nunca llega ahí, pero se
     // acota por seguridad para no disparar de inmediato por overflow.
-    const delay = Math.min(expiresAtMs - Date.now(), 2_147_483_000);
+    const delay = Math.min(expiresAtMs - this.clock.now(), 2_147_483_000);
     this.expiryTimer = setTimeout(() => void this.endExpiredSession(), delay);
   }
 

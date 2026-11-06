@@ -8,6 +8,7 @@ import { environment } from '../../../../environments/environment';
 import { CartLine, Product, Sale } from '../../../shared/models';
 import { PendingSale } from '../../../core/electron/window.d';
 import { BULK_MAX_ITEMS, SaleService, SaleTotals, newIdempotencyKey } from './sale.service';
+import { ClockSkewService } from '../../../core/time/clock-skew.service';
 
 const SALES_URL = `${environment.apiUrl}/sales`;
 
@@ -246,6 +247,23 @@ describe('SaleService', () => {
       const soldAt = Date.parse(payload.soldAt);
       expect(soldAt).toBeGreaterThanOrEqual(antes);
       expect(soldAt).toBeLessThanOrEqual(Date.now());
+    });
+
+    it('sin medición del reloj no manda clockSkewMs (SPEC 65)', () => {
+      const payload = service.buildPayload(cart(), 0, 'cash', 100, null, 's1');
+      expect('clockSkewMs' in payload).toBe(false);
+    });
+
+    it('con el reloj medido manda soldAt corregido y clockSkewMs (SPEC 65)', () => {
+      const clock = TestBed.inject(ClockSkewService);
+      const ahora = Date.now();
+      clock.record(new Date(ahora - 3 * 3_600_000).toUTCString(), ahora, ahora);
+
+      const payload = service.buildPayload(cart(), 0, 'cash', 100, null, 's1');
+
+      expect(payload.clockSkewMs).toBe(clock.skewMs());
+      // La caja va 3 h adelantada: la venta se fecha con la hora del servidor.
+      expect(Math.abs(Date.parse(payload.soldAt) - (Date.now() - 3 * 3_600_000))).toBeLessThan(1_500);
     });
 
     it('normaliza los opcionales ausentes a null', () => {

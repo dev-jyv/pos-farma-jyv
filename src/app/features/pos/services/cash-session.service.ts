@@ -35,6 +35,7 @@ import { CashAdjustmentStatus, CashSession, CashSessionSummary } from '../../../
 import { isSessionExpired } from '../../../shared/utils/session-expiry';
 import { environment } from '../../../../environments/environment';
 import { PushOwner } from '../../../core/sync/push-owner';
+import { ClockSkewService } from '../../../core/time/clock-skew.service';
 
 /**
  * Corte tal como llega de `GET /cash-sessions`, con las fechas todavía en el
@@ -171,6 +172,7 @@ interface CashSessionSummaryDto {
 @Injectable({ providedIn: 'root' })
 export class CashSessionService {
   private readonly http = inject(HttpClient);
+  private readonly clock = inject(ClockSkewService);
   private readonly apiUrl = environment.apiUrl;
 
   private flushing = false;
@@ -311,7 +313,9 @@ export class CashSessionService {
     }
     try {
       const open = await api.cashSessions.getOpenLocal(userId);
-      if (!open || !isSessionExpired(new Date(open.openedAt).getTime())) {
+      // Hora corregida contra el servidor (SPEC 65): un reloj adelantado un día
+      // autocerraba el turno vivo sin arqueo.
+      if (!open || !isSessionExpired(new Date(open.openedAt).getTime(), this.clock.now())) {
         return false;
       }
       await this.closeWithExpectedCash(open, userId, userLabel);

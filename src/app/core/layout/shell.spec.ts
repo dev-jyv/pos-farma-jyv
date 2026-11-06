@@ -19,6 +19,8 @@ import { SyncScheduler } from '../sync/sync-scheduler.service';
 import { SyncHelpService } from '../sync/sync-help.service';
 import { NAV_ITEMS } from './nav.config';
 import { Shell } from './shell';
+import { ClockSkewService } from '../time/clock-skew.service';
+import { TranslateService } from '@ngx-translate/core';
 
 /** El camino de salida encadena varias promesas (contar cola → vaciar → contar). */
 async function drenarMicrotareas(): Promise<void> {
@@ -671,6 +673,69 @@ describe('Shell', () => {
         loading: false,
         error: 'Sin conexión: la ayuda con IA necesita internet.',
       });
+    });
+  });
+
+  /** SPEC 65: la barra avisa del reloj desfasado y, sin red y sin medición, de que no se verificó. */
+  describe('reloj de la caja', () => {
+    function host(): HTMLElement {
+      return fixture.nativeElement as HTMLElement;
+    }
+
+    function desfasar(ms: number): void {
+      const clock = TestBed.inject(ClockSkewService);
+      const ahora = Date.now();
+      clock.record(new Date(ahora + ms).toUTCString(), ahora, ahora);
+    }
+
+    beforeEach(() => {
+      TestBed.inject(TranslateService).setTranslation(
+        'es',
+        {
+          shell: {
+            banner: {
+              offline: 'Sin conexión a internet',
+              apiDown: 'El servidor no responde',
+              clockSkew: 'El reloj de esta caja está desfasado {{minutes}} min',
+              clockUnverified: 'Reloj sin verificar',
+            },
+          },
+        },
+        true,
+      );
+    });
+
+    it('con 10 min de desfase aparece el aviso con los minutos', () => {
+      desfasar(10 * 60_000);
+      fixture.detectChanges();
+
+      expect(host().querySelector('[data-testid="clock-skew-banner"]')?.textContent).toContain(
+        'El reloj de esta caja está desfasado 10 min',
+      );
+    });
+
+    it('con un desfase menor a 5 min no hay aviso', () => {
+      desfasar(2 * 60_000);
+      fixture.detectChanges();
+
+      expect(host().querySelector('[data-testid="clock-skew-banner"]')).toBeNull();
+    });
+
+    it('sin red desde el arranque la barra dice que el reloj no se verificó', () => {
+      (TestBed.inject(ApiHealthService).degraded as ReturnType<typeof signal<boolean>>).set(true);
+      fixture.detectChanges();
+
+      expect(host().querySelector('[data-testid="clock-unverified"]')?.textContent).toContain(
+        'Reloj sin verificar',
+      );
+    });
+
+    it('con medición, la barra de sin red ya no dice "sin verificar"', () => {
+      desfasar(0);
+      (TestBed.inject(ApiHealthService).degraded as ReturnType<typeof signal<boolean>>).set(true);
+      fixture.detectChanges();
+
+      expect(host().querySelector('[data-testid="clock-unverified"]')).toBeNull();
     });
   });
 });

@@ -65,6 +65,13 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 - **Push.** `openingBody` arma `POST /cash-sessions` `{ openingAmount, openingCounted?, inheritedFloat?, openingNote? }`; un turno en cola de antes (sin `openingCounted`) sube solo con `openingAmount`.
 - **Autocierre = revisión.** `closeLocal` con `autoClosedByExpiry` pone `needsReview` (la migración marca los autocierres viejos); el DTO expone también `autoClosed`. La auditoría de cortes tiene el filtro "Autocerrados": manda `needsReview=true` y, si el backend no filtró, filtra la página aquí (sin `meta`). Muestra `openingDifference` y `followingOpeningDifference` (la pone el backend en el turno anterior).
 
+### Reloj de la caja validado (SPEC 65)
+
+- `core/time/clock-skew.service.ts` (`ClockSkewService`) guarda `skewMs = servidor − (salida + rtt/2)` con la mediana de las últimas 5 lecturas; `core/api/clock-skew.interceptor.ts` (registrado **después** de `authInterceptor`, para no contar la espera del token) le pasa el header `Date` de cada respuesta **exitosa** de `environment.apiUrl`. Desde el renderer el header solo se ve si el backend lo expone por CORS (`Access-Control-Expose-Headers: Date`); sin él no hay medición y todo sigue con el reloj local.
+- `now()` = `Date.now() + skewMs` (sin medición, el reloj local). Lo usan: `isSessionExpired` del turno (`CashSessionService.autoCloseStale`) y de la sesión (`AuthService`), la vigencia de promociones (`PromoService.candidatesFor`) y cupones (`CouponService.windowIssue`/`apply` por defecto), y `soldAt` de `buildPayload`, que además manda `clockSkewMs` (se omite sin medición). `PosDiagnosticsService` agrega `clockSkewMs` a la foto del diagnóstico.
+- `|skew| > 5 min`: banda en el shell "El reloj de esta caja está desfasado X min". Sin medición, la banda de sin red agrega "Reloj sin verificar". `|skew| > 2 h`: `CashSessionDialog` no abre ni cierra turno (`clockBlocked`) y muestra la hora del servidor.
+- `PromoService`/`CouponService` ahora usan `inject()`: en pruebas se construyen con `TestBed.runInInjectionContext(() => new …())`.
+
 ### Mostrador robusto (SPEC 66)
 
 - **Borrador con llave.** `Checkout` emite `chargeKeyIssued` con la `idempotencyKey` de cada apertura; `Sale.chargeKey` la guarda en el borrador (`CartStorageService`, campo `idempotencyKey`) y `resetTicket` la olvida. `SaleService.create` limpia el borrador en el `tap` de `createLocal` (misma secuencia que confirma en SQLite). Al restaurar, si `SaleService.findByIdempotencyKey` (IPC `sales:getByIdempotencyKey`) encuentra la venta, el borrador se descarta con "La venta de este ticket ya se registró (folio X)". Sin llave se restaura como antes, sin consultar.

@@ -61,6 +61,7 @@ import { resolveTender } from '../../../shared/utils/tender';
 import { environment } from '../../../../environments/environment';
 import { pushOwnerFilter } from '../../../core/sync/push-owner';
 import { CartStorageService } from './cart-storage.service';
+import { ClockSkewService } from '../../../core/time/clock-skew.service';
 import {
   SyncFailure,
   SyncRejectionError,
@@ -85,6 +86,12 @@ export interface CreateSalePayload {
    * vigente **cuando se cobró**, no cuando llegó la red.
    */
   soldAt: string;
+  /**
+   * Desfase del reloj de la caja contra el servidor al cobrar (ms, `servidor −
+   * local`; SPEC 65). `soldAt` ya va corregido; esto es informativo. Se omite
+   * sin medición (sin red desde el arranque).
+   */
+  clockSkewMs?: number;
   /**
    * Partida discriminada: el backend distingue por `kind` qué mueve inventario
    * y qué es un servicio. Un payload sin `kind` (venta encolada por una versión
@@ -466,6 +473,7 @@ export class SaleService {
   private readonly auth = inject(AuthService);
   private readonly autoPush = inject(AutoPushService);
   private readonly cartStorage = inject(CartStorageService);
+  private readonly clock = inject(ClockSkewService);
   private readonly apiUrl = environment.apiUrl;
 
   private flushing = false;
@@ -525,9 +533,13 @@ export class SaleService {
       couponCode?: string | null;
     } = {},
   ): CreateSalePayload {
+    const skew = this.clock.skewMs();
     return {
       idempotencyKey: extras.idempotencyKey ?? newIdempotencyKey(),
-      soldAt: new Date().toISOString(),
+      // Hora corregida contra el servidor (SPEC 65): un reloj atrasado fechaba
+      // la venta en una vigencia de promoción que ya había cerrado.
+      soldAt: this.clock.nowDate().toISOString(),
+      ...(skew !== null ? { clockSkewMs: skew } : {}),
       // El backend conoce el producto por su id de Firestore (`remoteId`), no
       // por el id local de SQLite (`id`) — son el mismo producto pero con
       // identidades distintas a cada lado hasta que el catálogo sincroniza.

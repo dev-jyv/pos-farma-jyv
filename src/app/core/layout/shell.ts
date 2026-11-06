@@ -27,6 +27,7 @@ import { SyncScheduler } from '../sync/sync-scheduler.service';
 import { environment } from '../../../environments/environment';
 import { NAV_ITEMS, NavItem } from './nav.config';
 import { ReasonDialog } from '../../shared/ui/reason-dialog/reason-dialog';
+import { ClockSkewService } from '../time/clock-skew.service';
 
 @Component({
   selector: 'app-shell',
@@ -420,6 +421,15 @@ export class Shell {
   readonly isAdmin = this.authService.isAdmin;
   readonly browserOnline = this.health.browserOnline;
   readonly degraded = this.health.degraded;
+  /**
+   * Reloj de la caja contra el del servidor (SPEC 65). Más de 5 min de desfase
+   * se avisa en la barra; sin medición (sin red desde el arranque) la barra de
+   * "sin red" lo dice: la caja va con su reloj sin verificar.
+   */
+  private readonly clock = inject(ClockSkewService);
+  readonly clockWarning = this.clock.warning;
+  readonly clockMeasured = this.clock.measured;
+  readonly clockSkewMinutes = this.clock.skewMinutes;
   readonly appVersion = environment.version;
   /**
    * `environment.isElectron` solo cambia con `ng build --configuration electron`;

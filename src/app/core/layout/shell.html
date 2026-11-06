@@ -167,7 +167,21 @@
       <i class="pi pi-exclamation-triangle text-xs"></i>
       <span>
         {{ (browserOnline() ? 'shell.banner.apiDown' : 'shell.banner.offline') | translate }}
+        @if (!clockMeasured()) {
+          <span data-testid="clock-unverified"> · {{ 'shell.banner.clockUnverified' | translate }}</span>
+        }
       </span>
+    </div>
+  }
+
+  @if (clockWarning()) {
+    <div
+      data-testid="clock-skew-banner"
+      class="flex shrink-0 items-center justify-center gap-2 bg-(--pos-warn) px-4 py-1.5 text-sm font-semibold text-white"
+      role="alert"
+    >
+      <i class="pi pi-clock text-xs"></i>
+      <span>{{ 'shell.banner.clockSkew' | translate: { minutes: clockSkewMinutes() } }}</span>
     </div>
   }
 

@@ -13,6 +13,7 @@ import { CashSessionService, OpeningCountInput } from '../services/cash-session.
 import { TicketPrintService } from '../ticket/ticket-print.service';
 import { CashSessionDialog } from './cash-session-dialog';
 import { SyncScheduler } from '../../../core/sync/sync-scheduler.service';
+import { ClockSkewService } from '../../../core/time/clock-skew.service';
 
 const session = {
   id: 's1',
@@ -54,6 +55,10 @@ const ES = {
     expectedCash: 'Efectivo esperado',
     expectedCashTotal: 'Total esperado en cajón',
     loading: 'Cargando resumen…',
+    clockBlockedOpen:
+      'El reloj de esta caja está desfasado {{minutes}} min. Corrige la fecha y hora del equipo antes de abrir el turno (hora del servidor: {{serverTime}}).',
+    clockBlockedClose:
+      'El reloj de esta caja está desfasado {{minutes}} min. Corrige la fecha y hora del equipo antes de cerrar el turno (hora del servidor: {{serverTime}}).',
   },
 };
 
@@ -412,6 +417,55 @@ describe('CashSessionDialog (local-first)', () => {
 
       expect(notifyError).toHaveBeenCalled();
       expect(component.submitting()).toBe(false);
+    });
+  });
+
+  /** SPEC 65: con más de 2 h de desfase no se abre ni se cierra turno. */
+  describe('reloj desfasado', () => {
+    function desfasar(ms: number): void {
+      const clock = TestBed.inject(ClockSkewService);
+      const ahora = Date.now();
+      clock.record(new Date(ahora + ms).toUTCString(), ahora, ahora);
+      fixture.detectChanges();
+    }
+
+    it('con 10 min de desfase se abre normalmente', async () => {
+      cashOnHand = () => of(detalle(780));
+      await build(null);
+      desfasar(10 * 60_000);
+      component.setOpeningCounted(780);
+
+      expect(component.clockBlocked()).toBe(false);
+      expect(component.canOpen()).toBe(true);
+    });
+
+    it('con 3 h de desfase bloquea la apertura y pide corregir el reloj con la hora del servidor', async () => {
+      cashOnHand = () => of(detalle(780));
+      await build(null);
+      desfasar(3 * 3_600_000);
+      component.setOpeningCounted(780);
+      fixture.detectChanges();
+
+      expect(component.clockBlocked()).toBe(true);
+      expect(component.canOpen()).toBe(false);
+      expect(boton('cut-open')!.disabled).toBe(true);
+      const aviso = host().querySelector('[data-testid="cut-clock-blocked"]');
+      expect(aviso?.textContent).toContain('180 min');
+      expect(aviso?.textContent).toContain(component.serverTimeLabel());
+      component.confirmOpen();
+      expect(openLocal).not.toHaveBeenCalled();
+    });
+
+    it('con 3 h de desfase tampoco se cierra el turno', async () => {
+      await build(session);
+      desfasar(-3 * 3_600_000);
+
+      expect(boton('cut-close')!.disabled).toBe(true);
+      expect(host().querySelector('[data-testid="cut-clock-blocked"]')).not.toBeNull();
+      component.requestClose();
+      component.confirmClose();
+      await esperarSubida();
+      expect(closeLocal).not.toHaveBeenCalled();
     });
   });
 
