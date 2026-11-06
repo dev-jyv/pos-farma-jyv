@@ -827,3 +827,14 @@ describe('anulación con motivo y descarte con rastro (SPEC 62)', () => {
     expect(prisma.sale.rows[0].pushAttempts).toBe(1);
   });
 });
+
+describe('venta por llave de cobro (SPEC 66)', () => {
+  it('devuelve la venta local con esa llave, o null', async () => {
+    await producto('p-1');
+    const creada = await createLocal(prisma, venta([partidaProducto('p-1')], { idempotencyKey: 'llave-66' }));
+
+    expect((await sales.getByIdempotencyKey(prisma, 'llave-66'))?.id).toBe(creada.id);
+    expect(await sales.getByIdempotencyKey(prisma, 'otra')).toBeNull();
+    expect(await sales.getByIdempotencyKey(prisma, '')).toBeNull();
+  });
+});

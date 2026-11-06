@@ -352,6 +352,33 @@ describe('SaleService', () => {
       expect(input.servicesTotal).toBe(0);
     });
 
+    it('borra el borrador del ticket en la misma secuencia que confirma la venta (SPEC 66)', async () => {
+      localStorage.setItem(
+        'pos.current-cart.u1',
+        JSON.stringify({ lines: [{}], manualDiscounts: {}, savedAt: new Date().toISOString() }),
+      );
+      const payload = service.buildPayload(cart(), 0, 'cash', 100, null, 's1');
+      service.create(payload, cart(), totals()).subscribe();
+      await flushMicrotasks();
+
+      expect(sales.createLocal).toHaveBeenCalled();
+      expect(localStorage.getItem('pos.current-cart.u1')).toBeNull();
+    });
+
+    it('si la caja no confirma la venta, el borrador se queda', async () => {
+      localStorage.setItem(
+        'pos.current-cart.u1',
+        JSON.stringify({ lines: [{}], manualDiscounts: {}, savedAt: new Date().toISOString() }),
+      );
+      sales.createLocal.mockRejectedValueOnce(new Error('SQLite ocupada'));
+      const payload = service.buildPayload(cart(), 0, 'cash', 100, null, 's1');
+      service.create(payload, cart(), totals()).subscribe({ error: () => undefined });
+      await flushMicrotasks();
+
+      expect(localStorage.getItem('pos.current-cart.u1')).not.toBeNull();
+      localStorage.clear();
+    });
+
     it('en pago mixto no descuenta como cambio lo que cubrió la tarjeta', async () => {
       const payload = service.buildPayload(cart(), 0, 'mixed', 40, 'order-1', 's1');
       service.create(payload, cart(), totals({ cashDue: 40, cardAmount: 60 })).subscribe();

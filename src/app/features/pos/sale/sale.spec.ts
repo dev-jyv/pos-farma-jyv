@@ -3,7 +3,7 @@ import { signal, WritableSignal } from '@angular/core';
 import { provideTranslateService } from '@ngx-translate/core';
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
-import { of, throwError } from 'rxjs';
+import { Observable, of, Subject, throwError } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ScanSoundService } from '../../../core/audio/scan-sound.service';
@@ -82,6 +82,11 @@ describe('Sale', () => {
   let servicios: PharmacyService[];
   /** Resultado de `ProductService.search`; `null` = el producto por defecto. */
   let searchResults: Product[] | null;
+  /**
+   * `ProductService.getByBarcode` (SPEC 66). Por defecto imita la SQLite:
+   * código de barras o SKU exactos, y después el código de la caja.
+   */
+  let barcodeLookup: (code: string) => Observable<Product | null>;
   /** Cupones de la SQLite simulada, por código normalizado. */
   let cupones: Record<string, CouponDto>;
   let doctores: ServiceProvider[];
@@ -91,6 +96,7 @@ describe('Sale', () => {
     void: ReturnType<typeof vi.fn>;
     flushQueue: ReturnType<typeof vi.fn>;
     discardSale: ReturnType<typeof vi.fn>;
+    findByIdempotencyKey: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -105,6 +111,15 @@ describe('Sale', () => {
     notifySuccess = vi.fn();
     batches = [batch()];
     searchResults = null;
+    barcodeLookup = (code: string) => {
+      const catalogo = searchResults ?? [product()];
+      const pieza = catalogo.find((item) => item.barcode === code || item.sku === code);
+      if (pieza) {
+        return of(pieza);
+      }
+      const caja = catalogo.find((item) => item.boxBarcode === code);
+      return of(caja ? (caja.boxQuantity ? { ...caja, saleUnit: 'box' as const } : caja) : null);
+    };
     cupones = {};
     servicios = [servicio()];
     doctores = [{ id: 'dr-1', name: 'Dra. Ruiz' }];
@@ -117,6 +132,7 @@ describe('Sale', () => {
       void: vi.fn(() => of({ id: 'v1', folio: 'V-1' } as SaleModel)),
       flushQueue: vi.fn(),
       discardSale: vi.fn(() => Promise.resolve()),
+      findByIdempotencyKey: vi.fn(() => Promise.resolve(null)),
     };
 
     await build();
@@ -149,7 +165,11 @@ describe('Sale', () => {
         },
         {
           provide: ProductService,
-          useValue: { search: () => of(searchResults ?? [product()]), invalidate: vi.fn() },
+          useValue: {
+            search: () => of(searchResults ?? [product()]),
+            getByBarcode: (code: string) => barcodeLookup(code),
+            invalidate: vi.fn(),
+          },
         },
         {
           provide: CouponService,
@@ -1633,6 +1653,179 @@ describe('Sale', () => {
   });
 
   /** Cupones de descuento (SPEC 47). */
+  /** Mostrador robusto: borrador con llave, escáner exacto y búsquedas sin carreras (SPEC 66). */
+  describe('mostrador robusto (SPEC 66)', () => {
+    function borrador(idempotencyKey?: string): void {
+      localStorage.setItem(
+        'pos.current-cart.u1',
+        JSON.stringify({
+          lines: [{ kind: 'product', product: product(), quantity: 2, discountAmount: 0 }],
+          manualDiscounts: {},
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          savedAt: new Date().toISOString(),
+        }),
+      );
+    }
+
+    /** Teclea `code` como el escáner: una ráfaga con 10 ms entre caracteres. */
+    function escanear(code: string, terminador = 'Enter'): void {
+      let reloj = 1_000_000;
+      const ahora = vi.spyOn(Date, 'now').mockImplementation(() => reloj);
+      for (const tecla of code) {
+        reloj += 10;
+        component.onSearchKeydown(new KeyboardEvent('keydown', { key: tecla }));
+        component.onSearchChange(component.searchTerm() + tecla);
+      }
+      reloj += 10;
+      component.onSearchKeydown(new KeyboardEvent('keydown', { key: terminador }));
+      ahora.mockRestore();
+    }
+
+    /** Teclea `code` a mano: 200 ms entre teclas. */
+    function teclear(code: string): void {
+      let reloj = 1_000_000;
+      const ahora = vi.spyOn(Date, 'now').mockImplementation(() => reloj);
+      for (const tecla of code) {
+        reloj += 200;
+        component.onSearchKeydown(new KeyboardEvent('keydown', { key: tecla }));
+        component.onSearchChange(component.searchTerm() + tecla);
+      }
+      reloj += 200;
+      component.onSearchKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+      ahora.mockRestore();
+    }
+
+    describe('borrador con llave', () => {
+      it('un borrador con la llave de una venta existente se descarta al restaurar', async () => {
+        borrador('llave-cobrada-1');
+        saleServiceMock.findByIdempotencyKey = vi.fn(() =>
+          Promise.resolve({ id: 'local-1', folio: 'V-000123' } as SaleModel),
+        );
+        await build();
+        await fixture.whenStable();
+
+        expect(saleServiceMock.findByIdempotencyKey).toHaveBeenCalledWith('llave-cobrada-1');
+        expect(component.cart()).toEqual([]);
+        expect(notifyWarn).toHaveBeenCalledWith('La venta de este ticket ya se registró (folio V-000123)');
+        expect(TestBed.inject(CartStorageService).load('u1')).toBeNull();
+      });
+
+      it('con la llave de un cobro que no se registró, el ticket se recupera', async () => {
+        borrador('llave-sin-venta');
+        await build();
+        await fixture.whenStable();
+
+        expect(component.cart()).toHaveLength(1);
+        expect(notifyWarn).not.toHaveBeenCalledWith(expect.stringContaining('ya se registró'));
+      });
+
+      it('sin llave (nunca se abrió el cobro) se recupera sin consultar', async () => {
+        borrador();
+        await build();
+
+        expect(component.cart()).toHaveLength(1);
+        expect(saleServiceMock.findByIdempotencyKey).not.toHaveBeenCalled();
+      });
+
+      it('el borrador guarda la llave del cobro abierto y la olvida con el ticket', () => {
+        component.addToCart(product(), 1);
+        component.chargeKey.set('llave-abierta');
+        TestBed.tick();
+        expect(TestBed.inject(CartStorageService).load('u1')?.idempotencyKey).toBe('llave-abierta');
+
+        component.onSaleCompleted({ id: 'v1', folio: 'V-1', items: [] } as unknown as SaleModel);
+        component.addToCart(product(), 1);
+        TestBed.tick();
+        // La llave de la venta registrada no se hereda al ticket siguiente.
+        expect(TestBed.inject(CartStorageService).load('u1')?.idempotencyKey).toBeNull();
+      });
+    });
+
+    describe('escáner exacto', () => {
+      it('el escaneo de un código inexistente que coincide en parte con un solo producto no lo agrega', () => {
+        // La búsqueda difusa traería al Paracetamol (contiene "750100"), pero
+        // el código exacto no existe.
+        searchResults = [product({ barcode: '7501001' })];
+        escanear('750100');
+
+        expect(component.cart()).toEqual([]);
+        expect(notifyError).toHaveBeenCalledWith('Código no encontrado');
+        expect(component.searchTerm()).toBe('');
+      });
+
+      it('el escaneo de un código exacto agrega el producto', () => {
+        escanear('7501001');
+
+        expect(component.cart()).toHaveLength(1);
+        expect(component.searchTerm()).toBe('');
+      });
+
+      it('el sufijo Tab del escáner se trata como Enter', () => {
+        escanear('7501001', 'Tab');
+
+        expect(component.cart()).toHaveLength(1);
+      });
+
+      it('un Tab a mano no busca nada', () => {
+        component.onSearchChange('7501001');
+        const tab = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true });
+        component.onSearchKeydown(tab);
+
+        expect(component.cart()).toEqual([]);
+        expect(tab.defaultPrevented).toBe(false);
+      });
+
+      it('a mano, una coincidencia parcial única sí se agrega (como antes)', () => {
+        searchResults = [product({ barcode: '7501001' })];
+        teclear('para');
+
+        expect(component.cart()).toHaveLength(1);
+      });
+
+      it('un SKU numérico corto tecleado a mano gana por código exacto', () => {
+        searchResults = [product({ id: 'p-12', sku: '12', barcode: '999' }), product({ id: 'p-120', sku: '120' })];
+        teclear('12');
+
+        expect(component.cart()).toHaveLength(1);
+        expect((component.cart()[0] as { product: Product }).product.id).toBe('p-12');
+      });
+
+      it('a mano, sin resultado, el término vuelve a la caja para corregirlo', () => {
+        searchResults = [];
+        teclear('xyz9');
+
+        expect(component.cart()).toEqual([]);
+        expect(component.searchTerm()).toBe('xyz9');
+        expect(notifyError).toHaveBeenCalledWith('Producto no encontrado.');
+      });
+    });
+
+    describe('búsquedas sin carreras', () => {
+      it('dos búsquedas seguidas solo aplican la última', () => {
+        const pendientes = new Map<string, Subject<Product | null>>();
+        barcodeLookup = (code: string) => {
+          const respuesta = new Subject<Product | null>();
+          pendientes.set(code, respuesta);
+          return respuesta;
+        };
+
+        escanear('7501001');
+        // El término ya se limpió antes de la siguiente: el segundo escaneo no se
+        // pega al primero.
+        expect(component.searchTerm()).toBe('');
+        escanear('7502002');
+
+        // La respuesta del primero llega tarde: no agrega nada.
+        pendientes.get('7501001')!.next(product({ id: 'p-viejo', barcode: '7501001' }));
+        expect(component.cart()).toEqual([]);
+
+        pendientes.get('7502002')!.next(product({ id: 'p-nuevo', barcode: '7502002' }));
+        expect(component.cart()).toHaveLength(1);
+        expect((component.cart()[0] as { product: Product }).product.id).toBe('p-nuevo');
+      });
+    });
+  });
+
   describe('cupones', () => {
     function cupon(overrides: Partial<CouponDto> = {}): CouponDto {
       return {

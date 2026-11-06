@@ -73,6 +73,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listMovements: (saleId) => ipcRenderer.invoke('sales:listMovements', saleId),
     clearPushError: (localId) => ipcRenderer.invoke('sales:clearPushError', localId),
     discard: (localId, options) => ipcRenderer.invoke('sales:discard', localId, options),
+    getByIdempotencyKey: (idempotencyKey) =>
+      ipcRenderer.invoke('sales:getByIdempotencyKey', idempotencyKey),
     markVoidFailed: (localId, message) => ipcRenderer.invoke('sales:markVoidFailed', localId, message),
     clearVoidError: (localId) => ipcRenderer.invoke('sales:clearVoidError', localId),
     getNeedingRemoteVoid: (filters) => ipcRenderer.invoke('sales:getNeedingRemoteVoid', filters),

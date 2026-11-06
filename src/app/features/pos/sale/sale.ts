@@ -17,7 +17,7 @@ import { DialogModule } from 'primeng/dialog';
 import { InputTextModule } from 'primeng/inputtext';
 import { TableModule } from 'primeng/table';
 import { TooltipModule } from 'primeng/tooltip';
-import { debounceTime, from, Observable, Subject, switchMap } from 'rxjs';
+import { debounceTime, from, map, Observable, of, Subject, switchMap } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { environment } from '../../../../environments/environment';
@@ -109,6 +109,27 @@ function daysUntil(date: Date): number {
   return Math.ceil((date.getTime() - startOfToday().getTime()) / 86_400_000);
 }
 
+/**
+ * Escáner de código de barras (SPEC 66): teclea como un teclado, pero en ráfaga.
+ * Si **todos** los caracteres del término llegaron con menos de esto entre uno
+ * y otro, la entrada fue del escáner y no se aceptan coincidencias parciales.
+ */
+export const SCANNER_KEY_GAP_MS = 50;
+/** Un término de 1–2 caracteres no se distingue de dos teclas rápidas a mano. */
+const SCANNER_MIN_LENGTH = 3;
+
+/** Un Enter (o el Tab de un escáner) en la caja de búsqueda. */
+interface SearchSubmit {
+  raw: string;
+  qty: number;
+  fromScanner: boolean;
+}
+
+/** Qué encontró un Enter: exacto por código, o la lista de la búsqueda difusa. */
+type SearchHit =
+  | { submit: SearchSubmit; exact: Product; products: null }
+  | { submit: SearchSubmit; exact: null; products: Product[] };
+
 /** Unidad que el cajero elige al agregar o en la línea (SPEC 46). */
 export type SaleUnitChoice = 'piece' | 'box';
 
@@ -190,6 +211,22 @@ export class Sale {
   private readonly couponInput = viewChild<ElementRef<HTMLInputElement>>('couponInput');
 
   readonly searchTerm = signal('');
+  /**
+   * Enter/Tab de la caja de búsqueda (SPEC 66). Pasan por un `switchMap`: la
+   * respuesta de un término viejo nunca llega a agregar al carrito si ya hubo
+   * otro Enter después.
+   */
+  private readonly submit$ = new Subject<SearchSubmit>();
+  /** Instante de la última tecla imprimible en la búsqueda (detección del escáner). */
+  private lastSearchKeyAt = 0;
+  /** Caracteres seguidos tecleados en ráfaga (< `SCANNER_KEY_GAP_MS` entre cada uno). */
+  private searchBurstLength = 0;
+  /**
+   * Llave del cobro abierto para este ticket (SPEC 66); viaja en el borrador.
+   * Se olvida con el ticket (`resetTicket`): la de una venta ya registrada no
+   * puede quedarse en el borrador del ticket siguiente.
+   */
+  readonly chargeKey = signal<string | null>(null);
   readonly results = signal<Product[]>([]);
   readonly cart = signal<CartLine[]>([]);
   readonly heldSales = signal<HeldSale[]>([]);
@@ -311,6 +348,16 @@ export class Sale {
       )
       .subscribe((products) => this.results.set(products));
 
+    // Enter/escáner (SPEC 66): primero el código exacto (barcode, código de caja,
+    // SKU) y solo si no hay, la búsqueda difusa. `switchMap`: un Enter nuevo
+    // cancela la consulta del anterior, así dos escaneos rápidos no se mezclan.
+    this.submit$
+      .pipe(
+        switchMap((submit) => this.lookupSubmit(submit)),
+        takeUntilDestroyed(),
+      )
+      .subscribe((hit) => this.applySubmit(hit));
+
     // Catálogo de servicios y doctores: local, cacheado una vez por turno. Si la
     // farmacia no tiene servicios, la pestaña ni aparece.
     this.serviceCatalog.refresh().subscribe();
@@ -341,7 +388,7 @@ export class Sale {
         this.cashSessionDialogVisible.set(true);
       }
       this.loadHeldSales();
-      this.restoreCart();
+      void this.restoreCart();
       queueMicrotask(() => this.searchInput()?.nativeElement.focus());
     });
 
@@ -350,7 +397,13 @@ export class Sale {
     effect(() => {
       const lines = this.cart();
       const uid = this.authService.user()?.uid ?? '';
-      this.cartStorage.save(uid, lines, this.manualDiscounts(), this.appliedCoupon()?.code ?? null);
+      this.cartStorage.save(
+        uid,
+        lines,
+        this.manualDiscounts(),
+        this.appliedCoupon()?.code ?? null,
+        this.chargeKey(),
+      );
     });
 
     // Bajó un pull de cupones: se relee el aplicado. Una baja o un cambio de
@@ -760,6 +813,7 @@ export class Sale {
   /** Ticket en blanco: líneas, descuentos manuales y cupón. */
   private resetTicket(): void {
     this.cart.set([]);
+    this.chargeKey.set(null);
     this.manualDiscounts.set({});
     this.appliedCoupon.set(null);
     this.couponSaleDiscount.set(0);
@@ -889,10 +943,17 @@ export class Sale {
       this.clearSearch();
       return;
     }
-    if (event.key !== 'Enter') {
+    // Tab como sufijo del escáner (SPEC 66): se trata igual que Enter. Un Tab
+    // tecleado a mano sigue moviendo el foco.
+    const scannerTab = event.key === 'Tab' && this.isScannerBurst();
+    if (event.key !== 'Enter' && !scannerTab) {
+      this.trackSearchKey(event);
       return;
     }
     event.preventDefault();
+    const fromScanner = this.isScannerBurst();
+    this.lastSearchKeyAt = 0;
+    this.searchBurstLength = 0;
     if (!this.ensureShiftOpen()) {
       return;
     }
@@ -912,59 +973,118 @@ export class Sale {
       return;
     }
 
-    this.productService.search(raw).subscribe((products) => {
-      this.results.set(products);
-      const normalized = raw.toLowerCase();
-      // Prioridad, en este orden y por una razón en cada paso:
-      // 1) coincidencia EXACTA de sku/código de barras: es lo que dispara el
-      //    escáner y no puede perder nunca contra nada;
-      // 2) coincidencia exacta del código de un servicio: si el cajero teclea
-      //    "CONS-01", quiso la consulta, aunque la búsqueda de medicamentos
-      //    haya devuelto por casualidad un único resultado difuso;
-      // 3) resultado único de la búsqueda de medicamentos.
-      const exacto = products.find(
-        (product) =>
-          product.sku?.toLowerCase() === normalized ||
-          product.barcode?.toLowerCase() === normalized,
-      );
-      if (!exacto) {
-        const service = this.serviceCatalog.findByCode(raw);
-        if (service) {
-          this.addServiceToCart(service, qty, true);
-          this.clearSearch();
-          queueMicrotask(() => this.searchInput()?.nativeElement.focus());
-          return;
-        }
-      }
-      // Código de la caja (SPEC 46): entra como caja. Va después del de la
-      // pieza y del SKU, que siempre ganan.
-      if (!exacto) {
-        const caja = products.find(
-          (product) => product.boxBarcode?.toLowerCase() === normalized && hasBoxSale(product),
-        );
-        if (caja) {
-          this.addToCart(caja, qty, true, 'box');
-          this.clearSearch();
-          queueMicrotask(() => this.searchInput()?.nativeElement.focus());
-          return;
-        }
-      }
-      const scanned = exacto ?? (products.length === 1 ? products[0] : null);
+    // La caja queda limpia **antes** de buscar (SPEC 66): el siguiente escaneo
+    // empieza en blanco y no se pega al término de este, y la búsqueda difusa
+    // pendiente del debounce se cancela.
+    this.clearSearch();
+    this.submit$.next({ raw, qty, fromScanner });
+  }
 
-      if (!scanned) {
-        this.sounds.error();
-        this.notifications.error(
-          products.length === 0
-            ? 'Producto no encontrado.'
-            : 'Hay varios resultados: elige uno de la lista.',
-        );
+  /**
+   * Cuenta la ráfaga de la tecla: una tecla imprimible a menos de
+   * `SCANNER_KEY_GAP_MS` de la anterior la alarga; una más lenta empieza otra.
+   */
+  private trackSearchKey(event: KeyboardEvent): void {
+    if (event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) {
+      return;
+    }
+    const at = Date.now();
+    const gap = at - this.lastSearchKeyAt;
+    this.searchBurstLength = this.lastSearchKeyAt && gap < SCANNER_KEY_GAP_MS ? this.searchBurstLength + 1 : 1;
+    this.lastSearchKeyAt = at;
+  }
+
+  /**
+   * ¿El término llegó del escáner? Todos sus caracteres (salvo un prefijo de
+   * cantidad `N*` tecleado a mano) en una sola ráfaga.
+   */
+  private isScannerBurst(): boolean {
+    const code = this.searchTerm().trim().replace(/^\d+\*/, '');
+    return (
+      code.length >= SCANNER_MIN_LENGTH &&
+      this.searchBurstLength >= SCANNER_MIN_LENGTH &&
+      this.searchBurstLength >= code.length
+    );
+  }
+
+  /** Código exacto primero; la búsqueda difusa solo si no hubo y no vino del escáner. */
+  private lookupSubmit(submit: SearchSubmit): Observable<SearchHit> {
+    return this.productService.getByBarcode(submit.raw).pipe(
+      switchMap((exact): Observable<SearchHit> => {
+        if (exact) {
+          return of({ submit, exact, products: null });
+        }
+        // Del escáner no se aceptan parciales: ni se consulta la difusa.
+        if (submit.fromScanner) {
+          return of({ submit, exact: null, products: [] });
+        }
+        return this.productService
+          .search(submit.raw)
+          .pipe(map((products): SearchHit => ({ submit, exact: null, products })));
+      }),
+    );
+  }
+
+  private applySubmit(hit: SearchHit): void {
+    const { raw, qty, fromScanner } = hit.submit;
+    if (hit.exact) {
+      // Código de la caja (SPEC 46): `getByBarcode` ya dio prioridad al de la
+      // pieza y al SKU, y solo marca `box` si de verdad se vende por caja.
+      const asBox = hit.exact.saleUnit === 'box' && hasBoxSale(hit.exact);
+      this.addToCart(hit.exact, qty, true, asBox ? 'box' : 'piece');
+      queueMicrotask(() => this.searchInput()?.nativeElement.focus());
+      return;
+    }
+    const products = hit.products;
+    const normalized = raw.toLowerCase();
+    // Sin código exacto en SQLite (que compara mayúsculas), en este orden:
+    // 1) sku/código exacto sin importar mayúsculas, si la difusa lo trajo;
+    // 2) código exacto de un servicio: si el cajero teclea "CONS-01", quiso la
+    //    consulta, aunque la difusa haya devuelto por casualidad un resultado;
+    // 3) código de caja; 4) resultado único de la búsqueda — este último nunca
+    //    para el escáner (SPEC 66: un código desconocido que coincide en parte
+    //    con un solo producto no lo agrega).
+    const exacto = products.find(
+      (product) =>
+        product.sku?.toLowerCase() === normalized || product.barcode?.toLowerCase() === normalized,
+    );
+    if (!exacto) {
+      const service = this.serviceCatalog.findByCode(raw);
+      if (service) {
+        this.addServiceToCart(service, qty, true);
+        queueMicrotask(() => this.searchInput()?.nativeElement.focus());
         return;
       }
+      const caja = products.find(
+        (product) => product.boxBarcode?.toLowerCase() === normalized && hasBoxSale(product),
+      );
+      if (caja) {
+        this.addToCart(caja, qty, true, 'box');
+        queueMicrotask(() => this.searchInput()?.nativeElement.focus());
+        return;
+      }
+    }
+    const scanned = exacto ?? (!fromScanner && products.length === 1 ? products[0] : null);
 
-      this.addToCart(scanned, qty, true);
-      this.clearSearch();
-      queueMicrotask(() => this.searchInput()?.nativeElement.focus());
-    });
+    if (!scanned) {
+      this.sounds.error();
+      if (fromScanner) {
+        this.notifications.error('Código no encontrado');
+        return;
+      }
+      // A mano: el término vuelve a la caja para corregirlo, con la lista a la vista.
+      this.searchTerm.set(qty > 1 ? `${qty}*${raw}` : raw);
+      this.results.set(products);
+      this.notifications.error(
+        products.length === 0
+          ? 'Producto no encontrado.'
+          : 'Hay varios resultados: elige uno de la lista.',
+      );
+      return;
+    }
+
+    this.addToCart(scanned, qty, true);
+    queueMicrotask(() => this.searchInput()?.nativeElement.focus());
   }
 
   focusSearch(event: Event): void {
@@ -1747,7 +1867,7 @@ export class Sale {
       .sort((a, b) => a.expiryDate.getTime() - b.expiryDate.getTime());
   }
 
-  private restoreCart(): void {
+  private async restoreCart(): Promise<void> {
     if (this.cart().length > 0) {
       return;
     }
@@ -1755,6 +1875,23 @@ export class Sale {
     const stored = this.cartStorage.load(uid);
     if (!stored) {
       return;
+    }
+    // Borrador con la llave de un cobro (SPEC 66): si esa venta ya existe en la
+    // caja, el ticket ya se cobró —la luz se fue entre el cobro y el borrado— y
+    // restaurarlo invitaría a cobrarlo dos veces con otra llave.
+    if (stored.idempotencyKey) {
+      const registrada = await this.saleService.findByIdempotencyKey(stored.idempotencyKey);
+      if (registrada) {
+        this.cartStorage.clear(uid);
+        this.notifications.warn(
+          `La venta de este ticket ya se registró (folio ${registrada.folio})`,
+        );
+        return;
+      }
+      // Mientras se consultaba, el cajero pudo empezar otro ticket: no se pisa.
+      if (this.cart().length > 0) {
+        return;
+      }
     }
     this.manualDiscounts.set(stored.manualDiscounts);
     this.setCart(stored.lines);

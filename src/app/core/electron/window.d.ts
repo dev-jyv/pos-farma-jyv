@@ -389,6 +389,8 @@ declare global {
           localId: string,
           options: { discardedBy: string; reason: string },
         ) => Promise<Sale | null>;
+        /** Venta local con esa llave de cobro (SPEC 66), o `null`. */
+        getByIdempotencyKey: (idempotencyKey: string) => Promise<Sale | null>;
         /** El servidor rechazó la anulación remota con un 4xx: visible en "Rechazados". */
         markVoidFailed: (localId: string, message: string) => Promise<void>;
         /** "Reintentar" de un admin: la anulación remota vuelve a la cola. */

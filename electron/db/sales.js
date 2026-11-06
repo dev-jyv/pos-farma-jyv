@@ -1147,6 +1147,19 @@ async function clearVoidError(prisma, localId) {
 }
 
 /**
+ * Venta local por su llave de cobro, o `null` (SPEC 66): la pantalla de venta la
+ * busca al restaurar un borrador del ticket. Incluye anuladas y descartadas: si
+ * la llave ya se usó, ese ticket ya se cobró y no se vuelve a cobrar.
+ */
+async function getByIdempotencyKey(prisma, idempotencyKey) {
+  if (typeof idempotencyKey !== 'string' || !idempotencyKey) {
+    return null;
+  }
+  const row = await findByIdempotencyKey(prisma, idempotencyKey);
+  return row ? toSaleDto(row) : null;
+}
+
+/**
  * Marca una venta **ya sincronizada** para anularse también en el servidor en el
  * próximo sync. Es el camino de la anulación sin red: en local ya quedó anulada
  * y el stock repuesto, pero el backend todavía la tiene activa.
@@ -1317,6 +1330,7 @@ module.exports = {
   markRemoteVoided,
   markVoidFailed,
   clearVoidError,
+  getByIdempotencyKey,
   requeueOrphanRemoteVoids,
   REASON_MIN_LENGTH,
 };

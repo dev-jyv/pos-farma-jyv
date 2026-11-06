@@ -732,6 +732,7 @@
   [saleDiscountAmount]="couponSaleDiscount()"
   (closed)="checkoutVisible.set(false)"
   (completed)="onSaleCompleted($event)"
+  (chargeKeyIssued)="chargeKey.set($event)"
   (promotionClosed)="onPromotionClosed($event)"
   (couponExpired)="onCouponExpired($event)"
 />

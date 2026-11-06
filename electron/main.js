@@ -547,6 +547,8 @@ function registrarIPCHandlers() {
     salesDb.clearPushError(await getPrisma(), localId));
   ipcMain.handle('sales:discard', async (_event, localId, options) =>
     salesDb.discard(await getPrisma(), localId, options));
+  ipcMain.handle('sales:getByIdempotencyKey', async (_event, idempotencyKey) =>
+    salesDb.getByIdempotencyKey(await getPrisma(), idempotencyKey));
   ipcMain.handle('sales:markVoidFailed', async (_event, localId, message) => {
     const prisma = await getPrisma();
     await salesDb.markVoidFailed(prisma, localId, message);

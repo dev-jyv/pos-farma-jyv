@@ -60,6 +60,7 @@ import { fromCents, toCents } from '../../../shared/utils/money';
 import { resolveTender } from '../../../shared/utils/tender';
 import { environment } from '../../../../environments/environment';
 import { pushOwnerFilter } from '../../../core/sync/push-owner';
+import { CartStorageService } from './cart-storage.service';
 import {
   SyncFailure,
   SyncRejectionError,
@@ -464,6 +465,7 @@ export class SaleService {
   private readonly http = inject(HttpClient);
   private readonly auth = inject(AuthService);
   private readonly autoPush = inject(AutoPushService);
+  private readonly cartStorage = inject(CartStorageService);
   private readonly apiUrl = environment.apiUrl;
 
   private flushing = false;
@@ -672,8 +674,14 @@ export class SaleService {
 
     // `defer` por lo mismo que `list()`: si no hay `electronAPI`, el cobro debe
     // fallar por el canal de error del observable y no como excepción suelta.
+    const uid = this.auth.user()?.uid ?? '';
     return defer(() => this.api().sales.createLocal(input)).pipe(
       tap(() => {
+        // En la misma secuencia que confirma la venta en SQLite (SPEC 66): el
+        // borrador del ticket ya cobrado se borra antes de avisar a la pantalla.
+        // Si la luz se va justo entre las dos, el borrador trae la llave de este
+        // cobro y la pantalla lo descarta al restaurarlo (`findByIdempotencyKey`).
+        this.cartStorage.clear(uid);
         this.refreshPending();
         // Sube en segundo plano (debounce): nunca baja el catálogo.
         this.autoPush.notifyChange();
@@ -762,6 +770,19 @@ export class SaleService {
   movements(saleId: string): Observable<SaleMovement[]> {
     // Mismo motivo que en `list()`: el fallo tiene que viajar por el stream.
     return defer(() => this.api().sales.listMovements(saleId));
+  }
+
+  /**
+   * Venta local con esa llave de cobro (SPEC 66), o `null`. La pantalla de venta
+   * la usa al restaurar un borrador: si ya existe, ese ticket ya se cobró.
+   * Un fallo del IPC se toma como "no existe": el borrador se restaura como antes.
+   */
+  async findByIdempotencyKey(idempotencyKey: string): Promise<Sale | null> {
+    try {
+      return (await window.electronAPI?.sales.getByIdempotencyKey?.(idempotencyKey)) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /**
