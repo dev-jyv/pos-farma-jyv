@@ -463,6 +463,28 @@ describe('SyncScheduler — los empujes no se solapan', () => {
     expect(pasos.filter((p) => p === 'turnos')).toHaveLength(2);
   });
 
+  it('si fallan catálogo o entradas, las ventas suben igual', async () => {
+    // Caja real 1.0.12: la consulta de entradas tronaba por un lote huérfano y
+    // las 24 ventas del día se quedaron sin subir.
+    const catalogo = TestBed.inject(ProductCatalogService) as unknown as { flushQueueAsync: Mock };
+    const entradas = TestBed.inject(StockEntryService) as unknown as { flushQueueAsync: Mock };
+    catalogo.flushQueueAsync.mockRejectedValueOnce(new Error('catálogo roto'));
+    entradas.flushQueueAsync.mockRejectedValueOnce(new Error('Field product is required'));
+
+    await scheduler.flushPendingNow();
+
+    expect(pasos).toEqual(['movimientos', 'ventas', 'cierres', 'turnos', 'movimientos', 'ventas']);
+  });
+
+  it('si fallan las ventas, el cierre no sale antes que ellas', async () => {
+    const ventas = TestBed.inject(SaleService) as unknown as { flushQueueAsync: Mock };
+    ventas.flushQueueAsync.mockRejectedValueOnce(new Error('sin red'));
+
+    await scheduler.flushPendingNow().catch(() => undefined);
+
+    expect(pasos).not.toContain('cierres');
+  });
+
   it('una corrida que falla no deja atorada a la siguiente', async () => {
     const cashSessions = TestBed.inject(CashSessionService) as unknown as {
       flushQueueAsync: Mock;

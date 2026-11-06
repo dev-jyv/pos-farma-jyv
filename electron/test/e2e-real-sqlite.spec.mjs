@@ -680,6 +680,38 @@ describe('jornada completa contra SQLite real', () => {
   });
 
   /**
+   * Caja real (1.0.12): un lote cuyo producto ya no existe hacía que el `include`
+   * lanzara "Field product is required" y ninguna venta volviera a subir.
+   */
+  it('un lote huérfano no frena la cola: se aparta como rechazado y se puede descartar', async () => {
+    const sano = await unProducto({ id: 'p-sano', stock: 0, remoteId: 'fs-sano' });
+    const perdido = await unProducto({ id: 'p-perdido', stock: 0, remoteId: 'fs-perdido' });
+    for (const producto of [sano, perdido]) {
+      await productos.recordStockEntry(prisma, {
+        productId: producto.id,
+        lotNumber: `L-${producto.id}`,
+        expiryDate: '2027-06-30',
+        quantity: 3,
+        invoiceId: 'inv-o',
+      });
+    }
+    const huerfano = await prisma.batch.findFirst({ where: { productId: perdido.id } });
+    await prisma.$executeRawUnsafe('PRAGMA foreign_keys = OFF');
+    await prisma.$executeRawUnsafe(`DELETE FROM "Product" WHERE "id" = '${perdido.id}'`);
+    await prisma.$executeRawUnsafe('PRAGMA foreign_keys = ON');
+
+    const pendientes = await productos.getPendingStockEntries(prisma);
+    expect(pendientes.map((p) => p.payload.productId)).toEqual(['fs-sano']);
+
+    const [bloqueado] = await productos.listBlockedStockEntries(prisma);
+    expect(bloqueado.id).toBe(huerfano.id);
+    expect(bloqueado.reason).toMatch(/ya no existe en la caja/);
+
+    await productos.discardStockEntry(prisma, huerfano.id);
+    expect(await prisma.batch.findUnique({ where: { id: huerfano.id } })).toBeNull();
+  });
+
+  /**
    * Bug "Sincronizado" engañoso: un lote o producto rechazado no era ni pendiente
    * ni rechazado a la vista, así que el panel no lo mostraba y el stock quedaba
    * solo en la caja sin que nadie se enterara.

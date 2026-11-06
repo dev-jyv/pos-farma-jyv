@@ -539,6 +539,22 @@ async function getBatchesByProduct(prisma, productId) {
  */
 const PRODUCTO_NO_ENCONTRADO = 'Producto no encontrado';
 
+const PRODUCTO_HUERFANO =
+  'El producto de esta entrada ya no existe en la caja. Descártala y vuelve a capturarla.';
+
+/**
+ * Productos de los lotes, por id. Va aparte y no con `include`: un lote cuyo
+ * producto ya no existe hace que Prisma lance "Inconsistent query result:
+ * Field product is required" y tumbe la consulta completa.
+ */
+async function productsById(prisma, rows) {
+  const ids = [...new Set(rows.map((row) => row.productId))];
+  const productos = ids.length
+    ? await prisma.product.findMany({ where: { id: { in: ids } } })
+    : [];
+  return new Map(productos.map((producto) => [producto.id, producto]));
+}
+
 /**
  * Entradas de stock listas para subir. El `productId` del payload se resuelve
  * **aquí**, al subir, contra el `remoteId` actual del producto (igual que las
@@ -566,13 +582,24 @@ async function getPendingStockEntries(prisma, { includeWaiting = false } = {}) {
       OR: [{ pushError: null }, { pushError: PRODUCTO_NO_ENCONTRADO }],
     },
     orderBy: { createdAt: 'asc' },
-    include: { product: { select: { remoteId: true } } },
   });
+  const productos = await productsById(prisma, rows);
 
   const listos = [];
   for (const row of rows) {
     let payload = JSON.parse(row.payloadJson);
-    const remoteId = row.product?.remoteId ?? null;
+    const producto = productos.get(row.productId);
+    const remoteId = producto?.remoteId ?? null;
+
+    if (!producto && !payload.product) {
+      // Lote huérfano: su producto ya no está en la caja. Se aparta como
+      // rechazado para que salga en el panel y se pueda descartar; antes un
+      // `include` truena aquí y frenaba la subida de **todo** (ventas incluidas).
+      if (!row.pushError) {
+        await markStockEntryPushFailed(prisma, row.id, PRODUCTO_HUERFANO);
+      }
+      continue;
+    }
 
     if (!payload.product) {
       if (!remoteId) {
@@ -636,8 +663,13 @@ async function markStockEntrySynced(prisma, batchLocalId, remoteProductId) {
     });
     if (remoteProductId) {
       const local = await tx.product.findUnique({ where: { id: batch.productId } });
+      if (!local) {
+        // Lote huérfano: no hay producto que enlazar, y eso no debe deshacer
+        // que la entrada ya subió.
+        return;
+      }
       await linkRemoteId(tx, batch.productId, remoteProductId, {
-        preferLocalCatalog: Boolean(local) && (await hasPendingCatalogEdit(tx, local)),
+        preferLocalCatalog: await hasPendingCatalogEdit(tx, local),
         reason: 'entrada de stock',
       });
       await tx.product.update({
@@ -747,13 +779,13 @@ async function listBlockedStockEntries(prisma) {
   const rows = await prisma.batch.findMany({
     where: { pendingPush: true, pushError: { not: null }, payloadJson: { not: null } },
     orderBy: { createdAt: 'asc' },
-    include: { product: { select: { name: true } } },
   });
+  const productos = await productsById(prisma, rows);
   return rows.map((row) => ({
     kind: 'stockEntry',
     id: row.id,
     label: `Entrada ${row.lotNumber ?? 'sin lote'}`,
-    detail: `${row.product?.name ?? 'Producto'} · ${row.quantity} pzas`,
+    detail: `${productos.get(row.productId)?.name ?? 'Producto'} · ${row.quantity} pzas`,
     occurredAt: row.createdAt,
     reason: row.pushError,
     diagnosis: diagnoseReason(row.pushError),
