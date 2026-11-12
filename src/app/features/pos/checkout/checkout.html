@@ -17,7 +17,7 @@
       <!-- slate-600 sobre blanco = 7.58:1; slate-400/500 no llegaban al 4.5:1 de AA
            a estos tamaños (11-12px). -->
       <span class="text-xs text-slate-600">
-        {{ 'checkout.itemCount' | translate: { count: itemCount() } }}
+        {{ (itemCount() === 1 ? 'checkout.itemCountOne' : 'checkout.itemCount') | translate: { count: itemCount() } }}
       </span>
       <span class="ml-auto hidden items-center gap-1.5 text-[11px] text-slate-600 sm:flex">
         <span class="pos-kbd">Alt</span>+<span class="pos-kbd">1</span>

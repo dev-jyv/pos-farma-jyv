@@ -124,7 +124,7 @@ export class Shell {
       const reply = await this.syncHelp.ask(record);
       this.aiHelp.update((estado) => ({ ...estado, [key]: { loading: false, reply } }));
     } catch (error: unknown) {
-      const mensaje = error instanceof Error ? error.message : 'La ayuda con IA no está disponible.';
+      const mensaje = error instanceof Error ? error.message : this.translate.instant('shell.msg.aiUnavailable');
       this.aiHelp.update((estado) => ({ ...estado, [key]: { loading: false, error: mensaje } }));
     }
   }
@@ -149,7 +149,7 @@ export class Shell {
       await this.blockedSync.refresh();
     } catch (error: unknown) {
       this.notifications.error(
-        error instanceof Error ? error.message : 'No se pudo reintentar el registro.',
+        error instanceof Error ? error.message : this.translate.instant('shell.msg.retryFailed'),
       );
     } finally {
       this.retryingBlockedId.set(null);
@@ -197,7 +197,7 @@ export class Shell {
       if (outcome.ok) {
         this.notifications.success(`${record.label}: ${outcome.message}`);
       } else {
-        this.notifications.warn(outcome.message, `No se pudo arreglar ${record.label}`);
+        this.notifications.warn(outcome.message, this.translate.instant('shell.msg.repairFailed', { label: record.label }));
       }
     } finally {
       this.repairingId.set(null);
@@ -213,9 +213,7 @@ export class Shell {
    */
   async sendBlockedToUnreconciled(record: BlockedSyncRecord): Promise<void> {
     const confirmado = window.confirm(
-      `¿Mandar "${record.label}" (${record.detail}) a conciliación?\n\n` +
-        'Su turno nunca se registró en el servidor. La venta quedará registrada ' +
-        'aparte para que un administrador la concilie, y saldrá de la cola de esta caja.',
+      this.translate.instant('shell.msg.confirmUnreconciled', { label: record.label, detail: record.detail }),
     );
     if (!confirmado) {
       return;
@@ -254,9 +252,8 @@ export class Shell {
 
   askAdmin(record: BlockedSyncRecord): void {
     this.notifications.warn(
-      'Pide a un administrador que entre en esta caja y pulse Reintentar en este registro: ' +
-        'con su sesión la anulación se vuelve a enviar al servidor.',
-      `${record.label}: necesita a un administrador`,
+      this.translate.instant('shell.msg.askAdminBody'),
+      this.translate.instant('shell.msg.askAdminTitle', { label: record.label }),
     );
   }
 
@@ -279,10 +276,10 @@ export class Shell {
     try {
       await this.blockedSync.discard(record, reason);
       this.discardTarget.set(null);
-      this.notifications.success('Venta descartada; el motivo quedó en la bitácora.');
+      this.notifications.success(this.translate.instant('shell.msg.saleDiscarded'));
     } catch (error: unknown) {
       this.notifications.error(
-        error instanceof Error ? error.message : 'No se pudo descartar el registro.',
+        error instanceof Error ? error.message : this.translate.instant('shell.msg.discardFailed'),
       );
     } finally {
       this.discarding.set(false);
@@ -302,8 +299,7 @@ export class Shell {
   async resolveConflict(record: BlockedSyncRecord, choice: CatalogConflictChoice): Promise<void> {
     if (choice === 'mine') {
       const confirmado = window.confirm(
-        `¿Forzar el valor de esta caja para "${record.label}"?\n\n` +
-          'Se sube aunque en el panel lo hayan cambiado después, y reemplaza lo del panel.',
+        this.translate.instant('shell.msg.confirmForceMine', { label: record.label }),
       );
       if (!confirmado) {
         return;
@@ -316,7 +312,7 @@ export class Shell {
       await this.blockedSync.refresh();
     } catch (error: unknown) {
       this.notifications.error(
-        error instanceof Error ? error.message : 'No se pudo resolver el conflicto del producto.',
+        error instanceof Error ? error.message : this.translate.instant('shell.msg.conflictFailed'),
       );
     } finally {
       this.retryingBlockedId.set(null);
@@ -336,9 +332,7 @@ export class Shell {
    */
   async confirmDuplicateEntry(record: BlockedSyncRecord): Promise<void> {
     const confirmado = window.confirm(
-      `¿"${record.label}" (${record.detail}) es otra partida de la factura?\n\n` +
-        'Se registrará aunque la factura ya tenga una entrada igual. Si es la misma ' +
-        'mercancía capturada otra vez, elige Descartar.',
+      this.translate.instant('shell.msg.confirmDuplicate', { label: record.label, detail: record.detail }),
     );
     if (!confirmado) {
       return;
@@ -350,7 +344,7 @@ export class Shell {
       await this.blockedSync.refresh();
     } catch (error: unknown) {
       this.notifications.error(
-        error instanceof Error ? error.message : 'No se pudo reenviar la entrada.',
+        error instanceof Error ? error.message : this.translate.instant('shell.msg.resendEntryFailed'),
       );
     } finally {
       this.retryingBlockedId.set(null);
@@ -378,22 +372,21 @@ export class Shell {
       this.discardTarget.set(record);
       return;
     }
-    const consecuencia =
-      record.kind === 'stockEntry'
-        ? 'Se borra de este equipo, nunca llegará al servidor y se descuentan esas piezas del stock de esta caja.'
-        : 'Se borra de este equipo y nunca llegará al servidor. Si ya se cobró o se pagó, quedará sin registro.';
+    const consecuencia = this.translate.instant(
+      record.kind === 'stockEntry' ? 'shell.msg.discardConsequenceEntry' : 'shell.msg.discardConsequence',
+    );
     const confirmado = window.confirm(
-      `¿Descartar "${record.label}" (${record.detail})?\n\n${consecuencia}`,
+      this.translate.instant('shell.msg.confirmDiscard', { label: record.label, detail: record.detail, consequence: consecuencia }),
     );
     if (!confirmado) {
       return;
     }
     try {
       await this.blockedSync.discard(record);
-      this.notifications.success('Registro descartado.');
+      this.notifications.success(this.translate.instant('shell.msg.recordDiscarded'));
     } catch (error: unknown) {
       this.notifications.error(
-        error instanceof Error ? error.message : 'No se pudo descartar el registro.',
+        error instanceof Error ? error.message : this.translate.instant('shell.msg.discardFailed'),
       );
     }
     this.closeBlockedIfEmpty();
@@ -546,7 +539,7 @@ export class Shell {
     const blockedUntil = this.nextManualSyncAt();
     if (blockedUntil) {
       this.notifications.error(
-        `Ya sincronizaste hace poco. Podrás volver a hacerlo a las ${this.formatTime(blockedUntil)}.`,
+        this.translate.instant('shell.msg.syncCooldown', { time: this.formatTime(blockedUntil) }),
       );
       return;
     }
@@ -554,18 +547,14 @@ export class Shell {
     const gastos = this.cashMovementService.pendingCount();
     const partes: string[] = [];
     if (ventas > 0) {
-      partes.push(`${ventas} venta(s)`);
+      partes.push(this.translate.instant('shell.msg.pendingSales', { count: ventas }));
     }
     if (gastos > 0) {
-      partes.push(`${gastos} gasto(s)`);
+      partes.push(this.translate.instant('shell.msg.pendingExpenses', { count: gastos }));
     }
     const detail =
-      partes.length > 0 ? `Hay ${partes.join(' y ')} pendiente(s) de sincronizar. ` : '';
-    if (
-      !window.confirm(
-        `${detail}¿Sincronizar ahora? Se subirán ventas, gastos y lo demás pendiente, y se traerá el catálogo.`,
-      )
-    ) {
+      partes.length > 0 ? this.translate.instant('shell.msg.pendingDetail', { parts: partes.join(this.translate.instant('shell.msg.and')) }) : '';
+    if (!window.confirm(detail + this.translate.instant('shell.msg.confirmSync'))) {
       return;
     }
     void this.runSync();
@@ -581,7 +570,7 @@ export class Shell {
       this.isAdmin(),
     );
     if (!result.ok) {
-      this.notifications.error(result.errorMessage || 'No se pudo sincronizar.');
+      this.notifications.error(result.errorMessage || this.translate.instant('shell.msg.syncFailed'));
       await this.blockedSync.refresh();
       return;
     }
@@ -593,14 +582,14 @@ export class Shell {
     const pending = await this.syncScheduler.countPending().catch(() => 0);
     if (rejected > 0) {
       this.notifications.error(
-        `Catálogo actualizado (${result.pulled} cambios), pero el servidor rechazó ${rejected} registro(s) y no se subieron. Ábrelos en el aviso rojo para ver qué hacer.`,
+        this.translate.instant('shell.msg.syncRejected', { pulled: result.pulled, rejected }),
       );
     } else if (pending > 0) {
       this.notifications.error(
-        `Catálogo actualizado (${result.pulled} cambios), pero quedan ${pending} movimiento(s) sin subir. Revisa los rechazados o vuelve a intentar.`,
+        this.translate.instant('shell.msg.syncPending', { pulled: result.pulled, pending }),
       );
     } else {
-      this.notifications.success(`Sincronizado (${result.pulled} cambios de catálogo).`);
+      this.notifications.success(this.translate.instant('shell.msg.synced', { pulled: result.pulled }));
     }
   }
 
@@ -644,8 +633,7 @@ export class Shell {
     const pending = await this.flushBeforeLeaving();
     if (pending > 0) {
       const salir = window.confirm(
-        `Quedan ${pending} movimiento(s) sin sincronizar (ventas, cortes, entradas o gastos). ` +
-          'Se enviarán la próxima vez que abras la app. ¿Salir de todas formas?',
+        this.translate.instant('shell.msg.confirmQuit', { pending }),
       );
       if (!salir) {
         void api.app.cancelClose();
@@ -716,8 +704,7 @@ export class Shell {
       return true;
     }
     return window.confirm(
-      `Quedan ${pending} movimiento(s) sin sincronizar (ventas, cortes, entradas o gastos). ` +
-        'Se enviarán cuando este equipo vuelva a tener red. ¿Cerrar sesión de todas formas?',
+      this.translate.instant('shell.msg.confirmLogout', { pending }),
     );
   }
 
@@ -756,12 +743,10 @@ export class Shell {
       const pending = await this.syncScheduler.countPending();
       if (pending > 0) {
         this.notifications.error(
-          this.browserOnline()
-            ? `Quedan ${pending} movimiento(s) sin sincronizar (ventas, gastos, productos o entradas). ` +
-              'Hay red, pero el servidor no los confirmó. Revisa los rechazados o pulsa Sincronizar; ' +
-              'puedes cerrar el turno igual.'
-            : `Quedan ${pending} movimiento(s) sin sincronizar (ventas, gastos, productos o entradas). ` +
-              'Sin red se reintentarán al volver a conectar; puedes cerrar el turno igual.',
+          this.translate.instant(
+            this.browserOnline() ? 'shell.msg.closePendingOnline' : 'shell.msg.closePendingOffline',
+            { pending },
+          ),
         );
       }
       await this.blockedSync.refresh();
@@ -769,7 +754,7 @@ export class Shell {
       const pending = await this.syncScheduler.countPending().catch(() => 0);
       if (pending > 0) {
         this.notifications.error(
-          `Quedan ${pending} movimiento(s) sin sincronizar. Puedes cerrar el turno igual.`,
+          this.translate.instant('shell.msg.closePending', { pending }),
         );
       }
     } finally {

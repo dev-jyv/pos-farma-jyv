@@ -335,7 +335,7 @@
           @if (itemCount() === 0) {
             {{ 'sale.noItems' | translate }}
           } @else {
-            {{ 'checkout.itemCount' | translate: { count: itemCount() } }}
+            {{ (itemCount() === 1 ? 'checkout.itemCountOne' : 'checkout.itemCount') | translate: { count: itemCount() } }}
           }
         </p>
       </div>
