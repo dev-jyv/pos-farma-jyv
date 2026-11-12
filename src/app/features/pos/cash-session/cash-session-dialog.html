@@ -5,7 +5,7 @@
   [closeOnEscape]="canDismiss()"
   [dismissableMask]="canDismiss()"
   [style]="{ width: mode() === 'open' ? '26rem' : '32rem' }"
-  [closeAriaLabel]="'Cerrar'"
+  [closeAriaLabel]="'common.close' | translate"
   (onHide)="cancel()"
 >
   <ng-template #header>

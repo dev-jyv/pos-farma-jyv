@@ -1,6 +1,7 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { TranslatePipe } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { SelectModule } from 'primeng/select';
 import { TableModule } from 'primeng/table';
@@ -59,7 +60,7 @@ function daysAgo(days: number): Date {
 @Component({
   selector: 'app-controlled-ledger',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, FormsModule, ButtonModule, SelectModule, TableModule, TooltipModule],
+  imports: [DatePipe, FormsModule, TranslatePipe, ButtonModule, SelectModule, TableModule, TooltipModule],
   templateUrl: './controlled-ledger.html',
   styleUrl: './controlled-ledger.css',
 })

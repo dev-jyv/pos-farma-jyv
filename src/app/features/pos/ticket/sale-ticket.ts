@@ -1,4 +1,5 @@
 import { CurrencyPipe, DatePipe } from '@angular/common';
+import { TranslatePipe } from '@ngx-translate/core';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 import { CashSessionSummary, PaymentMethod, Sale, SaleItem, isSaleProductItem } from '../../../shared/models';
@@ -15,7 +16,7 @@ const METHOD_LABELS: Record<PaymentMethod, string> = {
 @Component({
   selector: 'app-sale-ticket',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, DatePipe],
+  imports: [CurrencyPipe, DatePipe, TranslatePipe],
   templateUrl: './sale-ticket.html',
   styleUrl: './sale-ticket.css',
   host: {
@@ -96,7 +97,7 @@ export class SaleTicket {
 @Component({
   selector: 'app-cash-cut-ticket',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, DatePipe],
+  imports: [CurrencyPipe, DatePipe, TranslatePipe],
   templateUrl: './cash-cut-ticket.html',
   styleUrl: './sale-ticket.css',
 })
