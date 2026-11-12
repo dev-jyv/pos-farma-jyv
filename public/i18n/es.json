@@ -23,7 +23,97 @@
     "modalBody": "Trayendo el catálogo más reciente antes de empezar a vender…",
     "cooldown": "Ya sincronizaste hace poco. Podrás volver a hacerlo a las {{time}}.",
     "exitTitle": "Sincronizando antes de salir",
-    "exitBody": "Enviando ventas, gastos, productos nuevos y movimientos pendientes…"
+    "exitBody": "Enviando ventas, gastos, productos nuevos y movimientos pendientes…",
+    "blocked": {
+      "shiftNotUploaded": {
+        "title": "Falta subir el turno",
+        "explanation": "La venta está bien, pero su turno{{dep}} todavía no llega al servidor, casi siempre por falta de internet. Con conexión, pulsa Reintentar: sube el turno y después la venta."
+      },
+      "shiftRejected": {
+        "title": "El servidor rechazó el turno de esta venta",
+        "explanation": "Primero hay que resolver la apertura del turno{{dep}}, que también aparece en esta lista. Cuando suba, reintenta la venta. No la descartes: es dinero cobrado."
+      },
+      "productNotUploaded": {
+        "title": "Falta subir un producto nuevo",
+        "explanation": "El producto «{{name}}» se dio de alta en esta caja y aún no llega al servidor. Con conexión, pulsa Reintentar: sube el catálogo y después la venta.",
+        "explanationNoName": "El producto «nuevo» se dio de alta en esta caja y aún no llega al servidor. Con conexión, pulsa Reintentar: sube el catálogo y después la venta."
+      },
+      "productRejected": {
+        "title": "El servidor rechazó un producto de esta venta",
+        "explanation": "El alta de «{{name}}» fue rechazada. Corrígelo en Productos o avisa al administrador; después reintenta la venta.",
+        "explanationNoName": "El alta de «un producto» fue rechazada. Corrígelo en Productos o avisa al administrador; después reintenta la venta."
+      },
+      "productNotFoundEntry": {
+        "title": "El servidor no conoce el producto de esta entrada",
+        "explanation": "Casi siempre el producto aún no había subido cuando se envió la entrada. Con conexión, pulsa Reintentar: la caja sube primero el producto y después la entrada."
+      },
+      "productNotFound": {
+        "title": "Un producto de esta venta ya no existe",
+        "explanation": "Probablemente se borró del catálogo. Avisa al administrador antes de descartar la venta: el cobro ya se hizo."
+      },
+      "entryInProgress": {
+        "title": "El servidor todavía está registrando esta entrada",
+        "explanation": "Un intento anterior de subir esta entrada sigue en curso en el servidor. No es un rechazo: espera unos minutos y pulsa Reintentar. No la captures de nuevo, se duplicaría el stock."
+      },
+      "entryHalfDone": {
+        "title": "El servidor dejó esta entrada a medias",
+        "explanation": "Un intento anterior no terminó de registrar la entrada y el servidor no la acepta otra vez hasta que alguien la revise. No la reintentes: avisa al administrador para que revise el lote en inventario. Si ya está registrado ahí, esta copia se puede descartar."
+      },
+      "entryPossibleDuplicate": {
+        "title": "¿Factura capturada dos veces?",
+        "explanation": "Esta factura ya tiene en el servidor una entrada con el mismo producto, lote y cantidad. Si de verdad son dos partidas iguales, pulsa \"Sí, es otra partida\". Si es la misma mercancía capturada otra vez (otra foto, el PDF o en otra caja), pulsa \"Descartar\": se quitan esas piezas del stock de esta caja."
+      },
+      "readyToRetry": {
+        "title": "Ya se puede enviar",
+        "explanation": "Lo que faltaba ya llegó al servidor. Pulsa Reintentar."
+      },
+      "shiftDuplicate": {
+        "title": "Choque con el turno anterior",
+        "explanation": "El servidor todavía tiene abierto un turno anterior de este equipo. Reintenta: la caja sube primero ese cierre. Si se repite, avisa al administrador."
+      },
+      "shiftAlreadyOpen": {
+        "title": "Ya hay un turno abierto en el servidor",
+        "explanation": "Este cajero tiene otro turno abierto en el servidor (quizá en otro equipo). El administrador debe cerrarlo; después reintenta."
+      },
+      "shiftForeign": {
+        "title": "El turno es de otro cajero",
+        "explanation": "Solo quien abrió el turno o un administrador puede subir esto. Que esa persona entre en esta caja, o avisa al administrador."
+      },
+      "shiftClosed": {
+        "title": "El turno ya está cerrado en el servidor",
+        "explanationMovement": "Este gasto llegó después del cierre del turno. Corrígelo para registrarlo en el turno actual, o avisa al administrador.",
+        "explanation": "Este registro llegó después del cierre del turno. Avisa al administrador: debe registrarse aparte. No lo descartes sin consultarlo."
+      },
+      "shiftNotFound": {
+        "title": "El servidor no conoce el turno",
+        "explanation": "Reintenta: la caja sube primero el turno y después lo demás. Si se repite, avisa al administrador."
+      },
+      "noStock": {
+        "title": "Sin existencias en el servidor",
+        "explanation": "El servidor no tiene stock suficiente para esta venta (puede faltar registrar una entrada de mercancía). Registra la entrada o avisa al administrador; después reintenta."
+      },
+      "promotionClosed": {
+        "title": "La promoción ya terminó",
+        "explanation": "La venta se cobró con una promoción que ya no está vigente en el servidor. Avisa al administrador: decide si se respeta el precio cobrado."
+      },
+      "voidRejected": {
+        "title": "El servidor rechazó la anulación",
+        "explanation": "La venta está anulada en esta caja, pero en el servidor sigue activa. Pide a un administrador que entre en esta caja y pulse Reintentar: con su sesión la anulación se vuelve a enviar. No la cobres de nuevo."
+      },
+      "catalogConflict": {
+        "title": "El producto cambió en el panel",
+        "explanation": "Mientras esta caja guardaba su cambio, en el panel cambiaron el precio o el estado del producto. Elige \"Usar el del panel\" para quedarte con lo del panel, o \"Forzar el mío\" si el valor de esta caja es el correcto. Lo demás que corregiste se sube igual."
+      },
+      "productDuplicate": {
+        "title": "Ya existe otro producto con ese SKU o nombre",
+        "explanation": "Otra caja o el panel dio de alta un producto distinto con el mismo SKU o nombre, y no coinciden el código de barras ni el nombre con su concentración, así que la caja no lo adopta. Corrige el SKU o el nombre en Productos y reintenta, o avisa al administrador."
+      },
+      "unknown": {
+        "title": "Motivo no reconocido",
+        "explanationGoods": "Lee el detalle de abajo y avisa al administrador antes de descartar: la mercancía ya está en esta caja y el servidor no la conoce.",
+        "explanation": "Lee el detalle de abajo y avisa al administrador antes de descartar: puede ser dinero ya cobrado."
+      }
+    }
   },
   "nav": {
     "sale": "Venta",

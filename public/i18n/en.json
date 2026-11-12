@@ -585,7 +585,97 @@
     "modalBody": "Fetching the latest catalog before you start selling…",
     "cooldown": "You synced recently. You can sync again at {{time}}.",
     "exitTitle": "Syncing before exit",
-    "exitBody": "Sending pending sales, expenses, new products and movements…"
+    "exitBody": "Sending pending sales, expenses, new products and movements…",
+    "blocked": {
+      "shiftNotUploaded": {
+        "title": "The shift is not uploaded yet",
+        "explanation": "The sale is fine, but its shift{{dep}} has not reached the server yet, usually for lack of internet. With a connection, press Retry: it uploads the shift and then the sale."
+      },
+      "shiftRejected": {
+        "title": "The server rejected this sale's shift",
+        "explanation": "First resolve the shift opening{{dep}}, which also appears in this list. Once it uploads, retry the sale. Do not discard it: it is money collected."
+      },
+      "productNotUploaded": {
+        "title": "A new product is not uploaded yet",
+        "explanation": "The product \"{{name}}\" was created on this register and has not reached the server yet. With a connection, press Retry: it uploads the catalog and then the sale.",
+        "explanationNoName": "The new product was created on this register and has not reached the server yet. With a connection, press Retry: it uploads the catalog and then the sale."
+      },
+      "productRejected": {
+        "title": "The server rejected a product in this sale",
+        "explanation": "Creating \"{{name}}\" was rejected. Fix it in Products or tell the administrator; then retry the sale.",
+        "explanationNoName": "Creating a product was rejected. Fix it in Products or tell the administrator; then retry the sale."
+      },
+      "productNotFoundEntry": {
+        "title": "The server does not know this entry's product",
+        "explanation": "Usually the product had not uploaded yet when the entry was sent. With a connection, press Retry: the register uploads the product first and then the entry."
+      },
+      "productNotFound": {
+        "title": "A product in this sale no longer exists",
+        "explanation": "It was probably deleted from the catalog. Tell the administrator before discarding the sale: the charge was already made."
+      },
+      "entryInProgress": {
+        "title": "The server is still recording this entry",
+        "explanation": "An earlier attempt to upload this entry is still running on the server. It is not a rejection: wait a few minutes and press Retry. Do not enter it again or stock would be duplicated."
+      },
+      "entryHalfDone": {
+        "title": "The server left this entry half done",
+        "explanation": "An earlier attempt did not finish recording the entry and the server will not accept it again until someone reviews it. Do not retry it: tell the administrator to check the lot in inventory. If it is already recorded there, this copy can be discarded."
+      },
+      "entryPossibleDuplicate": {
+        "title": "Invoice entered twice?",
+        "explanation": "This invoice already has an entry on the server with the same product, lot and quantity. If they really are two identical lines, press \"Yes, it's another line\". If it is the same goods entered again (another photo, the PDF or on another register), press \"Discard\": those pieces are removed from this register's stock."
+      },
+      "readyToRetry": {
+        "title": "Ready to send",
+        "explanation": "What was missing has reached the server. Press Retry."
+      },
+      "shiftDuplicate": {
+        "title": "Conflict with the previous shift",
+        "explanation": "The server still has an earlier shift open for this device. Retry: the register uploads that close first. If it happens again, tell the administrator."
+      },
+      "shiftAlreadyOpen": {
+        "title": "A shift is already open on the server",
+        "explanation": "This cashier has another shift open on the server (maybe on another device). The administrator must close it; then retry."
+      },
+      "shiftForeign": {
+        "title": "The shift belongs to another cashier",
+        "explanation": "Only whoever opened the shift or an administrator can upload this. Have that person sign in on this register, or tell the administrator."
+      },
+      "shiftClosed": {
+        "title": "The shift is already closed on the server",
+        "explanationMovement": "This expense arrived after the shift closed. Correct it to record it in the current shift, or tell the administrator.",
+        "explanation": "This record arrived after the shift closed. Tell the administrator: it must be recorded separately. Do not discard it without asking."
+      },
+      "shiftNotFound": {
+        "title": "The server does not know the shift",
+        "explanation": "Retry: the register uploads the shift first and then the rest. If it happens again, tell the administrator."
+      },
+      "noStock": {
+        "title": "No stock on the server",
+        "explanation": "The server does not have enough stock for this sale (a goods entry may be missing). Record the entry or tell the administrator; then retry."
+      },
+      "promotionClosed": {
+        "title": "The promotion has ended",
+        "explanation": "The sale was charged with a promotion that is no longer active on the server. Tell the administrator: they decide whether the charged price stands."
+      },
+      "voidRejected": {
+        "title": "The server rejected the void",
+        "explanation": "The sale is voided on this register, but it is still active on the server. Ask an administrator to sign in on this register and press Retry: with their session the void is sent again. Do not charge it again."
+      },
+      "catalogConflict": {
+        "title": "The product changed in the panel",
+        "explanation": "While this register was saving its change, the price or status of the product changed in the panel. Choose \"Use the panel's\" to keep the panel values, or \"Force mine\" if this register's value is right. The rest of your corrections upload anyway."
+      },
+      "productDuplicate": {
+        "title": "Another product with that SKU or name already exists",
+        "explanation": "Another register or the panel created a different product with the same SKU or name, and neither the barcode nor the name with its strength match, so the register does not adopt it. Fix the SKU or name in Products and retry, or tell the administrator."
+      },
+      "unknown": {
+        "title": "Unrecognized reason",
+        "explanationGoods": "Read the detail below and tell the administrator before discarding: the goods are already on this register and the server does not know them.",
+        "explanation": "Read the detail below and tell the administrator before discarding: it may be money already collected."
+      }
+    }
   },
   "categories": {
     "title": "Categories",
