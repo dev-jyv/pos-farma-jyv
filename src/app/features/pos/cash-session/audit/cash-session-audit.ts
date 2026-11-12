@@ -48,6 +48,10 @@ export class CashSessionAudit {
   private readonly notifications = inject(NotificationService);
   private readonly translate = inject(TranslateService);
 
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
+
   /** Cortes por página. La paginación es del servidor (`page` + `meta`). */
   readonly pageSize = 50;
 
@@ -122,7 +126,7 @@ export class CashSessionAudit {
         },
         error: (error: unknown) => {
           this.loaded.set(true);
-          this.loadError.set(getApiErrorMessage(error) || 'No se pudo cargar el listado de cortes.');
+          this.loadError.set(getApiErrorMessage(error) || this.t('cashCut.audit.loadError'));
         },
       });
   }
@@ -176,7 +180,7 @@ export class CashSessionAudit {
           this.reload();
         },
         error: (error: unknown) =>
-          this.notifications.error(getApiErrorMessage(error) || 'No se pudo revisar el ajuste.'),
+          this.notifications.error(getApiErrorMessage(error) || this.t('cashCut.audit.reviewFailed')),
       });
   }
 }

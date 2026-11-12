@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { TranslateService } from '@ngx-translate/core';
 import { NonNullableFormBuilder } from '@angular/forms';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -33,6 +34,10 @@ const PRODUCT = {
   salePrice: 90,
   stock: 4,
 } as Product;
+
+/** Traductor con el es.json real (providersFile). */
+const t = () => (key: string, params?: Record<string, unknown>) =>
+  TestBed.inject(TranslateService).instant(key, params) as string;
 
 describe('invoice-rag-stock-form', () => {
   let fb: NonNullableFormBuilder;
@@ -112,7 +117,7 @@ describe('invoice-rag-stock-form', () => {
       // El producto del formulario no arrastra la marca de la búsqueda.
       expect(value.product).not.toHaveProperty('saleUnit');
       expect(rowPieces(value)).toBe(60);
-      expect(boxConversionLegend(value)).toBe('3 cajas × 20 = 60 pzas · $12.50 c/pza');
+      expect(boxConversionLegend(value, t())).toBe('3 cajas × 20 = 60 pzas · $12.50 c/pza');
       expect(toStockEntry(value, 'inv-1')).toMatchObject({ quantity: 60, costPrice: 12.5 });
     });
 
@@ -121,7 +126,7 @@ describe('invoice-rag-stock-form', () => {
       row.controls.unit.setValue('piece');
       const value = row.getRawValue();
 
-      expect(boxConversionLegend(value)).toBeNull();
+      expect(boxConversionLegend(value, t())).toBeNull();
       expect(toStockEntry(value, 'inv-1')).toMatchObject({ quantity: 3, costPrice: 250 });
     });
 
@@ -139,14 +144,14 @@ describe('invoice-rag-stock-form', () => {
       // Aunque la marque Caja, sin piezas por caja no hay con qué convertir.
       row.controls.unit.setValue('box');
 
-      expect(boxConversionLegend(row.getRawValue())).toBeNull();
+      expect(boxConversionLegend(row.getRawValue(), t())).toBeNull();
       expect(toStockEntry(row.getRawValue(), 'inv-1')).toMatchObject({ quantity: 3, costPrice: 250 });
     });
 
     it('el costo por pieza se redondea a centavos (lo que acepta el servidor)', () => {
       const row = buildStockRow(fb, { ...PARTIDA, quantity: 1, unitPrice: 100 }, { ...CAJA, boxQuantity: 3, saleUnit: 'box' } as Product, TODAY);
       expect(toStockEntry(row.getRawValue(), 'inv-1')).toMatchObject({ quantity: 3, costPrice: 33.33 });
-      expect(boxConversionLegend(row.getRawValue())).toBe('1 caja × 3 = 3 pzas · $33.33 c/pza');
+      expect(boxConversionLegend(row.getRawValue(), t())).toBe('1 caja × 3 = 3 pzas · $33.33 c/pza');
     });
   });
 });

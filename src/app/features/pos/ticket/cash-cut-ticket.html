@@ -23,7 +23,7 @@
     @for (method of methods; track method.key) {
       @if (summary().byMethod[method.key].count > 0) {
         <div class="row">
-          <span>{{ method.label }} ({{ summary().byMethod[method.key].count }})</span>
+          <span>{{ method.label | translate }} ({{ summary().byMethod[method.key].count }})</span>
           <span>{{ summary().byMethod[method.key].total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
         </div>
       }
@@ -100,7 +100,7 @@
       @for (method of methods; track method.key) {
         @if (servicios.byMethod[method.key].count > 0) {
           <div class="row">
-            <span>{{ method.label }} ({{ servicios.byMethod[method.key].count }})</span>
+            <span>{{ method.label | translate }} ({{ servicios.byMethod[method.key].count }})</span>
             <span>{{ servicios.byMethod[method.key].total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
           </div>
         }

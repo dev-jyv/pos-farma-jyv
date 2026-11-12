@@ -8,7 +8,7 @@ import {
   Validators,
 } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { InputTextModule } from 'primeng/inputtext';
@@ -47,6 +47,11 @@ export class SupplierForm {
   private readonly fb = inject(FormBuilder);
   private readonly suppliersService = inject(SupplierService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   private readonly destroyRef = inject(DestroyRef);
@@ -85,7 +90,7 @@ export class SupplierForm {
           this.loading.set(false);
         },
         error: () => {
-          this.notifications.error('No se pudo cargar el proveedor.');
+          this.notifications.error(this.t('suppliers.msg.loadOneError'));
           this.loading.set(false);
         },
       });
@@ -111,7 +116,7 @@ export class SupplierForm {
 
     request.pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => {
-        this.notifications.success(id ? 'Proveedor actualizado.' : 'Proveedor creado.');
+        this.notifications.success(id ? this.t('suppliers.msg.updated') : this.t('suppliers.msg.created'));
         this.saving.set(false);
         void this.router.navigate(['/pos/proveedores']);
       },

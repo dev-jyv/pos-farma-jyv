@@ -173,7 +173,12 @@
     "sessionError": "Could not read the shift.",
     "sessionErrorHint": "Totals may be incomplete; try again.",
     "cashCollectedDrawer": "Cash collected (goes into the drawer):",
-    "cashCollectedHint": "· with split payments only the cash part counts."
+    "cashCollectedHint": "· with split payments only the cash part counts.",
+    "msg": {
+      "noSession": "The current shift could not be determined. Retry or change the scope to \"Day\".",
+      "loadError": "The report could not be loaded.",
+      "noDoctor": "No doctor assigned"
+    }
   },
   "label": {
     "print": "Print label"
@@ -407,7 +412,11 @@
         "other": "Other"
       }
     },
-    "localFolio": "Ticket: {{folio}}"
+    "localFolio": "Ticket: {{folio}}",
+    "msg": {
+      "voidFailed": "The sale could not be voided.",
+      "loadError": "The sales history could not be loaded."
+    }
   },
   "payment": {
     "cash": "Cash",
@@ -475,7 +484,9 @@
       "filterRejected": "Rejected",
       "filterAutoClosed": "Auto-closed",
       "openingDifference": "Difference at opening",
-      "followingOpeningDifference": "Next shift found"
+      "followingOpeningDifference": "Next shift found",
+      "loadError": "The cash cut list could not be loaded.",
+      "reviewFailed": "The adjustment could not be reviewed."
     },
     "logoutPromptTitle": "Cash shift open",
     "logoutPromptBody": "You have an open cash shift. If you leave without closing it, you can pick it up again today; when the day changes it closes on its own with the cash on hand at that moment.",
@@ -626,7 +637,13 @@
     "loading": "Loading…",
     "cancel": "Cancel",
     "close": "Close",
-    "save": "Save"
+    "save": "Save",
+    "ok": "OK",
+    "error": "Error",
+    "attention": "Attention",
+    "sessionExpired": "Session expired",
+    "sessionExpiredDetail": "The session ended at 24:00 (Central time). Sign in again; the ticket in progress is saved.",
+    "reasonHint": "At least {{min}} characters."
   },
   "directCharge": {
     "title": "Direct charge",
@@ -874,7 +891,15 @@
     "deactivateConfirm": "Deactivate category",
     "cancel": "Cancel",
     "save": "Save",
-    "empty": "No categories registered."
+    "empty": "No categories registered.",
+    "msg": {
+      "loadError": "Categories could not be loaded.",
+      "deactivated": "Category deactivated.",
+      "deactivateFailed": "The category could not be deactivated.",
+      "loadOneError": "The category could not be loaded.",
+      "updated": "Category updated.",
+      "created": "Category created."
+    }
   },
   "suppliers": {
     "title": "Suppliers",
@@ -902,7 +927,15 @@
     "deactivateConfirm": "Deactivate supplier",
     "cancel": "Cancel",
     "save": "Save",
-    "empty": "No suppliers registered."
+    "empty": "No suppliers registered.",
+    "msg": {
+      "loadError": "Suppliers could not be loaded.",
+      "deactivated": "Supplier deactivated.",
+      "deactivateFailed": "The supplier could not be deactivated.",
+      "loadOneError": "The supplier could not be loaded.",
+      "updated": "Supplier updated.",
+      "created": "Supplier created."
+    }
   },
   "invoices": {
     "title": "Invoices",
@@ -933,7 +966,16 @@
     "cancel": "Cancel",
     "save": "Save",
     "empty": "No invoices registered.",
-    "windowHint": "Last two months only. The full history is in the admin panel."
+    "windowHint": "Last two months only. The full history is in the admin panel.",
+    "msg": {
+      "loadError": "Invoices could not be loaded.",
+      "created": "Invoice recorded.",
+      "loadOneError": "The invoice could not be loaded."
+    },
+    "upload": {
+      "badType": "File type not allowed. Use PDF or an image (JPEG, PNG, WebP).",
+      "tooBig": "The file cannot exceed 10 MB."
+    }
   },
   "invoiceRag": {
     "title": "Invoices-RAG",
@@ -1010,7 +1052,10 @@
       "blockerNoRows": "Check at least one line.",
       "blockerIncomplete": "Some checked lines are missing product, pieces, lot or a valid expiry.",
       "apply": "Apply to inventory",
-      "appliedAt": "Applied to inventory on {{date}}"
+      "appliedAt": "Applied to inventory on {{date}}",
+      "legend": "{{boxes}} boxes × {{perBox}} = {{pieces}} pcs",
+      "legendOne": "{{boxes}} box × {{perBox}} = {{pieces}} pcs",
+      "legendCost": "${{cost}} per pc"
     },
     "taxes": "Taxes",
     "addTax": "Add tax",
@@ -1055,7 +1100,10 @@
       "uploaded": "File uploaded to the cloud.",
       "deleted": "Document deleted.",
       "notFound": "Document not found.",
-      "uploadFailed": "The file could not be uploaded to the cloud: {{message}}"
+      "uploadFailed": "The file could not be uploaded to the cloud: {{message}}",
+      "duplicateFile": "This file was already loaded; opening the existing one.",
+      "invoiceRecorded": "Invoice {{number}} recorded.",
+      "inventoryUpdated": "Inventory updated: {{products}} products, +{{pieces}} pieces."
     }
   },
   "products": {
@@ -1140,7 +1188,8 @@
       "createdBy": "Recorded by",
       "empty": "No expenses recorded.",
       "loading": "Loading expenses…",
-      "filterAll": "All"
+      "filterAll": "All",
+      "loadError": "The expense list could not be loaded."
     },
     "sessionTitle": "This shift’s expenses",
     "sessionTotal": "Total",
@@ -1152,7 +1201,8 @@
     "cancelEdit": "Cancel fix",
     "saveEdit": "Save fix",
     "updated": "Expense fixed.",
-    "updateError": "Could not fix the expense."
+    "updateError": "Could not fix the expense.",
+    "notCurrentShift": "That expense is not from the open shift: it cannot be corrected here."
   },
   "cashBox": {
     "title": "Pharmacy cash",
@@ -1260,7 +1310,10 @@
       "to": "Enter the end date of the period.",
       "order": "The start date cannot be after the end date."
     },
-    "noGroup": "No group"
+    "noGroup": "No group",
+    "allGroups": "All groups",
+    "today": "Today",
+    "lastDays": "{{days}} days"
   },
   "ticket": {
     "phone": "Tel. {{phone}}",
@@ -1316,6 +1369,8 @@
       "servicesVoided": "Voided",
       "servicesTotal": "Services total",
       "commissions": "Commissions earned"
-    }
+    },
+    "boxes": "{{boxes}} boxes × {{piecesPerBox}} pcs",
+    "boxOne": "{{boxes}} box × {{piecesPerBox}} pcs"
   }
 }

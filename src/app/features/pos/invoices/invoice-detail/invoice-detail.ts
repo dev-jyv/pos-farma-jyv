@@ -1,7 +1,7 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { ProgressSpinnerModule } from 'primeng/progressspinner';
 import { TagModule } from 'primeng/tag';
@@ -19,6 +19,11 @@ import { InvoiceService } from '../../services/invoice.service';
 export class InvoiceDetail {
   private readonly invoicesService = inject(InvoiceService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
 
@@ -37,7 +42,7 @@ export class InvoiceDetail {
         this.loading.set(false);
       },
       error: () => {
-        this.notifications.error('No se pudo cargar la factura.');
+        this.notifications.error(this.t('invoices.msg.loadOneError'));
         this.loading.set(false);
       },
     });

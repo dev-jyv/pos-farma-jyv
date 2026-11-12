@@ -125,7 +125,7 @@ export class ControlledLedger {
   );
 
   readonly groupOptions = [
-    { label: 'Todos los grupos', value: null },
+    { label: this.t('ledger.allGroups'), value: null },
     ...CONTROLLED_GROUPS.filter((group) => CONTROLLED_GROUP_RULES[group].requiresLedger).map(
       (group) => ({ label: CONTROLLED_GROUP_RULES[group].label, value: group }),
     ),
@@ -164,9 +164,9 @@ export class ControlledLedger {
   });
 
   readonly quickRanges = [
-    { label: 'Hoy', days: 0 },
-    { label: '7 días', days: 6 },
-    { label: '30 días', days: 29 },
+    { label: this.t('ledger.today'), days: 0 },
+    { label: this.t('ledger.lastDays', { days: 7 }), days: 6 },
+    { label: this.t('ledger.lastDays', { days: 30 }), days: 29 },
   ];
 
   /** Rango activo, para marcar el botón correspondiente. */

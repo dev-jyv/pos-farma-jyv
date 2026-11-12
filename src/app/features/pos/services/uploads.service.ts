@@ -17,10 +17,10 @@ export interface UploadResult {
 
 export function validateUploadFile(file: File): string | null {
   if (!ALLOWED_MIME_TYPES.has(file.type)) {
-    return 'Tipo de archivo no permitido. Usa PDF o imagen (JPEG, PNG, WebP).';
+    return 'invoices.upload.badType';
   }
   if (file.size > MAX_FILE_SIZE) {
-    return 'El archivo no puede superar los 10 MB.';
+    return 'invoices.upload.tooBig';
   }
   return null;
 }

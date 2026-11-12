@@ -2,7 +2,7 @@ import { DatePipe, DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { InputTextModule } from 'primeng/inputtext';
 import { SelectModule } from 'primeng/select';
@@ -38,6 +38,11 @@ export class InvoiceList {
   private readonly invoicesService = inject(InvoiceService);
   private readonly suppliersService = inject(SupplierService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly router = inject(Router);
 
   readonly invoices = signal<PurchaseInvoice[]>([]);
@@ -140,7 +145,7 @@ export class InvoiceList {
           this.loading.set(false);
         },
         error: () => {
-          this.notifications.error('No se pudieron cargar las facturas.');
+          this.notifications.error(this.t('invoices.msg.loadError'));
           this.loading.set(false);
         },
       });

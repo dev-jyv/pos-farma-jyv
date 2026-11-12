@@ -57,7 +57,7 @@
           <td>
             {{ item.productName }}
             @if (boxOf(item); as caja) {
-              <span class="disc" data-testid="ticket-box">{{ caja.label }}</span>
+              <span class="disc" data-testid="ticket-box">{{ (caja.boxes === 1 ? 'ticket.boxOne' : 'ticket.boxes') | translate: caja }}</span>
             }
             @if (promoOf(item); as promo) {
               <span class="disc">{{ 'ticket.promo' | translate: { name: promo.name, amount: (promo.amount | currency: 'MXN':'symbol-narrow':'1.2-2') } }}</span>
@@ -114,7 +114,7 @@
     </div>
     <div class="row">
       <span>{{ 'ticket.payment' | translate }}</span>
-      <span>{{ methodLabel() }}</span>
+      <span>{{ methodLabel() | translate }}</span>
     </div>
     @if (showTenderSplit()) {
       <div class="row">

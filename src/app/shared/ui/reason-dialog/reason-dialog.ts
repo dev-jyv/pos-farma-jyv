@@ -1,3 +1,4 @@
+import { TranslatePipe } from '@ngx-translate/core';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -30,7 +31,7 @@ export const REASON_MAX_LENGTH = 300;
 @Component({
   selector: 'app-reason-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ButtonModule, DialogModule],
+  imports: [ButtonModule, DialogModule, TranslatePipe],
   templateUrl: './reason-dialog.html',
 })
 export class ReasonDialog {
@@ -43,7 +44,9 @@ export class ReasonDialog {
   readonly otherOption = input<string | null>(null);
   readonly reasonLabel = input('Motivo');
   readonly placeholder = input('');
-  readonly hint = input(`Mínimo ${REASON_MIN_LENGTH} caracteres.`);
+  /** `null`: el texto por defecto del i18n (`common.reasonHint`). */
+  readonly hint = input<string | null>(null);
+  readonly minLength = REASON_MIN_LENGTH;
   readonly confirmLabel = input('Confirmar');
   readonly cancelLabel = input('Cancelar');
   /** La acción está viajando: bloquea el doble envío. */

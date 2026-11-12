@@ -158,7 +158,15 @@
     "deactivateConfirm": "¿Desactivar la categoría",
     "cancel": "Cancelar",
     "save": "Guardar",
-    "empty": "Sin categorías registradas."
+    "empty": "Sin categorías registradas.",
+    "msg": {
+      "loadError": "No se pudieron cargar las categorías.",
+      "deactivated": "Categoría desactivada.",
+      "deactivateFailed": "No se pudo desactivar la categoría.",
+      "loadOneError": "No se pudo cargar la categoría.",
+      "updated": "Categoría actualizada.",
+      "created": "Categoría creada."
+    }
   },
   "suppliers": {
     "title": "Proveedores",
@@ -186,7 +194,15 @@
     "deactivateConfirm": "¿Desactivar al proveedor",
     "cancel": "Cancelar",
     "save": "Guardar",
-    "empty": "Sin proveedores registrados."
+    "empty": "Sin proveedores registrados.",
+    "msg": {
+      "loadError": "No se pudieron cargar los proveedores.",
+      "deactivated": "Proveedor desactivado.",
+      "deactivateFailed": "No se pudo desactivar el proveedor.",
+      "loadOneError": "No se pudo cargar el proveedor.",
+      "updated": "Proveedor actualizado.",
+      "created": "Proveedor creado."
+    }
   },
   "invoices": {
     "title": "Facturas",
@@ -217,7 +233,16 @@
     "cancel": "Cancelar",
     "save": "Guardar",
     "empty": "Sin facturas registradas.",
-    "windowHint": "Solo los últimos dos meses. El histórico completo está en el panel de administración."
+    "windowHint": "Solo los últimos dos meses. El histórico completo está en el panel de administración.",
+    "msg": {
+      "loadError": "No se pudieron cargar las facturas.",
+      "created": "Factura registrada.",
+      "loadOneError": "No se pudo cargar la factura."
+    },
+    "upload": {
+      "badType": "Tipo de archivo no permitido. Usa PDF o imagen (JPEG, PNG, WebP).",
+      "tooBig": "El archivo no puede superar los 10 MB."
+    }
   },
   "invoiceRag": {
     "title": "Facturas-RAG",
@@ -294,7 +319,10 @@
       "blockerNoRows": "Marca al menos una partida.",
       "blockerIncomplete": "Hay partidas marcadas sin producto, piezas, lote o caducidad vigente.",
       "apply": "Aplicar al inventario",
-      "appliedAt": "Aplicado al inventario el {{date}}"
+      "appliedAt": "Aplicado al inventario el {{date}}",
+      "legend": "{{boxes}} cajas × {{perBox}} = {{pieces}} pzas",
+      "legendOne": "{{boxes}} caja × {{perBox}} = {{pieces}} pzas",
+      "legendCost": "${{cost}} c/pza"
     },
     "taxes": "Impuestos",
     "addTax": "Agregar impuesto",
@@ -339,7 +367,10 @@
       "uploaded": "Archivo subido a la nube.",
       "deleted": "Documento eliminado.",
       "notFound": "Documento no encontrado.",
-      "uploadFailed": "No se pudo subir el archivo a la nube: {{message}}"
+      "uploadFailed": "No se pudo subir el archivo a la nube: {{message}}",
+      "duplicateFile": "Este archivo ya estaba cargado; se abre el existente.",
+      "invoiceRecorded": "Factura {{number}} registrada.",
+      "inventoryUpdated": "Inventario actualizado: {{products}} productos, +{{pieces}} piezas."
     }
   },
   "shell": {
@@ -476,7 +507,12 @@
     "sessionError": "No se pudo leer el turno.",
     "sessionErrorHint": "Los totales pueden estar incompletos; vuelve a intentar.",
     "cashCollectedDrawer": "Efectivo cobrado (entra al cajón):",
-    "cashCollectedHint": "· en pago mixto solo cuenta la parte pagada en efectivo."
+    "cashCollectedHint": "· en pago mixto solo cuenta la parte pagada en efectivo.",
+    "msg": {
+      "noSession": "No se pudo determinar el turno actual. Reintenta o cambia el alcance a \"Día\".",
+      "loadError": "No se pudo cargar el reporte.",
+      "noDoctor": "Sin doctor asignado"
+    }
   },
   "label": {
     "print": "Imprimir etiqueta"
@@ -710,7 +746,11 @@
         "other": "Otro"
       }
     },
-    "localFolio": "Ticket: {{folio}}"
+    "localFolio": "Ticket: {{folio}}",
+    "msg": {
+      "voidFailed": "No se pudo anular la venta.",
+      "loadError": "No se pudo cargar el historial de ventas."
+    }
   },
   "payment": {
     "cash": "Efectivo",
@@ -778,7 +818,9 @@
       "filterRejected": "Rechazados",
       "filterAutoClosed": "Autocerrados",
       "openingDifference": "Diferencia al abrir",
-      "followingOpeningDifference": "El turno siguiente encontró"
+      "followingOpeningDifference": "El turno siguiente encontró",
+      "loadError": "No se pudo cargar el listado de cortes.",
+      "reviewFailed": "No se pudo revisar el ajuste."
     },
     "logoutPromptTitle": "Turno de caja abierto",
     "logoutPromptBody": "Tienes un turno de caja abierto. Si sales sin cerrarlo, podrás retomarlo hoy; al cambiar el día se cerrará solo con el efectivo que hubiera hasta ese momento.",
@@ -929,7 +971,13 @@
     "loading": "Cargando…",
     "cancel": "Cancelar",
     "close": "Cerrar",
-    "save": "Guardar"
+    "save": "Guardar",
+    "ok": "OK",
+    "error": "Error",
+    "attention": "Atención",
+    "sessionExpired": "Sesión expirada",
+    "sessionExpiredDetail": "La sesión terminó a las 24:00 (hora del centro). Vuelve a iniciar sesión; el ticket en curso queda guardado.",
+    "reasonHint": "Mínimo {{min}} caracteres."
   },
   "directCharge": {
     "title": "Cobro directo",
@@ -1140,7 +1188,8 @@
       "createdBy": "Registrado por",
       "empty": "Sin gastos registrados.",
       "loading": "Cargando gastos…",
-      "filterAll": "Todas"
+      "filterAll": "Todas",
+      "loadError": "No se pudo cargar el listado de gastos."
     },
     "sessionTitle": "Gastos de este turno",
     "sessionTotal": "Total",
@@ -1152,7 +1201,8 @@
     "cancelEdit": "Cancelar corrección",
     "saveEdit": "Guardar corrección",
     "updated": "Gasto corregido.",
-    "updateError": "No se pudo corregir el gasto."
+    "updateError": "No se pudo corregir el gasto.",
+    "notCurrentShift": "Ese gasto no es del turno abierto: no se puede corregir aquí."
   },
   "cashBox": {
     "title": "Efectivo de farmacia",
@@ -1260,7 +1310,10 @@
       "to": "Captura la fecha final del periodo.",
       "order": "La fecha inicial no puede ser posterior a la final."
     },
-    "noGroup": "Sin grupo"
+    "noGroup": "Sin grupo",
+    "allGroups": "Todos los grupos",
+    "today": "Hoy",
+    "lastDays": "{{days}} días"
   },
   "ticket": {
     "phone": "Tel. {{phone}}",
@@ -1316,6 +1369,8 @@
       "servicesVoided": "Anulados",
       "servicesTotal": "Total servicios",
       "commissions": "Comisiones generadas"
-    }
+    },
+    "boxes": "{{boxes}} cajas × {{piecesPerBox}} pzas",
+    "boxOne": "{{boxes}} caja × {{piecesPerBox}} pzas"
   }
 }

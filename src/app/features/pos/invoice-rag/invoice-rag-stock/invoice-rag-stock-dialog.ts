@@ -11,7 +11,7 @@ import {
   signal,
 } from '@angular/core';
 import { FormArray, FormsModule, NonNullableFormBuilder, ReactiveFormsModule } from '@angular/forms';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { AutoCompleteCompleteEvent, AutoCompleteModule } from 'primeng/autocomplete';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
@@ -78,6 +78,11 @@ export class InvoiceRagStockDialog {
   private readonly invoiceService = inject(InvoiceService);
   private readonly supplierService = inject(SupplierService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private rowsSubscription?: Subscription;
 
   readonly document = input.required<InvoiceRagDocument>();
@@ -95,7 +100,8 @@ export class InvoiceRagStockDialog {
   readonly savesBarcode = savesBarcode;
   readonly piecesPerBox = piecesPerBox;
   readonly rowPieces = rowPieces;
-  readonly boxConversionLegend = boxConversionLegend;
+  readonly boxConversionLegend = (row: StockRowValue): string | null =>
+    boxConversionLegend(row, (key, params) => this.t(key, params));
 
   readonly invoices = signal<PurchaseInvoice[]>([]);
   readonly invoicesError = signal<string | null>(null);
@@ -213,7 +219,7 @@ export class InvoiceRagStockDialog {
       this.invoices.update((list) => [{ ...invoice, supplierName: invoice.supplierName || supplierName }, ...list]);
       this.invoiceId.set(invoice.id);
       this.registering.set(false);
-      this.notifications.success(`Factura ${invoice.invoiceNumber} registrada.`);
+      this.notifications.success(this.t('invoiceRag.msg.invoiceRecorded', { number: invoice.invoiceNumber }));
     } catch (error) {
       this.notifications.error(getApiErrorMessage(error));
     } finally {
@@ -231,7 +237,7 @@ export class InvoiceRagStockDialog {
       const entries = this.included().map((row) => toStockEntry(row, invoiceId));
       const document = await this.invoiceRag.applyStock(this.document().id, entries);
       this.notifications.success(
-        `Inventario actualizado: ${entries.length} productos, +${this.totalPieces()} piezas.`,
+        this.t('invoiceRag.msg.inventoryUpdated', { products: entries.length, pieces: this.totalPieces() }),
       );
       this.applied.emit(document);
       this.visible.set(false);

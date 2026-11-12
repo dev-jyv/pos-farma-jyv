@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { DialogModule } from 'primeng/dialog';
 import { InputTextModule } from 'primeng/inputtext';
@@ -33,6 +33,11 @@ import { CategoryService } from '../../services/category.service';
 export class CategoryList {
   private readonly categoriesService = inject(CategoryService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly router = inject(Router);
 
   readonly categories = signal<Category[]>([]);
@@ -93,7 +98,7 @@ export class CategoryList {
           this.loading.set(false);
         },
         error: () => {
-          this.notifications.error('No se pudieron cargar las categorías.');
+          this.notifications.error(this.t('categories.msg.loadError'));
           this.loading.set(false);
         },
       });
@@ -127,14 +132,14 @@ export class CategoryList {
     this.deactivating.set(true);
     this.categoriesService.deactivate(category.id).subscribe({
       next: () => {
-        this.notifications.success('Categoría desactivada.');
+        this.notifications.success(this.t('categories.msg.deactivated'));
         this.deactivating.set(false);
         this.deactivateTarget.set(null);
         this.fetch();
       },
       error: (error: unknown) => {
         this.deactivating.set(false);
-        this.notifications.error(error instanceof Error ? error.message : 'No se pudo desactivar la categoría.');
+        this.notifications.error(error instanceof Error ? error.message : this.t('categories.msg.deactivateFailed'));
       },
     });
   }

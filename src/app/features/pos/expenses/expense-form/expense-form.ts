@@ -52,6 +52,10 @@ export class ExpenseForm {
   private readonly route = inject(ActivatedRoute);
   private readonly translate = inject(TranslateService);
 
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
+
   readonly cashSessionOpen = this.cashSessionService.isOpen;
 
   /** Gastos ya registrados en este turno; es la comprobación de lo que va del día. */
@@ -198,7 +202,7 @@ export class ExpenseForm {
       this.edit(target);
     } else {
       // El gasto puede ser de un turno anterior: no está en esta lista.
-      this.notifications.error('Ese gasto no es del turno abierto: no se puede corregir aquí.');
+      this.notifications.error(this.t('expenses.notCurrentShift'));
     }
     void this.router.navigate([], { queryParams: {}, replaceUrl: true });
   }

@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, DestroyRef, inject, signal } from '
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { InputTextModule } from 'primeng/inputtext';
@@ -22,6 +22,11 @@ export class CategoryForm {
   private readonly fb = inject(FormBuilder);
   private readonly categoriesService = inject(CategoryService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   private readonly destroyRef = inject(DestroyRef);
@@ -54,7 +59,7 @@ export class CategoryForm {
           this.loading.set(false);
         },
         error: () => {
-          this.notifications.error('No se pudo cargar la categoría.');
+          this.notifications.error(this.t('categories.msg.loadOneError'));
           this.loading.set(false);
         },
       });
@@ -81,7 +86,7 @@ export class CategoryForm {
 
     request.pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => {
-        this.notifications.success(id ? 'Categoría actualizada.' : 'Categoría creada.');
+        this.notifications.success(id ? this.t('categories.msg.updated') : this.t('categories.msg.created'));
         this.saving.set(false);
         void this.router.navigate(['/pos/categorias']);
       },
