@@ -571,7 +571,26 @@
     "taxBase": "Taxable base",
     "taxTotal": "Total",
     "confirm": "Confirm ${{amount}}",
-    "itemCountOne": "{{count}} item"
+    "itemCountOne": "{{count}} item",
+    "cfdi": {
+      "G03": "G03 — General expenses",
+      "D01": "D01 — Medical fees",
+      "S01": "S01 — No tax effects"
+    },
+    "msg": {
+      "needsCardApproval": "The terminal still has to approve the card charge.",
+      "needsCash": "Cash short: ${{amount}}.",
+      "needsBilling": "Invoicing requires a valid RFC, legal name and, if entered, a valid email.",
+      "cardAlreadyApproved": "The terminal already approved the charge. Finish the sale or cancel the charge before changing the method.",
+      "customerNameRequired": "Customer name is required.",
+      "customerCreated": "Customer created.",
+      "noTerminals": "No terminals are linked to the Mercado Pago account. Check that the Point is on, linked to the same account as the Access Token, and in PDV mode.",
+      "terminalActivated": "Terminal activated in PDV mode.",
+      "selectTerminal": "Select a Mercado Pago terminal.",
+      "terminalError": "The terminal reported a charge error.",
+      "cardChargedConfirm": "The card was already charged: confirm the sale so the charge is not left unrecorded.",
+      "cancelOrderFailed": "The order could not be canceled at the terminal: cancel it on the device."
+    }
   },
   "common": {
     "loading": "Loading…",
@@ -626,7 +645,19 @@
       "failed": "Failed",
       "canceled": "Canceled"
     },
-    "qrAlt": "Payment link QR code"
+    "qrAlt": "Payment link QR code",
+    "msg": {
+      "amountRequired": "Enter the amount to charge.",
+      "conceptRequired": "Write the charge concept (at least 3 characters).",
+      "chargeInProgress": "A charge is in progress. Wait for it to resolve or cancel it before changing the method.",
+      "mpError": "Mercado Pago reported a charge error.",
+      "linkCopied": "Payment link copied.",
+      "copyFailed": "The link could not be copied. Copy it manually.",
+      "linkCanceled": "Payment link canceled.",
+      "terminalCanceled": "Charge canceled at the terminal.",
+      "approved": "Charge {{folio}} approved.",
+      "mpRejected": "Mercado Pago rejected the charge: {{detail}}"
+    }
   },
   "stockEntry": {
     "title": "Stock entry",
@@ -676,7 +707,19 @@
     "submit": "Save entry",
     "saved": "Entry recorded",
     "savedStock": "Current stock:",
-    "notice": "This screen only receives goods. Registering invoices, counts and write-offs stays in the admin panel."
+    "notice": "This screen only receives goods. Registering invoices, counts and write-offs stays in the admin panel.",
+    "msg": {
+      "invoiceRequired": "Choose the invoice for the goods.",
+      "productRequired": "Search for the product or create a new one.",
+      "lotRequired": "Enter the lot number.",
+      "expiryRequired": "Enter the expiry date.",
+      "expiryPast": "The expiry date cannot be in the past.",
+      "qtyRequired": "Enter how many pieces come in.",
+      "noInvoices": "There are no registered invoices. They are created from the admin panel before receiving the goods.",
+      "sameSku": "\"{{name}}\" is already in the catalog with SKU {{sku}}: search for it and select it instead of creating it.",
+      "sameName": "\"{{name}}\" already exists with another SKU ({{sku}}). Use another name, for example \"{{suggestion}}\".",
+      "noSupplier": "No supplier"
+    }
   },
   "sync": {
     "now": "Sync",
@@ -1009,7 +1052,19 @@
     "cancel": "Cancel",
     "save": "Save",
     "created": "Product created.",
-    "updated": "Product updated."
+    "updated": "Product updated.",
+    "validation": {
+      "nameRequired": "Product name is required.",
+      "skuRequired": "SKU is required.",
+      "categoryRequired": "Choose the product category.",
+      "unitRequired": "Enter the unit (piece, box…).",
+      "priceRequired": "Enter the sale price.",
+      "ivaConflict": "A product cannot have VAT and zero VAT at the same time.",
+      "iepsRequired": "Enter the IEPS rate.",
+      "barcodeLength": "The barcode must have 8 to 14 digits.",
+      "noControlledGroup": "No group (over the counter)",
+      "notFoundLocal": "The product was not found in the local catalog."
+    }
   },
   "expenses": {
     "newTitle": "New expense",

@@ -866,7 +866,26 @@
     "taxBase": "Base gravable",
     "taxTotal": "Total",
     "confirm": "Confirmar ${{amount}}",
-    "itemCountOne": "{{count}} artículo"
+    "itemCountOne": "{{count}} artículo",
+    "cfdi": {
+      "G03": "G03 — Gastos en general",
+      "D01": "D01 — Honorarios médicos",
+      "S01": "S01 — Sin efectos fiscales"
+    },
+    "msg": {
+      "needsCardApproval": "Falta que la terminal apruebe el cobro con tarjeta.",
+      "needsCash": "Falta efectivo: ${{amount}}.",
+      "needsBilling": "Para facturar se requiere un RFC válido, razón social y, si se captura, un correo válido.",
+      "cardAlreadyApproved": "La terminal ya aprobó el cobro. Termina la venta o cancela el cobro antes de cambiar el método.",
+      "customerNameRequired": "El nombre del cliente es requerido.",
+      "customerCreated": "Cliente creado.",
+      "noTerminals": "No hay terminales vinculadas a la cuenta de Mercado Pago. Verifica que la Point esté encendida, asociada a la misma cuenta del Access Token y en modo PDV.",
+      "terminalActivated": "Terminal activada en modo PDV.",
+      "selectTerminal": "Selecciona una terminal Mercado Pago.",
+      "terminalError": "La terminal reportó un error en el cobro.",
+      "cardChargedConfirm": "La tarjeta ya se cobró: confirma la venta para no dejar el cargo sin registrar.",
+      "cancelOrderFailed": "No se pudo cancelar la orden en la terminal: cancélala en el equipo."
+    }
   },
   "common": {
     "loading": "Cargando…",
@@ -921,7 +940,19 @@
       "failed": "Fallido",
       "canceled": "Cancelado"
     },
-    "qrAlt": "Código QR del link de pago"
+    "qrAlt": "Código QR del link de pago",
+    "msg": {
+      "amountRequired": "Captura el monto a cobrar.",
+      "conceptRequired": "Escribe el concepto del cobro (mínimo 3 caracteres).",
+      "chargeInProgress": "Hay un cobro en curso. Espera a que se resuelva o cancélalo antes de cambiar de método.",
+      "mpError": "Mercado Pago reportó un error en el cobro.",
+      "linkCopied": "Link de pago copiado.",
+      "copyFailed": "No se pudo copiar el link. Cópialo manualmente.",
+      "linkCanceled": "Link de pago cancelado.",
+      "terminalCanceled": "Cobro cancelado en la terminal.",
+      "approved": "Cobro {{folio}} aprobado.",
+      "mpRejected": "Mercado Pago rechazó el cobro: {{detail}}"
+    }
   },
   "stockEntry": {
     "title": "Entrada de stock",
@@ -971,7 +1002,19 @@
     "submit": "Guardar entrada",
     "saved": "Entrada registrada",
     "savedStock": "Stock actual:",
-    "notice": "Esta pantalla solo recibe mercancía. Dar de alta facturas, hacer conteos y registrar salidas se hace desde el panel de administración."
+    "notice": "Esta pantalla solo recibe mercancía. Dar de alta facturas, hacer conteos y registrar salidas se hace desde el panel de administración.",
+    "msg": {
+      "invoiceRequired": "Elige la factura de la mercancía.",
+      "productRequired": "Busca el producto o da de alta uno nuevo.",
+      "lotRequired": "Captura el número de lote.",
+      "expiryRequired": "Captura la fecha de caducidad.",
+      "expiryPast": "La caducidad no puede estar en el pasado.",
+      "qtyRequired": "Captura cuántas piezas entran.",
+      "noInvoices": "No hay facturas registradas. Se dan de alta desde el panel de administración antes de recibir la mercancía.",
+      "sameSku": "\"{{name}}\" ya está en el catálogo con el SKU {{sku}}: búscalo y selecciónalo en lugar de darlo de alta.",
+      "sameName": "Ya existe \"{{name}}\" con otro SKU ({{sku}}). Usa otro nombre, por ejemplo \"{{suggestion}}\".",
+      "noSupplier": "Sin proveedor"
+    }
   },
   "products": {
     "title": "Catálogo de productos",
@@ -1009,7 +1052,19 @@
     "cancel": "Cancelar",
     "save": "Guardar",
     "created": "Producto creado.",
-    "updated": "Producto actualizado."
+    "updated": "Producto actualizado.",
+    "validation": {
+      "nameRequired": "El nombre del producto es requerido.",
+      "skuRequired": "El SKU es requerido.",
+      "categoryRequired": "Elige la categoría del producto.",
+      "unitRequired": "Captura la unidad (pieza, caja…).",
+      "priceRequired": "Captura el precio de venta.",
+      "ivaConflict": "Un producto no puede tener IVA e IVA cero a la vez.",
+      "iepsRequired": "Captura la tasa de IEPS.",
+      "barcodeLength": "El código de barras debe tener entre 8 y 14 dígitos.",
+      "noControlledGroup": "Sin grupo (venta libre)",
+      "notFoundLocal": "No se encontró el producto en el catálogo local."
+    }
   },
   "expenses": {
     "newTitle": "Nuevo gasto",
