@@ -6,7 +6,6 @@ import {
   ApiListMeta,
   getApiErrorMessage,
   unwrapEntity,
-  unwrapList,
   toDate,
   unwrapListWithMeta,
 } from '../../../core/api/api.utils';
@@ -33,7 +32,6 @@ export class CashMovementService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = environment.apiUrl;
 
-  private flushing = false;
 
   /** Movimientos locales sin subir, para el indicador de pendientes del header. */
   readonly pendingCount = signal(0);
@@ -183,7 +181,6 @@ flushQueueAsync(owner: PushOwner = {}): Promise<void> {
   }
 
   private flush$(owner: PushOwner): Observable<unknown> {
-    this.flushing = true;
     return from(this.api().getPendingPush(owner)).pipe(
       catchError(() => of([] as PendingCashMovement[])),
       switchMap((pending) => {
@@ -193,7 +190,6 @@ flushQueueAsync(owner: PushOwner = {}): Promise<void> {
         return from(pending).pipe(concatMap((item) => this.pushOne(item)));
       }),
       finalize(() => {
-        this.flushing = false;
         this.refreshPending();
       }),
     );

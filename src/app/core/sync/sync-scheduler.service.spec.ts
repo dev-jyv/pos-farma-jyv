@@ -100,7 +100,6 @@ describe('SyncScheduler — límite de sincronización manual', () => {
 
   it('al vencer el cooldown emite un tick para que la UI se reactive sola', async () => {
     vi.useFakeTimers();
-    const inicio = Date.now();
     await scheduler.syncManually(CAJERO, false);
     expect(scheduler.canSyncManually(CAJERO, false)).toBe(false);
 

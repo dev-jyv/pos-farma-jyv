@@ -116,7 +116,6 @@ export class ProductCatalogService {
 
   private readonly autoPush = inject(AutoPushService);
 
-  private flushing = false;
 
   /** Altas/ediciones locales sin subir, para el indicador de pendientes del header. */
   readonly pendingCount = signal(0);
@@ -237,7 +236,6 @@ flushQueueAsync(): Promise<void> {
   }
 
   private flush$(): Observable<unknown> {
-    this.flushing = true;
     return from(this.api().getPendingCatalogPush())
       .pipe(
         catchError(() => of([] as PendingCatalogProduct[])),
@@ -248,7 +246,6 @@ flushQueueAsync(): Promise<void> {
           return from(pending).pipe(concatMap((item) => this.pushOne(item)));
         }),
         finalize(() => {
-          this.flushing = false;
           this.refreshPending();
         }),
       );

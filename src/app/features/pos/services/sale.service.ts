@@ -34,10 +34,7 @@ import {
   SaleStockShortfall,
   SaleSyncReview,
 } from '../../../shared/models';
-import {
-  isControlledGroup,
-  resolveControlledRequirements,
-} from '../../../shared/utils/controlled';
+import { resolveControlledRequirements } from '../../../shared/utils/controlled';
 import { LocalSaleInput, PendingSale, SaleMovement } from '../../../core/electron/window.d';
 import {
   commissionTotalOf,
@@ -197,33 +194,6 @@ type BulkSaleResult =
   /** `code`/`retryable` desde SPEC 49; un backend viejo manda el código HTTP o nada. */
   | { ok: false; error: string; code?: string; retryable?: boolean };
 
-interface SaleDto {
-  id: string;
-  folio: string;
-  items: SaleItem[];
-  subtotal: number;
-  discountTotal: number;
-  total: number;
-  paymentMethod: string;
-  amountReceived: number | null;
-  change: number | null;
-  cashAmount?: number | null;
-  cardAmount?: number | null;
-  cardPaymentReference: string | null;
-  cashierId: string;
-  cashSessionId: string | null;
-  customerId?: string | null;
-  customerName?: string | null;
-  prescription?: SalePrescription | null;
-  prescriptionRetained?: boolean;
-  controlledGroups?: unknown;
-  taxSummary?: Sale['taxSummary'];
-  billing?: SaleBilling | null;
-  invoiceStatus?: 'pending' | null;
-  voidedAt: unknown;
-  createdAt: unknown;
-}
-
 function asShortfall(value: unknown): SaleStockShortfall | null {
   if (!value || typeof value !== 'object') {
     return null;
@@ -349,40 +319,6 @@ function branchTotals(
   return { pharmacyTotal: fromCents(pharmacy), servicesTotal: fromCents(services) };
 }
 
-/** Solo para el `void()` de una venta ya sincronizada (`POST /sales/:id/void` sigue siendo online). */
-function mapRemoteSale(dto: SaleDto): Sale {
-  return {
-    id: dto.id,
-    remoteId: dto.id,
-    pendingPush: false,
-    folio: dto.folio,
-    items: dto.items,
-    subtotal: dto.subtotal,
-    discountTotal: dto.discountTotal,
-    total: dto.total,
-    taxSummary: dto.taxSummary ?? null,
-    paymentMethod: dto.paymentMethod as PaymentMethod,
-    amountReceived: dto.amountReceived,
-    change: dto.change,
-    cashAmount: dto.cashAmount ?? null,
-    cardAmount: dto.cardAmount ?? null,
-    cardPaymentReference: dto.cardPaymentReference,
-    cashierId: dto.cashierId,
-    cashSessionId: dto.cashSessionId,
-    customerId: dto.customerId ?? null,
-    customerName: dto.customerName ?? null,
-    prescription: dto.prescription ?? null,
-    prescriptionRetained: dto.prescriptionRetained === true,
-    controlledGroups: Array.isArray(dto.controlledGroups)
-      ? dto.controlledGroups.filter(isControlledGroup)
-      : [],
-    billing: dto.billing ?? null,
-    invoiceStatus: dto.invoiceStatus ?? null,
-    voidedAt: dto.voidedAt ? new Date(dto.voidedAt as string) : null,
-    createdAt: new Date(dto.createdAt as string),
-  };
-}
-
 /**
  * Ventas local-first: `create()` siempre escribe en el SQLite de Electron
  * (`electron/db/sales.js`), nunca directo al backend. `flushQueue()` (llamada
@@ -476,7 +412,6 @@ export class SaleService {
   private readonly clock = inject(ClockSkewService);
   private readonly apiUrl = environment.apiUrl;
 
-  private flushing = false;
 
   /**
    * Ventas que el servidor dejó `DEFERRED` (SPEC 48): se le acabó el presupuesto
@@ -916,7 +851,6 @@ flushQueueAsync(): Promise<void> {
   }
 
   private flush$(): Observable<unknown> {
-    this.flushing = true;
     this.deferredInFlush = false;
     // `contarIntentos`: este es el push real. Las lecturas de la UI
     // (`refreshPending`, el conteo del shell) NO deben gastar el cupo.
@@ -975,7 +909,6 @@ flushQueueAsync(): Promise<void> {
           ),
         ),
         finalize(() => {
-          this.flushing = false;
           this.refreshPending();
         }),
       );

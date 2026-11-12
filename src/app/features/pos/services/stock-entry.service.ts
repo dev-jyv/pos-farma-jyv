@@ -204,7 +204,6 @@ export class StockEntryService {
   private readonly autoPush = inject(AutoPushService);
   private readonly injector = inject(Injector);
 
-  private flushing = false;
 
   /** Avisos del empuje en curso; se muestran juntos al terminar. */
   private pendingWarnings: string[] = [];
@@ -366,7 +365,6 @@ flushQueueAsync(): Promise<void> {
   }
 
   private flush$(): Observable<unknown> {
-    this.flushing = true;
     return from(Promise.all([this.api().getPendingStockEntries(), this.deviceId()]))
       .pipe(
         concatMap(([pending, deviceId]) =>
@@ -458,7 +456,6 @@ flushQueueAsync(): Promise<void> {
           ),
         ),
         finalize(() => {
-          this.flushing = false;
           this.refreshPending();
           this.showWarnings();
         }),

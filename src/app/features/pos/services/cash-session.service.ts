@@ -7,7 +7,6 @@ import {
   concatMap,
   defaultIfEmpty,
   defer,
-  finalize,
   lastValueFrom,
   from,
   map,
@@ -21,7 +20,6 @@ import {
   getApiErrorMessage,
   toDate,
   unwrapEntity,
-  unwrapList,
   unwrapListWithMeta,
 } from '../../../core/api/api.utils';
 import {
@@ -194,7 +192,6 @@ export class CashSessionService {
   private readonly clock = inject(ClockSkewService);
   private readonly apiUrl = environment.apiUrl;
 
-  private flushing = false;
 
   readonly current = signal<CashSession | null>(null);
   readonly isOpen = signal(false);
@@ -469,7 +466,6 @@ flushQueueAsync(owner: PushOwner = {}): Promise<void> {
    * producción. Cerrando primero, el hueco queda libre y el alta crea uno real.
    */
   private flush$(owner: PushOwner): Observable<unknown> {
-    this.flushing = true;
     // Un turno solo se cierra una vez por ciclo: `POST /:id/close` no es
     // idempotente (responde 409 "el turno ya está cerrado") y el segundo
     // barrido lo marcaría como rechazo permanente sin serlo —salvo que ese 409
@@ -533,9 +529,6 @@ flushQueueAsync(owner: PushOwner = {}): Promise<void> {
           ? this.pushPendingCloses$(cerradosEnEsteCiclo, owner).pipe(switchMap(() => pushCreates$()))
           : of(first),
       ),
-      finalize(() => {
-        this.flushing = false;
-      }),
     );
   }
 
