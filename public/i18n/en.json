@@ -68,7 +68,12 @@
       "sendUnreconciled": "Send to reconciliation",
       "fix": "Correct",
       "discard": "Discard",
-      "empty": "No rejected records."
+      "empty": "No rejected records.",
+      "aiError": {
+        "tooMany": "Too many AI requests. Wait a minute.",
+        "offline": "No connection: AI help needs internet.",
+        "unavailable": "AI help is not available. Tell the administrator."
+      }
     },
     "discard": {
       "title": "Discard {{label}}",
@@ -281,7 +286,9 @@
       "empty": "No pending sales.",
       "sendNow": "Send now",
       "discardTitle": "Discard pending sale ({{folio}})",
-      "discardDescription": "It is removed from this device and will never upload as a sale; stock is restored. A record of who, when and why is kept."
+      "discardDescription": "It is removed from this device and will never upload as a sale; stock is restored. A record of who, when and why is kept.",
+      "waitShift": "Waiting for the shift to upload",
+      "waitProduct": "Waiting for a new product to upload"
     },
     "msg": {
       "boxes": "{{count}} boxes",
@@ -336,7 +343,10 @@
       "noSalePermission": "Your role is not allowed to record sales.",
       "openShiftFirst": "Open a cash shift before selling.",
       "boxesOne": "{{count}} box",
-      "cartRestoredOne": "The ticket in progress was restored ({{count}} line)."
+      "cartRestoredOne": "The ticket in progress was restored ({{count}} line).",
+      "voidReasonRequired": "Write the void reason (at least {{min}} characters).",
+      "saleNotFound": "Sale not found.",
+      "discardReasonRequired": "Write the discard reason (at least {{min}} characters)."
     }
   },
   "history": {
@@ -718,7 +728,11 @@
       "noInvoices": "There are no registered invoices. They are created from the admin panel before receiving the goods.",
       "sameSku": "\"{{name}}\" is already in the catalog with SKU {{sku}}: search for it and select it instead of creating it.",
       "sameName": "\"{{name}}\" already exists with another SKU ({{sku}}). Use another name, for example \"{{suggestion}}\".",
-      "noSupplier": "No supplier"
+      "noSupplier": "No supplier",
+      "lotExpiryMismatch": "Lot {{lot}} of {{name}} already existed with another expiry date. Check the invoice.",
+      "entryWarning": "Entry of {{name}} (lot {{lot}}): {{code}}.",
+      "productFallback": "product",
+      "reviewEntry": "Review the entry"
     }
   },
   "sync": {
@@ -1014,6 +1028,14 @@
       "extracted": "To review",
       "indexed": "Indexed",
       "failed": "Failed"
+    },
+    "msg": {
+      "extracted": "Data extracted. Review it before saving.",
+      "saved": "Document saved and indexed.",
+      "uploaded": "File uploaded to the cloud.",
+      "deleted": "Document deleted.",
+      "notFound": "Document not found.",
+      "uploadFailed": "The file could not be uploaded to the cloud: {{message}}"
     }
   },
   "products": {
@@ -1152,7 +1174,16 @@
   },
   "pendingUpload": {
     "count": "{{count}} not uploaded",
-    "upload": "Upload now"
+    "upload": "Upload now",
+    "msg": {
+      "offline": "No connection. It will upload by itself as soon as the network returns.",
+      "done": "Products and stock entries uploaded.",
+      "unknownError": "unknown error",
+      "pendingAndRejected": "{{pending}} are not uploaded and {{rejected}} were rejected. Open them from the red notice to see what to do.",
+      "pending": "{{pending}} are not uploaded. Check your connection and try again.",
+      "uploadedWithRejected": "Pending items uploaded. There are still {{rejected}} rejected record(s) in the red notice.",
+      "failed": "Could not upload: {{message}}"
+    }
   },
   "ledger": {
     "title": "Control ledger",

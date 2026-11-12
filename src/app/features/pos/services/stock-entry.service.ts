@@ -1,4 +1,5 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
+import { TranslateService } from '@ngx-translate/core';
 import { Injectable, Injector, inject, signal } from '@angular/core';
 import {
   EMPTY,
@@ -100,11 +101,14 @@ export function stockEntryWarnings(response: unknown): string[] {
 }
 
 /** Texto para el cajero de una advertencia de entrada. */
-function warningMessage(code: string, lotNumber: string, productName: string): string {
-  if (code === LOT_EXPIRY_MISMATCH) {
-    return `El lote ${lotNumber} de ${productName} ya existía con otra caducidad. Revisa la factura.`;
-  }
-  return `Entrada de ${productName} (lote ${lotNumber}): ${code}.`;
+function warningMessage(
+  t: (key: string, params?: Record<string, unknown>) => string,
+  code: string,
+  lotNumber: string,
+  productName: string,
+): string {
+  const params = { lot: lotNumber, name: productName, code };
+  return t(code === LOT_EXPIRY_MISMATCH ? 'stockEntry.msg.lotExpiryMismatch' : 'stockEntry.msg.entryWarning', params);
 }
 
 /**
@@ -203,6 +207,11 @@ export class StockEntryService {
 
   private readonly autoPush = inject(AutoPushService);
   private readonly injector = inject(Injector);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
 
 
   /** Avisos del empuje en curso; se muestran juntos al terminar. */
@@ -393,9 +402,10 @@ flushQueueAsync(): Promise<void> {
               for (const code of stockEntryWarnings(response)) {
                 this.pendingWarnings.push(
                   warningMessage(
+                    (key, params) => this.t(key, params),
                     code,
                     payload.lotNumber ?? '',
-                    result.product?.name ?? payload.product?.name ?? 'producto',
+                    result.product?.name ?? payload.product?.name ?? this.t('stockEntry.msg.productFallback'),
                   ),
                 );
               }
@@ -473,7 +483,7 @@ flushQueueAsync(): Promise<void> {
       return;
     }
     try {
-      this.injector.get(NotificationService).warn(messages.join(' '), 'Revisa la entrada');
+      this.injector.get(NotificationService).warn(messages.join(' '), this.t('stockEntry.msg.reviewEntry'));
     } catch {
       // Sin notificaciones disponibles; la entrada ya quedó registrada.
     }

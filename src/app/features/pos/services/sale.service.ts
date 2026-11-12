@@ -1,4 +1,5 @@
 import { HttpClient } from '@angular/common/http';
+import { TranslateService } from '@ngx-translate/core';
 import { Injectable, inject, signal } from '@angular/core';
 import {
   Observable,
@@ -341,10 +342,10 @@ export const BULK_MAX_ITEMS = 50;
  */
 function motivoDeEspera(esperandoPor: 'turno' | 'catalogo' | undefined): string | null {
   if (esperandoPor === 'turno') {
-    return 'Espera a que suba el turno';
+    return 'sale.pending.waitShift';
   }
   if (esperandoPor === 'catalogo') {
-    return 'Espera a que suba un producto nuevo';
+    return 'sale.pending.waitProduct';
   }
   return null;
 }
@@ -410,6 +411,11 @@ export class SaleService {
   private readonly autoPush = inject(AutoPushService);
   private readonly cartStorage = inject(CartStorageService);
   private readonly clock = inject(ClockSkewService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly apiUrl = environment.apiUrl;
 
 
@@ -652,7 +658,7 @@ export class SaleService {
     const motivo = normalizeVoidReason(reason);
     if (!motivo) {
       return throwError(
-        () => new Error(`Escribe el motivo de la anulación (mínimo ${VOID_REASON_MIN_LENGTH} caracteres).`),
+        () => new Error(this.t('sale.msg.voidReasonRequired', { min: VOID_REASON_MIN_LENGTH })),
       );
     }
     const voidedBy = this.auth.user()?.uid ?? '';
@@ -660,7 +666,7 @@ export class SaleService {
     if (!sale.remoteId) {
       return defer(() => this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel, motivo)).pipe(
         switchMap((voided) =>
-          voided ? of(voided) : throwError(() => new Error('Venta no encontrada.')),
+          voided ? of(voided) : throwError(() => new Error(this.t('sale.msg.saleNotFound'))),
         ),
         tap(() => {
           this.refreshPending();
@@ -674,7 +680,7 @@ export class SaleService {
         from(this.api().sales.voidLocal(sale.id, voidedBy, voidedByLabel, motivo)).pipe(
           switchMap((voided) => {
             if (!voided) {
-              return throwError(() => new Error('Venta no encontrada.'));
+              return throwError(() => new Error(this.t('sale.msg.saleNotFound')));
             }
             // `voidLocal` encola `needsRemoteVoid` cuando hay remoteId; el void
             // remoto ya corrió, así que se limpia el flag.
@@ -705,7 +711,7 @@ export class SaleService {
               ? from(this.api().sales.markNeedsRemoteVoid(sale.id)).pipe(
                   map(() => ({ ...voided, id: sale.id, remoteId })),
                 )
-              : throwError(() => new Error('Venta no encontrada.')),
+              : throwError(() => new Error(this.t('sale.msg.saleNotFound'))),
           ),
           tap(() => this.refreshPending()),
         );
@@ -745,7 +751,7 @@ export class SaleService {
   async discardSale(localId: string, reason: string): Promise<void> {
     const motivo = normalizeVoidReason(reason);
     if (!motivo) {
-      throw new Error(`Escribe el motivo del descarte (mínimo ${VOID_REASON_MIN_LENGTH} caracteres).`);
+      throw new Error(this.t('sale.msg.discardReasonRequired', { min: VOID_REASON_MIN_LENGTH }));
     }
     const api = this.api();
     const discarded = await api.sales.discard(localId, {

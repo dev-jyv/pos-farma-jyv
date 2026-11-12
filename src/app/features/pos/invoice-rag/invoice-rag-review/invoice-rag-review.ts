@@ -2,7 +2,7 @@ import { DatePipe, PercentPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, OnDestroy, computed, inject, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
@@ -52,6 +52,11 @@ type BusyAction = 'extract' | 'confirm' | 'remove' | 'upload';
 export class InvoiceRagReview implements OnDestroy {
   private readonly invoiceRag = inject(InvoiceRagService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   private readonly fb = inject(NonNullableFormBuilder);
@@ -116,7 +121,7 @@ export class InvoiceRagReview implements OnDestroy {
     this.busy.set('extract');
     try {
       this.applyDocument(await this.invoiceRag.extract(doc));
-      this.notifications.success('Datos extraídos. Revísalos antes de guardar.');
+      this.notifications.success(this.t('invoiceRag.msg.extracted'));
     } catch (error) {
       this.notifications.error(getApiErrorMessage(error));
       await this.refresh(doc.id);
@@ -139,7 +144,7 @@ export class InvoiceRagReview implements OnDestroy {
     try {
       const data = readInvoiceRagForm(form, (doc.confirmed ?? doc.extracted)?.confidence ?? 0);
       this.applyDocument(await this.invoiceRag.confirm(doc.id, data));
-      this.notifications.success('Documento guardado e indexado.');
+      this.notifications.success(this.t('invoiceRag.msg.saved'));
       if (!this.document()?.storagePath) {
         await this.backup(doc.id);
       }
@@ -158,7 +163,7 @@ export class InvoiceRagReview implements OnDestroy {
     this.busy.set('upload');
     try {
       if (await this.backup(doc.id)) {
-        this.notifications.success('Archivo subido a la nube.');
+        this.notifications.success(this.t('invoiceRag.msg.uploaded'));
       }
     } finally {
       this.busy.set(null);
@@ -173,7 +178,7 @@ export class InvoiceRagReview implements OnDestroy {
     this.busy.set('remove');
     try {
       await this.invoiceRag.remove(doc.id);
-      this.notifications.success('Documento eliminado.');
+      this.notifications.success(this.t('invoiceRag.msg.deleted'));
       this.back();
     } catch (error) {
       this.notifications.error(getApiErrorMessage(error));
@@ -191,7 +196,7 @@ export class InvoiceRagReview implements OnDestroy {
     try {
       const doc = await this.invoiceRag.getById(id);
       if (!doc) {
-        this.notifications.error('Documento no encontrado.');
+        this.notifications.error(this.t('invoiceRag.msg.notFound'));
         this.back();
         return;
       }
@@ -217,7 +222,7 @@ export class InvoiceRagReview implements OnDestroy {
       this.document.set(await this.invoiceRag.upload(id));
       return true;
     } catch (error) {
-      this.notifications.warn(`No se pudo subir el archivo a la nube: ${getApiErrorMessage(error)}`);
+      this.notifications.warn(this.t('invoiceRag.msg.uploadFailed', { message: getApiErrorMessage(error) }));
       return false;
     }
   }

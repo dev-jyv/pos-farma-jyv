@@ -801,7 +801,7 @@
           @if (item.waitingFor) {
             <!-- Sin esto la venta salía en la lista sin explicación de por qué
                  "Enviar ahora" no la mueve: le falta que suba su turno. -->
-            <span class="mt-0.5 block text-xs text-amber-800">{{ item.waitingFor }}</span>
+            <span class="mt-0.5 block text-xs text-amber-800">{{ item.waitingFor | translate }}</span>
           }
         </span>
         <div class="flex shrink-0 items-center gap-2">

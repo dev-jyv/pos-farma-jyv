@@ -331,6 +331,14 @@
       "extracted": "Por revisar",
       "indexed": "Indexado",
       "failed": "Falló"
+    },
+    "msg": {
+      "extracted": "Datos extraídos. Revísalos antes de guardar.",
+      "saved": "Documento guardado e indexado.",
+      "uploaded": "Archivo subido a la nube.",
+      "deleted": "Documento eliminado.",
+      "notFound": "Documento no encontrado.",
+      "uploadFailed": "No se pudo subir el archivo a la nube: {{message}}"
     }
   },
   "shell": {
@@ -363,7 +371,12 @@
       "sendUnreconciled": "Mandar a conciliación",
       "fix": "Corregir",
       "discard": "Descartar",
-      "empty": "No hay registros rechazados."
+      "empty": "No hay registros rechazados.",
+      "aiError": {
+        "tooMany": "Demasiadas consultas a la IA. Espera un minuto.",
+        "offline": "Sin conexión: la ayuda con IA necesita internet.",
+        "unavailable": "La ayuda con IA no está disponible. Avisa al administrador."
+      }
     },
     "discard": {
       "title": "Descartar {{label}}",
@@ -576,7 +589,9 @@
       "empty": "No hay ventas pendientes.",
       "sendNow": "Enviar ahora",
       "discardTitle": "Descartar venta pendiente ({{folio}})",
-      "discardDescription": "Se retira de este equipo y nunca subirá como venta; el stock se repone. Queda el rastro de quién, cuándo y por qué."
+      "discardDescription": "Se retira de este equipo y nunca subirá como venta; el stock se repone. Queda el rastro de quién, cuándo y por qué.",
+      "waitShift": "Espera a que suba el turno",
+      "waitProduct": "Espera a que suba un producto nuevo"
     },
     "msg": {
       "boxes": "{{count}} cajas",
@@ -631,7 +646,10 @@
       "noSalePermission": "Tu rol no tiene permiso para registrar ventas.",
       "openShiftFirst": "Abre un turno de caja antes de vender.",
       "boxesOne": "{{count}} caja",
-      "cartRestoredOne": "Se recuperó el ticket en curso ({{count}} partida)."
+      "cartRestoredOne": "Se recuperó el ticket en curso ({{count}} partida).",
+      "voidReasonRequired": "Escribe el motivo de la anulación (mínimo {{min}} caracteres).",
+      "saleNotFound": "Venta no encontrada.",
+      "discardReasonRequired": "Escribe el motivo del descarte (mínimo {{min}} caracteres)."
     }
   },
   "history": {
@@ -1013,7 +1031,11 @@
       "noInvoices": "No hay facturas registradas. Se dan de alta desde el panel de administración antes de recibir la mercancía.",
       "sameSku": "\"{{name}}\" ya está en el catálogo con el SKU {{sku}}: búscalo y selecciónalo en lugar de darlo de alta.",
       "sameName": "Ya existe \"{{name}}\" con otro SKU ({{sku}}). Usa otro nombre, por ejemplo \"{{suggestion}}\".",
-      "noSupplier": "Sin proveedor"
+      "noSupplier": "Sin proveedor",
+      "lotExpiryMismatch": "El lote {{lot}} de {{name}} ya existía con otra caducidad. Revisa la factura.",
+      "entryWarning": "Entrada de {{name}} (lote {{lot}}): {{code}}.",
+      "productFallback": "producto",
+      "reviewEntry": "Revisa la entrada"
     }
   },
   "products": {
@@ -1152,7 +1174,16 @@
   },
   "pendingUpload": {
     "count": "{{count}} sin subir",
-    "upload": "Subir ahora"
+    "upload": "Subir ahora",
+    "msg": {
+      "offline": "Sin conexión. Se subirá solo en cuanto vuelva la red.",
+      "done": "Productos y entradas de stock subidos.",
+      "unknownError": "error desconocido",
+      "pendingAndRejected": "Quedan {{pending}} sin subir y hay {{rejected}} rechazado(s). Ábrelos en el aviso rojo para ver qué hacer.",
+      "pending": "Quedan {{pending}} sin subir. Revisa tu conexión y vuelve a intentar.",
+      "uploadedWithRejected": "Pendientes subidos. Aún hay {{rejected}} registro(s) rechazado(s) en el aviso rojo.",
+      "failed": "No se pudo subir: {{message}}"
+    }
   },
   "ledger": {
     "title": "Libro de control",
