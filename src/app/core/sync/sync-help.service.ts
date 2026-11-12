@@ -1,4 +1,5 @@
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { TranslateService } from '@ngx-translate/core';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom, map } from 'rxjs';
 
@@ -28,6 +29,11 @@ export interface SyncHelpReply {
 @Injectable({ providedIn: 'root' })
 export class SyncHelpService {
   private readonly http = inject(HttpClient);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
 
   async ask(record: BlockedSyncRecord): Promise<SyncHelpReply> {
     const body = {
@@ -44,7 +50,7 @@ export class SyncHelpService {
           .pipe(map((response) => unwrapEntity<SyncHelpReply>(response))),
       );
     } catch (error) {
-      throw new Error(mensajeDeFallo(error));
+      throw new Error(this.t(mensajeDeFallo(error)));
     }
   }
 }
@@ -53,11 +59,11 @@ export class SyncHelpService {
 function mensajeDeFallo(error: unknown): string {
   if (error instanceof HttpErrorResponse) {
     if (error.status === 429) {
-      return 'Demasiadas consultas a la IA. Espera un minuto.';
+      return 'shell.blocked.aiError.tooMany';
     }
     if (error.status === 0) {
-      return 'Sin conexión: la ayuda con IA necesita internet.';
+      return 'shell.blocked.aiError.offline';
     }
   }
-  return 'La ayuda con IA no está disponible. Avisa al administrador.';
+  return 'shell.blocked.aiError.unavailable';
 }

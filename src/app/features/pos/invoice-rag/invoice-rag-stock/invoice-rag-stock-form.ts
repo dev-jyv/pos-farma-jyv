@@ -57,15 +57,22 @@ export function rowCostPerPiece(
 }
 
 /** Leyenda de la conversión: "3 cajas × 20 = 60 pzas · $12.50 c/pza". `null` si no convierte. */
-export function boxConversionLegend(row: StockRowValue): string | null {
+export function boxConversionLegend(
+  row: StockRowValue,
+  t: (key: string, params?: Record<string, unknown>) => string,
+): string | null {
   if (!convertsBoxes(row) || !row.quantity) {
     return null;
   }
   const perBox = piecesPerBox(row.product)!;
   const boxes = row.quantity;
   const cost = rowCostPerPiece(row);
-  const base = `${boxes} ${boxes === 1 ? 'caja' : 'cajas'} × ${perBox} = ${rowPieces(row)} pzas`;
-  return cost === null ? base : `${base} · $${cost.toFixed(2)} c/pza`;
+  const base = t(boxes === 1 ? 'invoiceRag.stock.legendOne' : 'invoiceRag.stock.legend', {
+    boxes,
+    perBox,
+    pieces: rowPieces(row),
+  });
+  return cost === null ? base : `${base} · ${t('invoiceRag.stock.legendCost', { cost: cost.toFixed(2) })}`;
 }
 
 export function stockRowErrors(row: StockRowValue, today: string): StockRowError[] {

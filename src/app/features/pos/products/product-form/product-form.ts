@@ -49,6 +49,10 @@ export class ProductForm {
   private readonly catalogService = inject(ProductCatalogService);
   private readonly categoriesService = inject(CategoryService);
   private readonly notifications = inject(NotificationService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly translate = inject(TranslateService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
@@ -82,7 +86,7 @@ export class ProductForm {
   /** Lista cerrada; conserva la unidad ya guardada si viniera de fuera del catálogo. */
   readonly unitOptions = computed(() => buildUnitOptions(this.unit()));
   readonly controlledOptions = [
-    { label: 'Sin grupo (venta libre)', value: null },
+    { label: this.t('products.validation.noControlledGroup'), value: null },
     ...CONTROLLED_GROUPS.map((group) => ({
       label: CONTROLLED_GROUP_RULES[group].label,
       value: group as ControlledGroup | null,
@@ -94,28 +98,28 @@ export class ProductForm {
   readonly blockers = computed<string[]>(() => {
     const reasons: string[] = [];
     if (!this.name().trim()) {
-      reasons.push('El nombre del producto es requerido.');
+      reasons.push(this.t('products.validation.nameRequired'));
     }
     if (!this.sku().trim()) {
-      reasons.push('El SKU es requerido.');
+      reasons.push(this.t('products.validation.skuRequired'));
     }
     if (!this.categoryId()) {
-      reasons.push('Elige la categoría del producto.');
+      reasons.push(this.t('products.validation.categoryRequired'));
     }
     if (!this.unit().trim()) {
-      reasons.push('Captura la unidad (pieza, caja…).');
+      reasons.push(this.t('products.validation.unitRequired'));
     }
     if ((this.salePrice() ?? 0) <= 0) {
-      reasons.push('Captura el precio de venta.');
+      reasons.push(this.t('products.validation.priceRequired'));
     }
     if (this.hasIva() && this.hasIvaZero()) {
-      reasons.push('Un producto no puede tener IVA e IVA cero a la vez.');
+      reasons.push(this.t('products.validation.ivaConflict'));
     }
     if (this.hasIeps() && !(this.iepsPercent() ?? 0)) {
-      reasons.push('Captura la tasa de IEPS.');
+      reasons.push(this.t('products.validation.iepsRequired'));
     }
     if (this.barcode().trim() && !/^\d{8,14}$/.test(this.barcode().trim())) {
-      reasons.push('El código de barras debe tener entre 8 y 14 dígitos.');
+      reasons.push(this.t('products.validation.barcodeLength'));
     }
     return reasons;
   });
@@ -132,7 +136,7 @@ export class ProductForm {
         next: (product) => {
           this.loading.set(false);
           if (!product) {
-            this.notifications.error('No se encontró el producto en el catálogo local.');
+            this.notifications.error(this.t('products.validation.notFoundLocal'));
             void this.router.navigate(['/pos/productos']);
             return;
           }

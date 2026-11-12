@@ -1,4 +1,5 @@
 import { Injectable, inject, signal } from '@angular/core';
+import { TranslateService } from '@ngx-translate/core';
 
 import { CartLine, CouponDto, SaleCoupon } from '../../../shared/models';
 import { isProductLine, linePieces, lineUnitPrice } from '../../../shared/utils/cart-line';
@@ -7,12 +8,11 @@ import { fromCents, toCents } from '../../../shared/utils/money';
 import { COUPONS_SYNCED_EVENT } from '../../../core/sync/sync-events';
 import { ClockSkewService } from '../../../core/time/clock-skew.service';
 
-/** Mensaje cuando el código no está en la SQLite de la caja. */
-export const COUPON_NOT_FOUND_MESSAGE = 'Cupón no encontrado — sincroniza o revisa el código';
+/** Llave de i18n: el código no está en la SQLite de la caja. */
+export const COUPON_NOT_FOUND_MESSAGE = 'sale.coupon.notFound';
 
-/** Aviso (no bloquea) cuando la foto local dice que ya se usaron todos. */
-export const COUPON_MAYBE_EXHAUSTED_MESSAGE =
-  'Este cupón puede estar agotado; el servidor lo revisará';
+/** Llave de i18n: aviso (no bloquea) cuando la foto local dice que ya se usaron todos. */
+export const COUPON_MAYBE_EXHAUSTED_MESSAGE = 'sale.coupon.maybeExhausted';
 
 /** Por qué un cupón no descuenta nada en este momento. */
 export type CouponIssueCode =
@@ -84,6 +84,7 @@ function hasPromotion(line: CartLine): boolean {
  */
 @Injectable({ providedIn: 'root' })
 export class CouponService {
+  private readonly translate = inject(TranslateService);
   /** Hora corregida contra el servidor (SPEC 65): un reloj atrasado no aplica cupones vencidos. */
   private readonly clock = inject(ClockSkewService);
   /** Cambia cada vez que baja un pull de cupones: la venta relee el aplicado. */
@@ -115,16 +116,16 @@ export class CouponService {
    */
   windowIssue(coupon: CouponDto, now = this.clock.nowDate()): CouponIssue | null {
     if (!coupon.isActive) {
-      return { code: 'inactive', message: `El cupón ${coupon.code} ya no está activo.` };
+      return { code: 'inactive', message: this.translate.instant('sale.coupon.issue.inactive', { code: coupon.code }) };
     }
     if (Date.parse(coupon.startsAt) > now.getTime()) {
       return {
         code: 'not_started',
-        message: `El cupón ${coupon.code} es válido a partir del ${shortDate(coupon.startsAt)}.`,
+        message: this.translate.instant('sale.coupon.issue.notStarted', { code: coupon.code, date: shortDate(coupon.startsAt) }),
       };
     }
     if (coupon.endsAt && Date.parse(coupon.endsAt) < now.getTime()) {
-      return { code: 'expired', message: `El cupón ${coupon.code} ya venció.` };
+      return { code: 'expired', message: this.translate.instant('sale.coupon.issue.expired', { code: coupon.code }) };
     }
     return null;
   }
@@ -227,22 +228,22 @@ export class CouponService {
       if (delCupon.length === 0) {
         return {
           code: 'no_products',
-          message: `El cupón ${coupon.code} no aplica a ningún producto del ticket.`,
+          message: this.translate.instant('sale.coupon.issue.noProducts', { code: coupon.code }),
         };
       }
       if (delCupon.every(hasPromotion)) {
         return {
           code: 'all_promoted',
-          message: `El cupón ${coupon.code} no aplica: sus productos ya tienen promoción.`,
+          message: this.translate.instant('sale.coupon.issue.allPromoted', { code: coupon.code }),
         };
       }
     }
     if (coupon.scope === 'sale' && coupon.minPurchase != null) {
       return {
         code: 'below_minimum',
-        message: `El cupón ${coupon.code} pide una compra mínima de $${money(coupon.minPurchase)}.`,
+        message: this.translate.instant('sale.coupon.issue.belowMinimum', { code: coupon.code, amount: money(coupon.minPurchase) }),
       };
     }
-    return { code: 'no_effect', message: `El cupón ${coupon.code} no tiene efecto en este ticket.` };
+    return { code: 'no_effect', message: this.translate.instant('sale.coupon.issue.noEffect', { code: coupon.code }) };
   }
 }

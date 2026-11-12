@@ -1,21 +1,23 @@
 import { CurrencyPipe, DatePipe } from '@angular/common';
+import { TranslatePipe } from '@ngx-translate/core';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 import { CashSessionSummary, PaymentMethod, Sale, SaleItem, isSaleProductItem } from '../../../shared/models';
 import { CONTROLLED_GROUP_RULES } from '../../../shared/utils/controlled';
 import { environment } from '../../../../environments/environment';
 
+/** Llaves de i18n (`payment.*`) por método; la plantilla las traduce. */
 const METHOD_LABELS: Record<PaymentMethod, string> = {
-  cash: 'Efectivo',
-  card: 'Tarjeta',
-  transfer: 'Transferencia',
-  mixed: 'Mixto',
+  cash: 'payment.cash',
+  card: 'payment.card',
+  transfer: 'payment.transfer',
+  mixed: 'payment.mixed',
 };
 
 @Component({
   selector: 'app-sale-ticket',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, DatePipe],
+  imports: [CurrencyPipe, DatePipe, TranslatePipe],
   templateUrl: './sale-ticket.html',
   styleUrl: './sale-ticket.css',
   host: {
@@ -64,12 +66,12 @@ export class SaleTicket {
    * `quantity`, así que sin esto el ticket diría "20" junto a un importe de
    * dos cajas.
    */
-  boxOf(item: SaleItem): { label: string; boxes: number } | null {
+  boxOf(item: SaleItem): { boxes: number; piecesPerBox: number } | null {
     if (!isSaleProductItem(item) || !item.saleUnit) {
       return null;
     }
     const { boxes, piecesPerBox } = item.saleUnit;
-    return { boxes, label: `${boxes} ${boxes === 1 ? 'caja' : 'cajas'} × ${piecesPerBox} pzas` };
+    return { boxes, piecesPerBox };
   }
 
   readonly sale = input.required<Sale>();
@@ -96,7 +98,7 @@ export class SaleTicket {
 @Component({
   selector: 'app-cash-cut-ticket',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, DatePipe],
+  imports: [CurrencyPipe, DatePipe, TranslatePipe],
   templateUrl: './cash-cut-ticket.html',
   styleUrl: './sale-ticket.css',
 })
@@ -110,10 +112,7 @@ export class CashCutTicket {
   readonly summary = input.required<CashSessionSummary>();
 
   readonly pharmacy = environment.pharmacy;
-  readonly methods: { key: PaymentMethod; label: string }[] = [
-    { key: 'cash', label: 'Efectivo' },
-    { key: 'card', label: 'Tarjeta' },
-    { key: 'transfer', label: 'Transferencia' },
-    { key: 'mixed', label: 'Mixto' },
-  ];
+  readonly methods: { key: PaymentMethod; label: string }[] = (Object.keys(METHOD_LABELS) as PaymentMethod[]).map(
+    (key) => ({ key, label: METHOD_LABELS[key] }),
+  );
 }

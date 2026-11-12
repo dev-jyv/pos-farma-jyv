@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, OnDestroy, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 
 import { getApiErrorMessage } from '../../../../core/api/api.utils';
@@ -20,6 +20,11 @@ type UploadStep = 'idle' | 'saving' | 'extracting';
 export class InvoiceRagUpload implements OnDestroy {
   private readonly invoiceRag = inject(InvoiceRagService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly router = inject(Router);
 
   readonly available = this.invoiceRag.available;
@@ -75,7 +80,7 @@ export class InvoiceRagUpload implements OnDestroy {
     try {
       const { document, duplicate } = await this.invoiceRag.register(file);
       if (duplicate) {
-        this.notifications.warn('Este archivo ya estaba cargado; se abre el existente.');
+        this.notifications.warn(this.t('invoiceRag.msg.duplicateFile'));
       }
       if (!duplicate || document.status === 'uploaded' || document.status === 'failed') {
         this.step.set('extracting');

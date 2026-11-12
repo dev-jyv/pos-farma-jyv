@@ -194,7 +194,7 @@ describe('BlockedSyncService — anulaciones y descarte (SPEC 62)', () => {
 
   it('el panel la explica como anulación rechazada y recomienda avisar al admin', () => {
     const ayuda = describeBlocked(anulacion);
-    expect(ayuda.title).toBe('El servidor rechazó la anulación');
+    expect(ayuda.title).toBe('sync.blocked.voidRejected.title');
     expect(ayuda.recommended).toBe('avisar-admin');
   });
 

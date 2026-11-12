@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { DialogModule } from 'primeng/dialog';
 import { InputTextModule } from 'primeng/inputtext';
@@ -24,6 +24,11 @@ import { SupplierService } from '../../services/supplier.service';
 export class SupplierList {
   private readonly suppliersService = inject(SupplierService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly router = inject(Router);
 
   readonly suppliers = signal<Supplier[]>([]);
@@ -84,7 +89,7 @@ export class SupplierList {
           this.loading.set(false);
         },
         error: () => {
-          this.notifications.error('No se pudieron cargar los proveedores.');
+          this.notifications.error(this.t('suppliers.msg.loadError'));
           this.loading.set(false);
         },
       });
@@ -118,14 +123,14 @@ export class SupplierList {
     this.deactivating.set(true);
     this.suppliersService.deactivate(supplier.id).subscribe({
       next: () => {
-        this.notifications.success('Proveedor desactivado.');
+        this.notifications.success(this.t('suppliers.msg.deactivated'));
         this.deactivating.set(false);
         this.deactivateTarget.set(null);
         this.fetch();
       },
       error: (error: unknown) => {
         this.deactivating.set(false);
-        this.notifications.error(error instanceof Error ? error.message : 'No se pudo desactivar el proveedor.');
+        this.notifications.error(error instanceof Error ? error.message : this.t('suppliers.msg.deactivateFailed'));
       },
     });
   }

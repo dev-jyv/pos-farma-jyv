@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
-import { provideTranslateService } from '@ngx-translate/core';
+
 import { Observable, of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -27,7 +27,6 @@ describe('Login', () => {
 
     TestBed.configureTestingModule({
       providers: [
-        provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         { provide: NotificationService, useValue: { error: notifyError, success: vi.fn() } },
         { provide: Router, useValue: { navigate } },
         {

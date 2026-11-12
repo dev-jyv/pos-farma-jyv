@@ -1,7 +1,16 @@
+import { TestBed } from '@angular/core/testing';
+import { TranslateService } from '@ngx-translate/core';
 import { describe, expect, it } from 'vitest';
 
 import { BlockedSyncRecord } from '../electron/window.d';
-import { blockedCodeOf, describeBlocked } from './sync-diagnosis';
+import { BlockedHelp, blockedCodeOf, describeBlocked as describeKeys } from './sync-diagnosis';
+
+/** Lo que ve el cajero: las llaves ya traducidas con el es.json real. */
+function describeBlocked(record: BlockedSyncRecord): BlockedHelp {
+  const help = describeKeys(record);
+  const t = TestBed.inject(TranslateService);
+  return { ...help, title: t.instant(help.title, help.params), explanation: t.instant(help.explanation, help.params) };
+}
 
 function registro(overrides: Partial<BlockedSyncRecord> = {}): BlockedSyncRecord {
   return {

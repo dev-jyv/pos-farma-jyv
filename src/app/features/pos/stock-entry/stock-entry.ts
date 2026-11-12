@@ -9,7 +9,7 @@ import {
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { InputNumberModule } from 'primeng/inputnumber';
@@ -77,6 +77,11 @@ export class StockEntryScreen {
   private readonly products = inject(ProductService);
   private readonly categories = inject(CategoryService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly destroyRef = inject(DestroyRef);
   private readonly search$ = new Subject<string>();
   private readonly nameCheck$ = new Subject<void>();
@@ -135,9 +140,9 @@ export class StockEntryScreen {
     }
     const sameSku = conflict.sku.trim().toLowerCase() === this.sku().trim().toLowerCase();
     if (sameSku && this.isNewProduct()) {
-      return `"${conflict.name}" ya está en el catálogo con el SKU ${conflict.sku}: búscalo y selecciónalo en lugar de darlo de alta.`;
+      return this.t('stockEntry.msg.sameSku', { name: conflict.name, sku: conflict.sku });
     }
-    return `Ya existe "${conflict.name}" con otro SKU (${conflict.sku}). Usa otro nombre, por ejemplo "${this.suggestedName()}".`;
+    return this.t('stockEntry.msg.sameName', { name: conflict.name, sku: conflict.sku, suggestion: this.suggestedName() });
   });
 
   // Datos de la partida que entra.
@@ -153,7 +158,7 @@ export class StockEntryScreen {
   /** Lista cerrada; conserva la unidad ya guardada si viniera de fuera del catálogo. */
   readonly unitOptions = computed(() => buildUnitOptions(this.unit()));
   readonly controlledOptions = [
-    { label: 'Sin grupo (venta libre)', value: null },
+    { label: this.t('products.validation.noControlledGroup'), value: null },
     ...CONTROLLED_GROUPS.map((group) => ({
       label: CONTROLLED_GROUP_RULES[group].label,
       value: group as ControlledGroup | null,
@@ -163,7 +168,7 @@ export class StockEntryScreen {
   readonly invoiceOptions = computed(() =>
     this.invoices().map((invoice) => ({
       value: invoice.id,
-      label: `${invoice.invoiceNumber} · ${invoice.supplierName || 'Sin proveedor'} · $${invoice.totalAmount.toFixed(2)}`,
+      label: `${invoice.invoiceNumber} · ${invoice.supplierName || this.t('stockEntry.msg.noSupplier')} · $${invoice.totalAmount.toFixed(2)}`,
     })),
   );
   readonly selectedInvoice = computed(
@@ -196,23 +201,23 @@ export class StockEntryScreen {
   readonly blockers = computed<string[]>(() => {
     const reasons: string[] = [];
     if (!this.selectedInvoiceId()) {
-      reasons.push('Elige la factura de la mercancía.');
+      reasons.push(this.t('stockEntry.msg.invoiceRequired'));
     }
     if (this.mode() === 'none') {
-      reasons.push('Busca el producto o da de alta uno nuevo.');
+      reasons.push(this.t('stockEntry.msg.productRequired'));
     } else {
       reasons.push(...this.productBlockers());
     }
     if (!this.lotNumber().trim()) {
-      reasons.push('Captura el número de lote.');
+      reasons.push(this.t('stockEntry.msg.lotRequired'));
     }
     if (!this.expiryDate()) {
-      reasons.push('Captura la fecha de caducidad.');
+      reasons.push(this.t('stockEntry.msg.expiryRequired'));
     } else if (this.expiryDate() < this.today) {
-      reasons.push('La caducidad no puede estar en el pasado.');
+      reasons.push(this.t('stockEntry.msg.expiryPast'));
     }
     if ((this.quantity() ?? 0) < 1) {
-      reasons.push('Captura cuántas piezas entran.');
+      reasons.push(this.t('stockEntry.msg.qtyRequired'));
     }
     return reasons;
   });
@@ -284,7 +289,7 @@ export class StockEntryScreen {
           this.invoices.set(invoices);
           if (invoices.length === 0) {
             this.invoicesError.set(
-              'No hay facturas registradas. Se dan de alta desde el panel de administración antes de recibir la mercancía.',
+              this.t('stockEntry.msg.noInvoices'),
             );
           }
         },
@@ -495,32 +500,32 @@ export class StockEntryScreen {
   private productBlockers(): string[] {
     const reasons: string[] = [];
     if (!this.name().trim()) {
-      reasons.push('El nombre del producto es requerido.');
+      reasons.push(this.t('products.validation.nameRequired'));
     }
     const nameConflict = this.nameConflictMessage();
     if (nameConflict) {
       reasons.push(nameConflict);
     }
     if (!this.sku().trim()) {
-      reasons.push('El SKU es requerido.');
+      reasons.push(this.t('products.validation.skuRequired'));
     }
     if (!this.categoryId()) {
-      reasons.push('Elige la categoría del producto.');
+      reasons.push(this.t('products.validation.categoryRequired'));
     }
     if (!this.unit().trim()) {
-      reasons.push('Captura la unidad (pieza, caja…).');
+      reasons.push(this.t('products.validation.unitRequired'));
     }
     if ((this.salePrice() ?? 0) <= 0) {
-      reasons.push('Captura el precio de venta.');
+      reasons.push(this.t('products.validation.priceRequired'));
     }
     if (this.hasIva() && this.hasIvaZero()) {
-      reasons.push('Un producto no puede tener IVA e IVA cero a la vez.');
+      reasons.push(this.t('products.validation.ivaConflict'));
     }
     if (this.hasIeps() && !(this.iepsPercent() ?? 0)) {
-      reasons.push('Captura la tasa de IEPS.');
+      reasons.push(this.t('products.validation.iepsRequired'));
     }
     if (this.barcode().trim() && !/^\d{8,14}$/.test(this.barcode().trim())) {
-      reasons.push('El código de barras debe tener entre 8 y 14 dígitos.');
+      reasons.push(this.t('products.validation.barcodeLength'));
     }
     return reasons;
   }

@@ -11,7 +11,7 @@
         [alt]="'app.name' | translate"
         class="mx-auto mb-4 h-32 w-auto object-contain"
       />
-      <p class="text-sm text-slate-500">Inicia sesión para abrir la caja</p>
+      <p class="text-sm text-slate-500">{{ 'auth.login.subtitle' | translate }}</p>
       @if (appVersion) {
         <p class="mt-2 font-mono text-xs text-slate-400">{{ appVersion }}</p>
       }

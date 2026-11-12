@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
-import { provideTranslateService } from '@ngx-translate/core';
+
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
 import { of, throwError } from 'rxjs';
@@ -43,7 +43,6 @@ describe('InvoiceForm', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
-        provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         providePrimeNG({}),
         MessageService,
         { provide: InvoiceService, useValue: { create } },

@@ -5,10 +5,26 @@ import { SyncErrorCode, isSyncErrorCode } from '../../shared/models';
 export type BlockedAction = 'reintentar' | 'corregir' | 'avisar-admin';
 
 export interface BlockedHelp {
+  /** Llave de i18n (`sync.blocked.*`); la plantilla la traduce con `params`. */
   title: string;
   explanation: string;
+  params?: Record<string, string>;
   recommended: BlockedAction;
 }
+
+/** Atajo para las entradas de `AYUDA`: llave base `sync.blocked.<clave>.{title,explanation}`. */
+function ayuda(
+  clave: string,
+  recommended: BlockedAction,
+  params?: Record<string, string>,
+  explicacion = 'explanation',
+): BlockedHelp {
+  const base = `sync.blocked.${clave}`;
+  return { title: `${base}.title`, explanation: `${base}.${explicacion}`, params, recommended };
+}
+
+/** ` (dep)` o nada: el turno no siempre tiene nombre. */
+const entreParentesis = (dep: string) => ({ dep: dep ? ` (${dep})` : '' });
 
 /**
  * Texto para el cajero por cada causa que clasifica `electron/db/blocked-diagnosis.js`.
@@ -18,170 +34,40 @@ export interface BlockedHelp {
  * para el admin). `dep` es el turno o el producto que la venta espera.
  */
 const AYUDA: Record<BlockedCode, (dep: string, record: BlockedSyncRecord) => BlockedHelp> = {
-  'turno-sin-subir': (dep) => ({
-    title: 'Falta subir el turno',
-    explanation:
-      `La venta está bien, pero su turno${dep ? ` (${dep})` : ''} todavía no llega al ` +
-      'servidor, casi siempre por falta de internet. Con conexión, pulsa Reintentar: ' +
-      'sube el turno y después la venta.',
-    recommended: 'reintentar',
-  }),
-  'turno-rechazado': (dep) => ({
-    title: 'El servidor rechazó el turno de esta venta',
-    explanation:
-      `Primero hay que resolver la apertura del turno${dep ? ` (${dep})` : ''}, que también ` +
-      'aparece en esta lista. Cuando suba, reintenta la venta. No la descartes: es dinero cobrado.',
-    recommended: 'avisar-admin',
-  }),
-  'producto-sin-subir': (dep) => ({
-    title: 'Falta subir un producto nuevo',
-    explanation:
-      `El producto «${dep || 'nuevo'}» se dio de alta en esta caja y aún no llega al servidor. ` +
-      'Con conexión, pulsa Reintentar: sube el catálogo y después la venta.',
-    recommended: 'reintentar',
-  }),
-  'producto-rechazado': (dep) => ({
-    title: 'El servidor rechazó un producto de esta venta',
-    explanation:
-      `El alta de «${dep || 'un producto'}» fue rechazada. Corrígelo en Productos o avisa ` +
-      'al administrador; después reintenta la venta.',
-    recommended: 'avisar-admin',
-  }),
+  'turno-sin-subir': (dep) => ayuda('shiftNotUploaded', 'reintentar', entreParentesis(dep)),
+  'turno-rechazado': (dep) => ayuda('shiftRejected', 'avisar-admin', entreParentesis(dep)),
+  'producto-sin-subir': (dep) =>
+    ayuda('productNotUploaded', 'reintentar', { name: dep }, dep ? 'explanation' : 'explanationNoName'),
+  'producto-rechazado': (dep) =>
+    ayuda('productRejected', 'avisar-admin', { name: dep }, dep ? 'explanation' : 'explanationNoName'),
   'producto-no-encontrado': (_dep, record) =>
     record.kind === 'stockEntry'
-      ? {
-          title: 'El servidor no conoce el producto de esta entrada',
-          explanation:
-            'Casi siempre el producto aún no había subido cuando se envió la entrada. Con ' +
-            'conexión, pulsa Reintentar: la caja sube primero el producto y después la entrada.',
-          recommended: 'reintentar',
-        }
-      : {
-          title: 'Un producto de esta venta ya no existe',
-          explanation:
-            'Probablemente se borró del catálogo. Avisa al administrador antes de descartar la venta: ' +
-            'el cobro ya se hizo.',
-          recommended: 'avisar-admin',
-        },
-  'entrada-en-curso': () => ({
-    title: 'El servidor todavía está registrando esta entrada',
-    explanation:
-      'Un intento anterior de subir esta entrada sigue en curso en el servidor. No es un rechazo: ' +
-      'espera unos minutos y pulsa Reintentar. No la captures de nuevo, se duplicaría el stock.',
-    recommended: 'reintentar',
-  }),
-  'entrada-a-medias': () => ({
-    title: 'El servidor dejó esta entrada a medias',
-    explanation:
-      'Un intento anterior no terminó de registrar la entrada y el servidor no la acepta otra vez ' +
-      'hasta que alguien la revise. No la reintentes: avisa al administrador para que revise el ' +
-      'lote en inventario. Si ya está registrado ahí, esta copia se puede descartar.',
-    recommended: 'avisar-admin',
-  }),
-  'entrada-posible-duplicada': () => ({
-    title: '¿Factura capturada dos veces?',
-    explanation:
-      'Esta factura ya tiene en el servidor una entrada con el mismo producto, lote y cantidad. ' +
-      'Si de verdad son dos partidas iguales, pulsa "Sí, es otra partida". Si es la misma ' +
-      'mercancía capturada otra vez (otra foto, el PDF o en otra caja), pulsa "Descartar": se ' +
-      'quitan esas piezas del stock de esta caja.',
-    recommended: 'corregir',
-  }),
-  'listo-para-reintentar': () => ({
-    title: 'Ya se puede enviar',
-    explanation: 'Lo que faltaba ya llegó al servidor. Pulsa Reintentar.',
-    recommended: 'reintentar',
-  }),
-  'turno-duplicado': () => ({
-    title: 'Choque con el turno anterior',
-    explanation:
-      'El servidor todavía tiene abierto un turno anterior de este equipo. Reintenta: la caja ' +
-      'sube primero ese cierre. Si se repite, avisa al administrador.',
-    recommended: 'reintentar',
-  }),
-  'turno-abierto-existente': () => ({
-    title: 'Ya hay un turno abierto en el servidor',
-    explanation:
-      'Este cajero tiene otro turno abierto en el servidor (quizá en otro equipo). El ' +
-      'administrador debe cerrarlo; después reintenta.',
-    recommended: 'avisar-admin',
-  }),
-  'turno-ajeno': () => ({
-    title: 'El turno es de otro cajero',
-    explanation:
-      'Solo quien abrió el turno o un administrador puede subir esto. Que esa persona entre ' +
-      'en esta caja, o avisa al administrador.',
-    recommended: 'avisar-admin',
-  }),
+      ? ayuda('productNotFoundEntry', 'reintentar')
+      : ayuda('productNotFound', 'avisar-admin'),
+  'entrada-en-curso': () => ayuda('entryInProgress', 'reintentar'),
+  'entrada-a-medias': () => ayuda('entryHalfDone', 'avisar-admin'),
+  'entrada-posible-duplicada': () => ayuda('entryPossibleDuplicate', 'corregir'),
+  'listo-para-reintentar': () => ayuda('readyToRetry', 'reintentar'),
+  'turno-duplicado': () => ayuda('shiftDuplicate', 'reintentar'),
+  'turno-abierto-existente': () => ayuda('shiftAlreadyOpen', 'avisar-admin'),
+  'turno-ajeno': () => ayuda('shiftForeign', 'avisar-admin'),
   'turno-cerrado': (_dep, record) =>
     record.kind === 'cashMovement'
-      ? {
-          title: 'El turno ya está cerrado en el servidor',
-          explanation:
-            'Este gasto llegó después del cierre del turno. Corrígelo para registrarlo en el ' +
-            'turno actual, o avisa al administrador.',
-          recommended: 'corregir',
-        }
-      : {
-          title: 'El turno ya está cerrado en el servidor',
-          explanation:
-            'Este registro llegó después del cierre del turno. Avisa al administrador: debe ' +
-            'registrarse aparte. No lo descartes sin consultarlo.',
-          recommended: 'avisar-admin',
-        },
-  'turno-no-encontrado': () => ({
-    title: 'El servidor no conoce el turno',
-    explanation:
-      'Reintenta: la caja sube primero el turno y después lo demás. Si se repite, avisa al ' +
-      'administrador.',
-    recommended: 'reintentar',
-  }),
-  'sin-stock': () => ({
-    title: 'Sin existencias en el servidor',
-    explanation:
-      'El servidor no tiene stock suficiente para esta venta (puede faltar registrar una entrada ' +
-      'de mercancía). Registra la entrada o avisa al administrador; después reintenta.',
-    recommended: 'avisar-admin',
-  }),
-  'promocion-no-vigente': () => ({
-    title: 'La promoción ya terminó',
-    explanation:
-      'La venta se cobró con una promoción que ya no está vigente en el servidor. Avisa al ' +
-      'administrador: decide si se respeta el precio cobrado.',
-    recommended: 'avisar-admin',
-  }),
-  'anulacion-rechazada': () => ({
-    title: 'El servidor rechazó la anulación',
-    explanation:
-      'La venta está anulada en esta caja, pero en el servidor sigue activa. Pide a un ' +
-      'administrador que entre en esta caja y pulse Reintentar: con su sesión la anulación se ' +
-      'vuelve a enviar. No la cobres de nuevo.',
-    recommended: 'avisar-admin',
-  }),
-  'catalogo-en-conflicto': () => ({
-    title: 'El producto cambió en el panel',
-    explanation:
-      'Mientras esta caja guardaba su cambio, en el panel cambiaron el precio o el estado del ' +
-      'producto. Elige "Usar el del panel" para quedarte con lo del panel, o "Forzar el mío" si ' +
-      'el valor de esta caja es el correcto. Lo demás que corregiste se sube igual.',
-    recommended: 'corregir',
-  }),
-  'producto-duplicado': () => ({
-    title: 'Ya existe otro producto con ese SKU o nombre',
-    explanation:
-      'Otra caja o el panel dio de alta un producto distinto con el mismo SKU o nombre, y no ' +
-      'coinciden el código de barras ni el nombre con su concentración, así que la caja no lo ' +
-      'adopta. Corrige el SKU o el nombre en Productos y reintenta, o avisa al administrador.',
-    recommended: 'corregir',
-  }),
-  desconocido: (_dep, record) => ({
-    title: 'Motivo no reconocido',
-    explanation:
-      record.kind === 'stockEntry' || record.kind === 'product'
-        ? 'Lee el detalle de abajo y avisa al administrador antes de descartar: la mercancía ya está en esta caja y el servidor no la conoce.'
-        : 'Lee el detalle de abajo y avisa al administrador antes de descartar: puede ser dinero ya cobrado.',
-    recommended: 'avisar-admin',
-  }),
+      ? ayuda('shiftClosed', 'corregir', undefined, 'explanationMovement')
+      : ayuda('shiftClosed', 'avisar-admin'),
+  'turno-no-encontrado': () => ayuda('shiftNotFound', 'reintentar'),
+  'sin-stock': () => ayuda('noStock', 'avisar-admin'),
+  'promocion-no-vigente': () => ayuda('promotionClosed', 'avisar-admin'),
+  'anulacion-rechazada': () => ayuda('voidRejected', 'avisar-admin'),
+  'catalogo-en-conflicto': () => ayuda('catalogConflict', 'corregir'),
+  'producto-duplicado': () => ayuda('productDuplicate', 'corregir'),
+  desconocido: (_dep, record) =>
+    ayuda(
+      'unknown',
+      'avisar-admin',
+      undefined,
+      record.kind === 'stockEntry' || record.kind === 'product' ? 'explanationGoods' : 'explanation',
+    ),
 };
 
 /**

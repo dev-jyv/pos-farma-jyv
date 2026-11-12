@@ -10,7 +10,7 @@ import {
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
@@ -66,6 +66,11 @@ export class DirectChargeScreen {
   private readonly directCharges = inject(DirectChargeService);
   private readonly mercadoPago = inject(MercadoPagoService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly destroyRef = inject(DestroyRef);
 
   /** Pestaña activa; también decide contra qué endpoint se cobra. */
@@ -124,13 +129,13 @@ export class DirectChargeScreen {
   readonly blockers = computed<string[]>(() => {
     const reasons: string[] = [];
     if (this.amountValue() <= 0) {
-      reasons.push('Captura el monto a cobrar.');
+      reasons.push(this.t('directCharge.msg.amountRequired'));
     }
     if (this.conceptValue().length < 3) {
-      reasons.push('Escribe el concepto del cobro (mínimo 3 caracteres).');
+      reasons.push(this.t('directCharge.msg.conceptRequired'));
     }
     if (this.channel() === 'point' && !this.selectedDeviceId()) {
-      reasons.push('Selecciona una terminal Mercado Pago.');
+      reasons.push(this.t('checkout.msg.selectTerminal'));
     }
     return reasons;
   });
@@ -181,7 +186,7 @@ export class DirectChargeScreen {
     }
     if (this.pending()) {
       this.notifications.error(
-        'Hay un cobro en curso. Espera a que se resuelva o cancélalo antes de cambiar de método.',
+        this.t('directCharge.msg.chargeInProgress'),
       );
       return;
     }
@@ -201,7 +206,7 @@ export class DirectChargeScreen {
           this.selectedDeviceId.set(this.mercadoPago.preferredDevice(devices)?.id ?? null);
           if (devices.length === 0) {
             this.devicesError.set(
-              'No hay terminales vinculadas a la cuenta de Mercado Pago. Verifica que la Point esté encendida, asociada a la misma cuenta del Access Token y en modo PDV.',
+              this.t('checkout.msg.noTerminals'),
             );
           }
         },
@@ -227,7 +232,7 @@ export class DirectChargeScreen {
           this.devices.update((list) =>
             list.map((item) => (item.id === updated.id ? updated : item)),
           );
-          this.notifications.success('Terminal activada en modo PDV.');
+          this.notifications.success(this.t('checkout.msg.terminalActivated'));
         },
         error: (error: unknown) => this.notifications.error(getApiErrorMessage(error)),
       });
@@ -318,14 +323,14 @@ export class DirectChargeScreen {
         }
         this.polling.set(false);
         if (charge.status === 'approved') {
-          this.notifications.success(`Cobro ${charge.folio} aprobado.`);
+          this.notifications.success(this.t('directCharge.msg.approved', { folio: charge.folio }));
           return;
         }
         if (charge.status === 'failed') {
           this.notifications.error(
             charge.statusDetail
-              ? `Mercado Pago rechazó el cobro: ${charge.statusDetail}`
-              : 'Mercado Pago reportó un error en el cobro.',
+              ? this.t('directCharge.msg.mpRejected', { detail: charge.statusDetail })
+              : this.t('directCharge.msg.mpError'),
           );
         }
       });
@@ -340,10 +345,10 @@ export class DirectChargeScreen {
     try {
       await navigator.clipboard.writeText(link);
       this.linkCopied.set(true);
-      this.notifications.success('Link de pago copiado.');
+      this.notifications.success(this.t('directCharge.msg.linkCopied'));
     } catch {
       // Sin permiso de portapapeles el link sigue visible y seleccionable.
-      this.notifications.error('No se pudo copiar el link. Cópialo manualmente.');
+      this.notifications.error(this.t('directCharge.msg.copyFailed'));
     }
   }
 
@@ -369,7 +374,7 @@ export class DirectChargeScreen {
           this.mergeRecent(canceled);
           this.polling.set(false);
           this.notifications.success(
-            canceled.channel === 'online' ? 'Link de pago cancelado.' : 'Cobro cancelado en la terminal.',
+            canceled.channel === 'online' ? this.t('directCharge.msg.linkCanceled') : this.t('directCharge.msg.terminalCanceled'),
           );
         },
         error: (error: unknown) => this.notifications.error(getApiErrorMessage(error)),

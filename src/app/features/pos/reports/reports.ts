@@ -1,6 +1,6 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { TableModule } from 'primeng/table';
 import { forkJoin } from 'rxjs';
@@ -64,6 +64,11 @@ export class PosReports {
   private readonly cashSessionService = inject(CashSessionService);
   private readonly cashMovementService = inject(CashMovementService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly auth = inject(AuthService);
 
   readonly scope = signal<ReportScope>('session');
@@ -308,7 +313,7 @@ export class PosReports {
     this.sessionError.set(true);
     this.sales.set([]);
     this.notifications.error(
-      'No se pudo determinar el turno actual. Reintenta o cambia el alcance a "Día".',
+      this.t('reports.msg.noSession'),
     );
   }
 
@@ -344,7 +349,7 @@ export class PosReports {
         this.loaded.set(false);
         this.sales.set([]);
         this.movements.set([]);
-        this.notifications.error('No se pudo cargar el reporte.');
+        this.notifications.error(this.t('reports.msg.loadError'));
       },
     });
   }
@@ -412,7 +417,7 @@ export class PosReports {
         const id = item.providerId ?? 'sin-doctor';
         const row = rows.get(id) ?? {
           providerId: id,
-          name: item.providerName ?? 'Sin doctor asignado',
+          name: item.providerName ?? this.t('reports.msg.noDoctor'),
           count: 0,
           baseAmount: 0,
           commissionAmount: 0,

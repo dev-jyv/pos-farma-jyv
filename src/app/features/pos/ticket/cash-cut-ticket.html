@@ -1,83 +1,83 @@
 <div class="ticket">
   <header class="ticket-header">
     <h1>{{ pharmacy.name }}</h1>
-    <p class="title">Corte de caja</p>
+    <p class="title">{{ 'ticket.cut.title' | translate }}</p>
   </header>
 
   <div class="ticket-meta">
-    <p>Apertura: {{ openedAt() | date: 'dd/MM/yyyy HH:mm' }}</p>
+    <p>{{ 'ticket.cut.openedAt' | translate: { date: (openedAt() | date: 'dd/MM/yyyy HH:mm') } }}</p>
     @if (closedAt(); as closed) {
-      <p>Cierre: {{ closed | date: 'dd/MM/yyyy HH:mm' }}</p>
+      <p>{{ 'ticket.cut.closedAt' | translate: { date: (closed | date: 'dd/MM/yyyy HH:mm') } }}</p>
     }
   </div>
 
   <div class="ticket-totals">
     <div class="row">
-      <span>Ventas</span>
+      <span>{{ 'ticket.cut.sales' | translate }}</span>
       <span>{{ summary().salesCount }}</span>
     </div>
     <div class="row">
-      <span>Anuladas</span>
+      <span>{{ 'ticket.cut.voided' | translate }}</span>
       <span>{{ summary().voidedCount }}</span>
     </div>
     @for (method of methods; track method.key) {
       @if (summary().byMethod[method.key].count > 0) {
         <div class="row">
-          <span>{{ method.label }} ({{ summary().byMethod[method.key].count }})</span>
+          <span>{{ method.label | translate }} ({{ summary().byMethod[method.key].count }})</span>
           <span>{{ summary().byMethod[method.key].total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
         </div>
       }
     }
     <div class="row total">
-      <span>Total ventas</span>
+      <span>{{ 'ticket.cut.salesTotal' | translate }}</span>
       <span>{{ summary().grandTotal | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
     </div>
     @if (summary().movements.deposits.count > 0) {
       <div class="row">
-        <span>Depósitos</span>
+        <span>{{ 'ticket.cut.deposits' | translate }}</span>
         <span>{{ summary().movements.deposits.total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
       </div>
     }
     @if (summary().movements.withdrawals.count > 0) {
       <div class="row">
-        <span>Retiros</span>
+        <span>{{ 'ticket.cut.withdrawals' | translate }}</span>
         <span>{{ summary().movements.withdrawals.total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
       </div>
     }
     @if (summary().movements.expenses.count > 0) {
       <div class="row">
-        <span>Gastos</span>
+        <span>{{ 'ticket.cut.expenses' | translate }}</span>
         <span>{{ summary().movements.expenses.total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
       </div>
     }
     <div class="row">
-      <span>Fondo inicial</span>
+      <span>{{ 'ticket.cut.opening' | translate }}</span>
       <span>{{ openingAmount() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
     </div>
     <div class="row">
       <!-- Con servicios hay que rotularlo: si no, el Z no cuadra contra el
            conteo, porque este esperado es solo el de farmacia. -->
-      <span>{{ summary().services ? 'Efectivo esperado (farmacia)' : 'Efectivo esperado' }}</span>
+      <span>{{ (summary().services ? 'ticket.cut.expectedPharmacy' : 'ticket.cut.expected') | translate }}</span>
       <span>{{ expectedCashAmount() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
     </div>
     @if (summary().services; as servicios) {
       <div class="row">
-        <span>Efectivo esperado (servicios)</span>
+        <span>{{ 'ticket.cut.expectedServices' | translate }}</span>
         <span>{{ servicios.cashInDrawer | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
       </div>
       <div class="row total">
-        <span>Efectivo esperado (total)</span>
+        <span>{{ 'ticket.cut.expectedTotal' | translate }}</span>
         <span>
           {{ expectedCashAmount() + servicios.cashInDrawer | currency: 'MXN':'symbol-narrow':'1.2-2' }}
         </span>
       </div>
     }
     <div class="row">
-      <span>Efectivo contado</span>
+      <span>{{ 'ticket.cut.counted' | translate }}</span>
       <span>{{ countedCashAmount() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
     </div>
     <div class="row total">
-      <span>Diferencia</span>
+      <span>{{ 'ticket.cut.difference' | translate }}</span>
       <span>{{ cashDifference() | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
     </div>
   </div>
@@ -86,32 +86,32 @@
        que el dueño coteja a mano y reordenarlo confunde. -->
   @if (summary().services; as servicios) {
     <div class="ticket-totals">
-      <p class="title">SERVICIOS</p>
+      <p class="title">{{ 'ticket.cut.servicesTitle' | translate }}</p>
       <div class="row">
-        <span>Servicios</span>
+        <span>{{ 'ticket.cut.services' | translate }}</span>
         <span>{{ servicios.count }}</span>
       </div>
       @if (servicios.voidedCount > 0) {
         <div class="row">
-          <span>Anulados</span>
+          <span>{{ 'ticket.cut.servicesVoided' | translate }}</span>
           <span>{{ servicios.voidedCount }}</span>
         </div>
       }
       @for (method of methods; track method.key) {
         @if (servicios.byMethod[method.key].count > 0) {
           <div class="row">
-            <span>{{ method.label }} ({{ servicios.byMethod[method.key].count }})</span>
+            <span>{{ method.label | translate }} ({{ servicios.byMethod[method.key].count }})</span>
             <span>{{ servicios.byMethod[method.key].total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
           </div>
         }
       }
       <div class="row total">
-        <span>Total servicios</span>
+        <span>{{ 'ticket.cut.servicesTotal' | translate }}</span>
         <span>{{ servicios.total | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
       </div>
       @if (servicios.commissionTotal > 0) {
         <div class="row">
-          <span>Comisiones generadas</span>
+          <span>{{ 'ticket.cut.commissions' | translate }}</span>
           <span>{{ servicios.commissionTotal | currency: 'MXN':'symbol-narrow':'1.2-2' }}</span>
         </div>
       }

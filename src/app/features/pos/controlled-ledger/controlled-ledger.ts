@@ -1,6 +1,7 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { SelectModule } from 'primeng/select';
 import { TableModule } from 'primeng/table';
@@ -59,13 +60,18 @@ function daysAgo(days: number): Date {
 @Component({
   selector: 'app-controlled-ledger',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, FormsModule, ButtonModule, SelectModule, TableModule, TooltipModule],
+  imports: [DatePipe, FormsModule, TranslatePipe, ButtonModule, SelectModule, TableModule, TooltipModule],
   templateUrl: './controlled-ledger.html',
   styleUrl: './controlled-ledger.css',
 })
 export class ControlledLedger {
   private readonly ledgerService = inject(ControlledLedgerService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly authService = inject(AuthService);
 
   readonly entries = signal<ControlledLedgerEntry[]>([]);
@@ -94,7 +100,10 @@ export class ControlledLedger {
   readonly canRead = computed(() => this.authService.can('inventory', 'read'));
 
   /** Motivo por el que el rango capturado no se puede consultar, o `null`. */
-  readonly rangeError = computed(() => validateDateRange(this.from(), this.to())?.message ?? null);
+  readonly rangeError = computed(() => {
+    const key = validateDateRange(this.from(), this.to())?.message;
+    return key ? this.t(key) : null;
+  });
 
   /** Hay más renglones en el periodo de los que se pudieron traer. */
   readonly truncated = computed(() => {
@@ -116,7 +125,7 @@ export class ControlledLedger {
   );
 
   readonly groupOptions = [
-    { label: 'Todos los grupos', value: null },
+    { label: this.t('ledger.allGroups'), value: null },
     ...CONTROLLED_GROUPS.filter((group) => CONTROLLED_GROUP_RULES[group].requiresLedger).map(
       (group) => ({ label: CONTROLLED_GROUP_RULES[group].label, value: group }),
     ),
@@ -155,9 +164,9 @@ export class ControlledLedger {
   });
 
   readonly quickRanges = [
-    { label: 'Hoy', days: 0 },
-    { label: '7 días', days: 6 },
-    { label: '30 días', days: 29 },
+    { label: this.t('ledger.today'), days: 0 },
+    { label: this.t('ledger.lastDays', { days: 7 }), days: 6 },
+    { label: this.t('ledger.lastDays', { days: 30 }), days: 29 },
   ];
 
   /** Rango activo, para marcar el botón correspondiente. */
@@ -187,7 +196,7 @@ export class ControlledLedger {
   }
 
   groupLabel(group: ControlledGroup | null): string {
-    return group ? CONTROLLED_GROUP_RULES[group].shortLabel : 'Sin grupo';
+    return group ? CONTROLLED_GROUP_RULES[group].shortLabel : this.t('ledger.noGroup');
   }
 
   typeLabel(type: ControlledLedgerType): string {

@@ -62,13 +62,13 @@ export interface DateRangeError {
  */
 export function validateDateRange(from: string, to: string): DateRangeError | null {
   if (!from.trim()) {
-    return { field: 'from', message: 'Captura la fecha inicial del periodo.' };
+    return { field: 'from', message: 'ledger.rangeError.from' };
   }
   if (!to.trim()) {
-    return { field: 'to', message: 'Captura la fecha final del periodo.' };
+    return { field: 'to', message: 'ledger.rangeError.to' };
   }
   if (from > to) {
-    return { field: 'range', message: 'La fecha inicial no puede ser posterior a la final.' };
+    return { field: 'range', message: 'ledger.rangeError.order' };
   }
   return null;
 }

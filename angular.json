@@ -147,7 +147,8 @@
             "setupFiles": [
               "src/testing/setup.ts"
             ],
-            "isolate": true
+            "isolate": true,
+            "providersFile": "src/testing/providers.ts"
           }
         }
       }

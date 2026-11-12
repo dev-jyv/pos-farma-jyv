@@ -1630,7 +1630,7 @@ describe('SaleService', () => {
           queueId: 'esperando',
           folioHint: '0 art. · $25.00',
           total: 25,
-          waitingFor: 'Espera a que suba el turno',
+          waitingFor: 'sale.pending.waitShift',
         },
       ]);
       expect(recien.pendingCount()).toBe(1);

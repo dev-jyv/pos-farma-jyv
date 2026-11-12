@@ -3,7 +3,7 @@
   [modal]="true"
   [closable]="!cardOrderApproved()"
   [closeOnEscape]="!cardOrderApproved()"
-  [closeAriaLabel]="'Cerrar'"
+  [closeAriaLabel]="'common.close' | translate"
   [draggable]="false"
   [dismissableMask]="false"
   [style]="{ width: '58rem', maxWidth: '96vw' }"
@@ -13,21 +13,21 @@
 >
   <ng-template #header>
     <div class="flex w-full items-center gap-3">
-      <span class="text-lg font-semibold text-slate-900">Cobrar</span>
+      <span class="text-lg font-semibold text-slate-900">{{ 'checkout.title' | translate }}</span>
       <!-- slate-600 sobre blanco = 7.58:1; slate-400/500 no llegaban al 4.5:1 de AA
            a estos tamaños (11-12px). -->
       <span class="text-xs text-slate-600">
-        {{ itemCount() }} {{ itemCount() === 1 ? 'artículo' : 'artículos' }}
+        {{ (itemCount() === 1 ? 'checkout.itemCountOne' : 'checkout.itemCount') | translate: { count: itemCount() } }}
       </span>
       <span class="ml-auto hidden items-center gap-1.5 text-[11px] text-slate-600 sm:flex">
         <span class="pos-kbd">Alt</span>+<span class="pos-kbd">1</span>
         <span class="pos-kbd">2</span>
         <span class="pos-kbd">3</span>
-        <span>método</span>
+        <span>{{ 'checkout.hotkeyMethod' | translate }}</span>
         <span class="pos-kbd">F9</span>
-        <span>cobrar</span>
+        <span>{{ 'checkout.hotkeyCharge' | translate }}</span>
         <span class="pos-kbd">Esc</span>
-        <span>salir</span>
+        <span>{{ 'checkout.hotkeyExit' | translate }}</span>
       </span>
     </div>
   </ng-template>
@@ -36,13 +36,13 @@
     <!-- Columna de cobro: lo que el cajero teclea en cada venta. -->
     <div class="flex flex-col gap-4">
       <div class="rounded-2xl bg-slate-900 px-4 py-5 text-center text-white">
-        <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Total a cobrar</p>
+        <p class="text-xs font-medium uppercase tracking-wider text-slate-400">{{ 'checkout.totalDue' | translate }}</p>
         <p class="mt-1 text-4xl font-bold tabular-nums tracking-tight">
           ${{ total() | number: '1.2-2' }}
         </p>
         @if (discountTotal() > 0) {
           <p class="mt-1 text-xs text-emerald-300">
-            Incluye ${{ discountTotal() | number: '1.2-2' }} de descuento
+            {{ 'checkout.includesDiscount' | translate: { amount: (discountTotal() | number: '1.2-2') } }}
           </p>
         }
         @if (couponSummary(); as cupon) {
@@ -51,7 +51,7 @@
             class="mt-2 inline-flex items-center gap-1 rounded-full bg-teal-500/20 px-2.5 py-0.5 text-xs font-semibold text-teal-100"
           >
             <i class="pi pi-ticket text-[10px]"></i>
-            Cupón {{ cupon.code }} −${{ cupon.discountAmount | number: '1.2-2' }}
+            {{ 'checkout.coupon' | translate: { code: cupon.code, amount: (cupon.discountAmount | number: '1.2-2') } }}
           </p>
         }
       </div>
@@ -59,7 +59,7 @@
       <div>
         <!-- Es una selección única, no una navegación por pestañas: no hay ningún
              `tabpanel` que controlar, así que la semántica real es radiogroup/radio. -->
-        <div class="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Método de pago">
+        <div class="grid grid-cols-3 gap-2" role="radiogroup" [attr.aria-label]="'checkout.paymentMethod' | translate">
           @for (method of paymentMethods; track method.value) {
             <button
               type="button"
@@ -87,7 +87,7 @@
         <div class="space-y-3 rounded-xl border border-slate-200 p-3">
           <div>
             <label for="cardAmount" class="mb-1.5 block text-sm font-medium text-slate-700">
-              Monto con tarjeta
+              {{ 'checkout.cardAmount' | translate }}
             </label>
             <p-inputnumber
               inputId="cardAmount"
@@ -104,11 +104,11 @@
               styleClass="w-full"
             />
             <p class="mt-1.5 text-xs text-slate-500">
-              La terminal cobra solo esta parte; el resto va en efectivo.
+              {{ 'checkout.cardAmountHint' | translate }}
             </p>
           </div>
           <div class="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-            <span class="text-sm font-medium text-slate-600">A cobrar en efectivo</span>
+            <span class="text-sm font-medium text-slate-600">{{ 'checkout.cashDue' | translate }}</span>
             <span class="text-lg font-bold tabular-nums text-slate-900">
               ${{ cashDue() | number: '1.2-2' }}
             </span>
@@ -121,7 +121,7 @@
         <div class="space-y-3" (keydown.enter)="confirmFromHotkey($event)">
           <div>
             <label for="amountReceived" class="mb-1.5 block text-sm font-medium text-slate-700">
-              Efectivo recibido
+              {{ 'checkout.cashReceived' | translate }}
             </label>
             <p-inputnumber
               #amountInput
@@ -145,7 +145,7 @@
                 class="rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm font-medium text-slate-700 transition-colors hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-800"
                 (click)="setQuickAmount(amount)"
               >
-                {{ amount === 0 ? 'Exacto' : '+' + amount }}
+                {{ amount === 0 ? ('checkout.exact' | translate) : '+' + amount }}
               </button>
             }
           </div>
@@ -163,7 +163,7 @@
                 [class.text-emerald-800]="change() > 0"
                 [class.text-slate-600]="change() === 0"
               >
-                Cambio
+                {{ 'checkout.change' | translate }}
               </span>
               <span
                 class="text-2xl font-bold tabular-nums"
@@ -173,7 +173,7 @@
                 ${{ change() | number: '1.2-2' }}
               </span>
             } @else {
-              <span class="text-sm font-medium text-amber-800">Faltan</span>
+              <span class="text-sm font-medium text-amber-800">{{ 'checkout.shortfall' | translate }}</span>
               <span class="text-2xl font-bold tabular-nums text-amber-700">
                 ${{ shortfall() | number: '1.2-2' }}
               </span>
@@ -188,7 +188,7 @@
             <div>
               <div class="mb-1.5 flex items-center justify-between gap-2">
                 <label for="pointDevice" class="block text-sm font-medium text-slate-700">
-                  Terminal Mercado Pago
+                  {{ 'checkout.terminal' | translate }}
                 </label>
                 <button
                   type="button"
@@ -196,7 +196,7 @@
                   [disabled]="devicesLoading()"
                   (click)="loadDevices()"
                 >
-                  {{ devicesLoading() ? 'Buscando…' : 'Actualizar' }}
+                  {{ (devicesLoading() ? 'checkout.searchingDevices' : 'checkout.refreshDevices') | translate }}
                 </button>
               </div>
               <p-select
@@ -206,7 +206,7 @@
                 (ngModelChange)="selectedDeviceId.set($event)"
                 optionLabel="label"
                 optionValue="id"
-                placeholder="Selecciona terminal"
+                [placeholder]="'checkout.selectTerminal' | translate"
                 [loading]="devicesLoading()"
                 [disabled]="devicesLoading() || devices().length === 0"
                 styleClass="w-full"
@@ -229,7 +229,7 @@
 
             @if (!cardOrder()) {
               <p-button
-                [label]="'Enviar $' + (cardChargeAmount() | number: '1.2-2') + ' a la terminal'"
+                [label]="'checkout.sendToTerminal' | translate: { amount: (cardChargeAmount() | number: '1.2-2') }"
                 icon="pi pi-send"
                 styleClass="w-full"
                 [disabled]="!selectedDeviceId() || cardChargeAmount() <= 0 || !!tenderError()"
@@ -256,27 +256,27 @@
                 }
                 <div class="text-sm font-medium text-slate-800">
                   @switch (cardOrder()?.status) {
-                    @case ('created') { Esperando terminal… }
-                    @case ('at_terminal') { Inserte o pase la tarjeta en la terminal… }
-                    @case ('action_required') { Confirma la operación en la terminal… }
-                    @case ('processed') { Pago aprobado }
-                    @case ('canceled') { Pago cancelado en terminal }
-                    @case ('expired') { El cobro expiró sin completarse }
-                    @case ('failed') { Error en el cobro }
-                    @case ('refunded') { Pago reembolsado }
+                    @case ('created') { {{ 'checkout.status.created' | translate }} }
+                    @case ('at_terminal') { {{ 'checkout.status.atTerminal' | translate }} }
+                    @case ('action_required') { {{ 'checkout.status.actionRequired' | translate }} }
+                    @case ('processed') { {{ 'checkout.status.processed' | translate }} }
+                    @case ('canceled') { {{ 'checkout.status.canceled' | translate }} }
+                    @case ('expired') { {{ 'checkout.status.expired' | translate }} }
+                    @case ('failed') { {{ 'checkout.status.failed' | translate }} }
+                    @case ('refunded') { {{ 'checkout.status.refunded' | translate }} }
                   }
                   <!-- La orden vence a los 15 min; sin verlo, el cajero lee el
                        vencimiento como que la terminal se colgó. -->
                   @if (cardCountdown(); as countdown) {
                     <span class="block text-xs font-normal text-slate-600">
-                      Vence en {{ countdown }}
+                      {{ 'checkout.expiresIn' | translate: { time: countdown } }}
                     </span>
                   }
                   @if (cardOrderApproved()) {
                     <span class="block text-xs font-normal text-slate-600">
-                      Tarjeta ${{ cardAmount() | number: '1.2-2' }}
+                      {{ 'checkout.cardPaid' | translate: { amount: (cardAmount() | number: '1.2-2') } }}
                       @if (paymentMethod() === 'mixed') {
-                        · Efectivo ${{ cashDue() | number: '1.2-2' }}
+                        · {{ 'checkout.cashPaid' | translate: { amount: (cashDue() | number: '1.2-2') } }}
                       }
                     </span>
                   }
@@ -284,7 +284,7 @@
               </div>
               @if (cardAmountLocked() && !cardOrderApproved()) {
                 <p-button
-                  label="Cancelar cobro en terminal"
+                  [label]="'checkout.cancelTerminal' | translate"
                   severity="secondary"
                   styleClass="w-full"
                   [loading]="cancelingCard()"
@@ -292,7 +292,7 @@
                 />
               } @else if (!cardOrderApproved()) {
                 <p-button
-                  [label]="'Reintentar $' + (cardChargeAmount() | number: '1.2-2') + ' en la terminal'"
+                  [label]="'checkout.retryTerminal' | translate: { amount: (cardChargeAmount() | number: '1.2-2') }"
                   icon="pi pi-refresh"
                   styleClass="w-full"
                   [disabled]="!selectedDeviceId() || cardChargeAmount() <= 0 || !!tenderError()"
@@ -308,17 +308,15 @@
           <div class="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
             <p class="flex items-center gap-2 text-sm font-medium text-slate-700">
               <i class="pi pi-info-circle text-slate-500" aria-hidden="true"></i>
-              Cobro con tarjeta registrado
+              {{ 'checkout.cardManualTitle' | translate }}
             </p>
             <p class="mt-1 text-xs leading-relaxed text-slate-600">
               @if (paymentMethod() === 'card') {
-                Cobra ${{ total() | number: '1.2-2' }} con la tarjeta y confirma aquí.
+                {{ 'checkout.cardManualFull' | translate: { amount: (total() | number: '1.2-2') } }}
               } @else {
-                Cobra ${{ cardChargeAmount() | number: '1.2-2' }} con la tarjeta y captura
-                arriba el efectivo del resto.
+                {{ 'checkout.cardManualMixed' | translate: { amount: (cardChargeAmount() | number: '1.2-2') } }}
               }
-              La venta queda registrada con el reparto; el POS no está conectado a ninguna
-              terminal.
+              {{ 'checkout.cardManualNote' | translate }}
             </p>
           </div>
         }
@@ -331,7 +329,7 @@
         <div class="rounded-xl border border-amber-300 bg-amber-50 p-3">
           <p class="flex items-center gap-2 text-sm font-semibold text-amber-900">
             <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-            Medicamento controlado (COFEPRIS)
+            {{ 'checkout.controlledTitle' | translate }}
           </p>
           <ul class="mt-2 space-y-1 text-xs text-amber-900">
             @for (line of controlledLines(); track line.name + line.rule.group) {
@@ -345,7 +343,7 @@
           </ul>
           @if (needsRetention()) {
             <p class="mt-2 text-xs font-medium text-amber-900">
-              La receta se retiene en la farmacia y queda en el libro de control.
+              {{ 'checkout.retentionNote' | translate }}
             </p>
           }
         </div>
@@ -363,11 +361,11 @@
         >
           <span class="text-sm font-semibold text-slate-800">
             @if (needsPrescription()) {
-              Receta médica
+              {{ 'checkout.prescriptionRequired' | translate }}
               <span class="text-red-600" aria-hidden="true">*</span>
             } @else {
-              Registrar receta
-              <span class="ml-1 text-xs font-normal text-slate-600">(opcional)</span>
+              {{ 'checkout.prescriptionOptional' | translate }}
+              <span class="ml-1 text-xs font-normal text-slate-600">{{ 'checkout.optionalParen' | translate }}</span>
             }
             @if (hasPrescriptionData()) {
               <span class="ml-1 text-xs font-normal text-slate-600">· {{ doctorName() }}</span>
@@ -385,7 +383,7 @@
           <div id="prescriptionPanel" class="space-y-3 border-t border-slate-100 p-3">
             <div>
               <label for="doctorName" class="mb-1 block text-xs font-medium text-slate-600">
-                Médico
+                {{ 'checkout.doctor' | translate }}
               </label>
               <!-- `aria-invalid`/`aria-describedby` apuntan al motivo del pie: sin esto
                    el lector de pantalla oye "no se puede cobrar" sin saber qué campo. -->
@@ -396,7 +394,7 @@
                 class="w-full"
                 [ngModel]="doctorName()"
                 (ngModelChange)="doctorName.set($event ?? '')"
-                placeholder="Nombre del médico"
+                [placeholder]="'checkout.doctorPlaceholder' | translate"
                 [attr.aria-required]="needsPrescription()"
                 [attr.aria-invalid]="isBlocked('prescription') ? 'true' : null"
                 [attr.aria-describedby]="blockerDescribedBy('prescription')"
@@ -406,7 +404,7 @@
             <div class="grid grid-cols-2 gap-2">
               <div>
                 <label for="doctorLicense" class="mb-1 block text-xs font-medium text-slate-600">
-                  Cédula profesional
+                  {{ 'checkout.doctorLicense' | translate }}
                 </label>
                 <input
                   pInputText
@@ -416,7 +414,7 @@
                   maxlength="8"
                   [ngModel]="doctorLicense()"
                   (ngModelChange)="doctorLicense.set($event ?? '')"
-                  placeholder="7 u 8 dígitos"
+                  [placeholder]="'checkout.doctorLicensePlaceholder' | translate"
                   [attr.aria-required]="needsPrescription()"
                   [attr.aria-invalid]="isBlocked('prescription') ? 'true' : null"
                   [attr.aria-describedby]="blockerDescribedBy('prescription')"
@@ -427,7 +425,7 @@
                   for="prescriptionFolio"
                   class="mb-1 block text-xs font-medium text-slate-600"
                 >
-                  Folio de receta
+                  {{ 'checkout.prescriptionFolio' | translate }}
                   @if (needsFolio()) {
                     <span class="text-red-600" aria-hidden="true">*</span>
                   }
@@ -438,7 +436,7 @@
                   class="w-full"
                   [ngModel]="prescriptionFolio()"
                   (ngModelChange)="prescriptionFolio.set($event ?? '')"
-                  [placeholder]="needsFolio() ? 'Obligatorio' : 'Opcional'"
+                  [placeholder]="(needsFolio() ? 'checkout.required' : 'checkout.optional') | translate"
                   [attr.aria-required]="needsFolio()"
                   [attr.aria-invalid]="needsFolio() && isBlocked('prescription') ? 'true' : null"
                   [attr.aria-describedby]="needsFolio() ? blockerDescribedBy('prescription') : null"
@@ -459,7 +457,7 @@
                   inputId="prescriptionRetained"
                 />
                 <span class="text-xs font-medium leading-snug text-slate-700">
-                  Confirmo que la receta se retuvo en la farmacia (grupos I a III).
+                  {{ 'checkout.retentionConfirm' | translate }}
                 </span>
               </label>
             }
@@ -476,15 +474,15 @@
           (click)="customerPanelOpen.set(!customerPanelOpen())"
         >
           <span class="text-sm font-semibold text-slate-800">
-            Cliente y facturación
+            {{ 'checkout.customerTitle' | translate }}
             <span class="ml-1 text-xs font-normal text-slate-500">
               @if (selectedCustomer(); as customer) {
                 · {{ customer.name }}
               } @else {
-                · Público general
+                · {{ 'checkout.generalPublic' | translate }}
               }
               @if (requiresInvoice()) {
-                · por facturar
+                · {{ 'checkout.toInvoice' | translate }}
               }
             </span>
           </span>
@@ -511,7 +509,7 @@
                   class="text-xs font-medium text-slate-500 hover:text-slate-800"
                   (click)="clearCustomer()"
                 >
-                  Quitar
+                  {{ 'checkout.removeCustomer' | translate }}
                 </button>
               </div>
             } @else {
@@ -520,8 +518,8 @@
                 class="w-full"
                 [ngModel]="customerQuery()"
                 (ngModelChange)="onCustomerQuery($event ?? '')"
-                placeholder="Buscar cliente por nombre o RFC"
-                aria-label="Buscar cliente"
+                [placeholder]="'checkout.customerSearchPlaceholder' | translate"
+                [attr.aria-label]="'checkout.customerSearch' | translate"
               />
               @if (customerResults().length > 0) {
                 <ul class="max-h-32 overflow-auto rounded-lg border border-slate-200">
@@ -549,26 +547,26 @@
                     class="w-full"
                     [ngModel]="newCustomerName()"
                     (ngModelChange)="newCustomerName.set($event ?? '')"
-                    placeholder="Nombre del cliente"
-                    aria-label="Nombre del cliente nuevo"
+                    [placeholder]="'checkout.newCustomerName' | translate"
+                    [attr.aria-label]="'checkout.newCustomerNameAria' | translate"
                   />
                   <input
                     pInputText
                     class="w-full"
                     [ngModel]="newCustomerRfc()"
                     (ngModelChange)="newCustomerRfc.set($event ?? '')"
-                    placeholder="RFC (opcional)"
-                    aria-label="RFC del cliente nuevo"
+                    [placeholder]="'checkout.newCustomerRfc' | translate"
+                    [attr.aria-label]="'checkout.newCustomerRfcAria' | translate"
                   />
                   <div class="flex gap-2">
                     <p-button
-                      label="Guardar"
+                      [label]="'common.save' | translate"
                       size="small"
                       styleClass="flex-1"
                       (onClick)="createCustomer()"
                     />
                     <p-button
-                      label="Cancelar"
+                      [label]="'common.cancel' | translate"
                       size="small"
                       severity="secondary"
                       styleClass="flex-1"
@@ -582,7 +580,7 @@
                   class="text-xs font-medium text-emerald-700 hover:underline"
                   (click)="showNewCustomer.set(true)"
                 >
-                  + Cliente nuevo
+                  + {{ 'checkout.newCustomer' | translate }}
                 </button>
               }
             }
@@ -594,7 +592,7 @@
                 [binary]="true"
                 inputId="requiresInvoice"
               />
-              <span class="text-sm font-medium text-slate-700">Facturar (timbrado posterior)</span>
+              <span class="text-sm font-medium text-slate-700">{{ 'checkout.requiresInvoice' | translate }}</span>
             </label>
 
             @if (requiresInvoice()) {
@@ -604,9 +602,9 @@
                   class="w-full uppercase"
                   [ngModel]="billingRfc()"
                   (ngModelChange)="billingRfc.set($event ?? '')"
-                  placeholder="RFC receptor"
+                  [placeholder]="'checkout.billingRfc' | translate"
                   maxlength="13"
-                  aria-label="RFC receptor"
+                  [attr.aria-label]="'checkout.billingRfc' | translate"
                   [attr.aria-invalid]="isBlocked('billing') ? 'true' : null"
                   [attr.aria-describedby]="blockerDescribedBy('billing')"
                 />
@@ -615,8 +613,8 @@
                   class="w-full"
                   [ngModel]="billingName()"
                   (ngModelChange)="billingName.set($event ?? '')"
-                  placeholder="Razón social"
-                  aria-label="Razón social"
+                  [placeholder]="'checkout.billingName' | translate"
+                  [attr.aria-label]="'checkout.billingName' | translate"
                   [attr.aria-invalid]="isBlocked('billing') ? 'true' : null"
                   [attr.aria-describedby]="blockerDescribedBy('billing')"
                 />
@@ -627,15 +625,15 @@
                   optionLabel="label"
                   optionValue="value"
                   styleClass="w-full"
-                  ariaLabel="Uso del CFDI"
+                  [ariaLabel]="'checkout.cfdiUse' | translate"
                 />
                 <input
                   pInputText
                   class="w-full"
                   [ngModel]="billingEmail()"
                   (ngModelChange)="billingEmail.set($event ?? '')"
-                  placeholder="Correo (opcional)"
-                  aria-label="Correo del receptor"
+                  [placeholder]="'checkout.billingEmail' | translate"
+                  [attr.aria-label]="'checkout.billingEmailAria' | translate"
                 />
               </div>
             }
@@ -645,10 +643,10 @@
 
       <div class="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
         <p class="mb-1 font-semibold uppercase tracking-wide text-slate-500">
-          Desglose fiscal (precios con impuestos incluidos)
+          {{ 'checkout.taxBreakdown' | translate }}
         </p>
         <div class="flex justify-between">
-          <span>Base gravable</span>
+          <span>{{ 'checkout.taxBase' | translate }}</span>
           <span class="tabular-nums">${{ taxSummary().base | number: '1.2-2' }}</span>
         </div>
         @if (taxSummary().iepsTotal > 0) {
@@ -664,7 +662,7 @@
         <div
           class="mt-1 flex justify-between border-t border-slate-200 pt-1 font-semibold text-slate-800"
         >
-          <span>Total</span>
+          <span>{{ 'checkout.taxTotal' | translate }}</span>
           <span class="tabular-nums">${{ taxSummary().total | number: '1.2-2' }}</span>
         </div>
       </div>
@@ -687,14 +685,14 @@
       }
       <div class="flex w-full gap-2">
         <p-button
-          label="Cancelar"
+          [label]="'common.cancel' | translate"
           severity="secondary"
           styleClass="flex-1"
           [disabled]="cardOrderApproved()"
           (onClick)="cancel()"
         />
         <p-button
-          [label]="'Confirmar $' + (total() | number: '1.2-2')"
+          [label]="'checkout.confirm' | translate: { amount: (total() | number: '1.2-2') }"
           icon="pi pi-check"
           styleClass="flex-[1.6] pos-cobrar-btn"
           [disabled]="!canConfirm()"

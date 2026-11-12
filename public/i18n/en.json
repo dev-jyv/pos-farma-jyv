@@ -11,9 +11,11 @@
       "submit": "Sign in",
       "error": "Incorrect email or password",
       "hintEmpty": "Enter your email and password to sign in.",
-      "hintEmail": "That email doesn't look valid: check the @ and domain."
+      "hintEmail": "That email doesn't look valid: check the @ and domain.",
+      "subtitle": "Sign in to open the register"
     },
-    "logout": "Sign out"
+    "logout": "Sign out",
+    "posBlockedRole": "Your user is for report viewing; sign in from the panel."
   },
   "nav": {
     "sale": "Sale",
@@ -43,6 +45,76 @@
       "apiDown": "The server is not responding — running in degraded mode",
       "clockSkew": "This register's clock is off by {{minutes}} min",
       "clockUnverified": "Clock not verified"
+    },
+    "register": "Register",
+    "blocked": {
+      "countAria": "{{count}} records rejected on sync",
+      "badge": "Rejected",
+      "title": "Rejected on sync",
+      "intro": "These records did not reach the server and are not retried automatically. Each one says what happened and what to do; if you are unsure about one, tell the administrator before discarding it: it may be money already collected.",
+      "tellAdmin": "Tell the administrator",
+      "tellAdminDot": "Tell the administrator.",
+      "detail": "Detail: {{reason}}",
+      "aiTitle": "AI suggestion",
+      "aiDisclaimer": "This is an automatic suggestion: review it before acting.",
+      "askAi": "Ask the AI for help",
+      "missingLocally": "does not exist on this register",
+      "notUploaded": "not uploaded to the server yet",
+      "repair": "Fix",
+      "askAdmin": "Ask an admin",
+      "usePanel": "Use the panel's",
+      "forceMine": "Force mine",
+      "confirmDuplicate": "Yes, it's another line",
+      "retry": "Retry",
+      "sendUnreconciled": "Send to reconciliation",
+      "fix": "Correct",
+      "discard": "Discard",
+      "empty": "No rejected records.",
+      "aiError": {
+        "tooMany": "Too many AI requests. Wait a minute.",
+        "offline": "No connection: AI help needs internet.",
+        "unavailable": "AI help is not available. Tell the administrator."
+      }
+    },
+    "discard": {
+      "title": "Discard {{label}}",
+      "description": "It is removed from this register and will never upload as a sale; stock is restored. A record of who, when and why is kept, and the server is notified as an unreconciled sale.",
+      "reasonLabel": "Discard reason",
+      "placeholder": "For example: test sale, ticket entered twice…",
+      "hint": "Required, at least 5 characters."
+    },
+    "msg": {
+      "aiUnavailable": "AI help is not available.",
+      "retryFailed": "The record could not be retried.",
+      "repairFailed": "Could not fix {{label}}",
+      "confirmUnreconciled": "Send \"{{label}}\" ({{detail}}) to reconciliation?\n\nIts shift was never recorded on the server. The sale will be recorded separately for an administrator to reconcile, and it will leave this register's queue.",
+      "askAdminBody": "Ask an administrator to sign in on this register and press Retry on this record: with their session the void is sent to the server again.",
+      "askAdminTitle": "{{label}}: needs an administrator",
+      "saleDiscarded": "Sale discarded; the reason was logged.",
+      "discardFailed": "The record could not be discarded.",
+      "confirmForceMine": "Force this register's value for \"{{label}}\"?\n\nIt uploads even if the panel changed it later, and replaces the panel's value.",
+      "conflictFailed": "The product conflict could not be resolved.",
+      "confirmDuplicate": "Is \"{{label}}\" ({{detail}}) another line of the invoice?\n\nIt will be recorded even though the invoice already has an identical entry. If it is the same goods entered again, choose Discard.",
+      "resendEntryFailed": "The entry could not be resent.",
+      "discardConsequenceEntry": "It is deleted from this device, will never reach the server, and those pieces are removed from this register's stock.",
+      "discardConsequence": "It is deleted from this device and will never reach the server. If it was already charged or paid, it will be left unrecorded.",
+      "confirmDiscard": "Discard \"{{label}}\" ({{detail}})?\n\n{{consequence}}",
+      "recordDiscarded": "Record discarded.",
+      "syncCooldown": "You synced recently. You can do it again at {{time}}.",
+      "pendingSales": "{{count}} sale(s)",
+      "pendingExpenses": "{{count}} expense(s)",
+      "and": " and ",
+      "pendingDetail": "There are {{parts}} pending sync. ",
+      "confirmSync": "Sync now? Sales, expenses and everything else pending will be uploaded, and the catalog will be downloaded.",
+      "syncFailed": "Could not sync.",
+      "syncRejected": "Catalog updated ({{pulled}} changes), but the server rejected {{rejected}} record(s) and they were not uploaded. Open them from the red notice to see what to do.",
+      "syncPending": "Catalog updated ({{pulled}} changes), but {{pending}} movement(s) are still not uploaded. Check the rejected ones or try again.",
+      "synced": "Synced ({{pulled}} catalog changes).",
+      "confirmQuit": "{{pending}} movement(s) are not synced (sales, cuts, entries or expenses). They will be sent the next time you open the app. Quit anyway?",
+      "confirmLogout": "{{pending}} movement(s) are not synced (sales, cuts, entries or expenses). They will be sent when this device is back online. Sign out anyway?",
+      "closePendingOnline": "{{pending}} movement(s) are not synced (sales, expenses, products or entries). There is a network, but the server did not confirm them. Check the rejected ones or press Sync; you can close the shift anyway.",
+      "closePendingOffline": "{{pending}} movement(s) are not synced (sales, expenses, products or entries). Without a network they will be retried when reconnected; you can close the shift anyway.",
+      "closePending": "{{pending}} movement(s) are not synced. You can close the shift anyway."
     }
   },
   "reports": {
@@ -99,7 +171,14 @@
     "refresh": "Refresh report",
     "loading": "Loading report…",
     "sessionError": "Could not read the shift.",
-    "sessionErrorHint": "Totals may be incomplete; try again."
+    "sessionErrorHint": "Totals may be incomplete; try again.",
+    "cashCollectedDrawer": "Cash collected (goes into the drawer):",
+    "cashCollectedHint": "· with split payments only the cash part counts.",
+    "msg": {
+      "noSession": "The current shift could not be determined. Retry or change the scope to \"Day\".",
+      "loadError": "The report could not be loaded.",
+      "noDoctor": "No doctor assigned"
+    }
   },
   "label": {
     "print": "Print label"
@@ -121,7 +200,165 @@
       "commission": "Commission {{percent}}%",
       "choosePerformer": "Who performed it?",
       "noPerformers": "No doctors registered. Add them from the admin panel.",
-      "changePerformer": "Change doctor"
+      "changePerformer": "Change doctor",
+      "license": "Lic. {{license}}"
+    },
+    "substitutes": {
+      "title": "Available substitutes",
+      "noStockFor": "No usable stock for",
+      "ingredient": "Active ingredient:",
+      "empty": "No alternatives in stock.",
+      "stock": "Stock {{stock}}"
+    },
+    "searchPlaceholder": "Code, name or active ingredient…",
+    "hotkey": {
+      "search": "Search",
+      "qty": "Qty",
+      "hold": "Hold",
+      "charge": "Charge",
+      "remove": "Remove",
+      "plusMinus": "Qty",
+      "clear": "Clear"
+    },
+    "pendingCount": "{{count}} unsynced sale(s)",
+    "col": {
+      "product": "Product",
+      "price": "Price",
+      "stock": "Stock"
+    },
+    "badge": {
+      "prescription": "Rx",
+      "promo": "Promo"
+    },
+    "boxPrice": "Box ${{amount}}",
+    "aria": {
+      "add": "Add {{name}}",
+      "addPiece": "Add one piece of {{name}}",
+      "addBox": "Add a box of {{count}} pieces of {{name}}",
+      "addOneBox": "Add one box of {{name}}",
+      "addToTicket": "Add to ticket",
+      "unitOf": "Unit for {{name}}",
+      "removeFromTicket": "Remove from ticket",
+      "removeBox": "Remove one box of {{name}}",
+      "removePiece": "Remove one piece of {{name}}",
+      "qtyOf": "Quantity of {{name}}",
+      "discountOf": "Discount for {{name}}"
+    },
+    "unit": {
+      "piece": "Piece",
+      "box": "Box ({{count}})"
+    },
+    "searchEmptyTitle": "Scan a code or type to search",
+    "searchEmptyHint": "Name, active ingredient or SKU · Enter adds the result",
+    "ticketTitle": "Ticket",
+    "noItems": "No items",
+    "clearCart": "Clear",
+    "unsyncedHint": "Not synced: not eligible for promotions until the next sync",
+    "unsynced": "Not synced",
+    "perBox": "${{amount}} per box of {{pieces}} pcs",
+    "boxStock": "{{pieces}} pcs on the ticket · {{stock}} available",
+    "discountShort": "Disc.",
+    "discountByPromo": "The discount is set by the promotion",
+    "discountByCoupon": "The discount is set by the coupon",
+    "coupon": {
+      "label": "Coupon {{code}}",
+      "skipped": "Coupon: already has a promotion",
+      "saleDiscount": "Sale coupon",
+      "removeAria": "Remove coupon {{code}}",
+      "willBeRemoved": "It will be removed at checkout.",
+      "codePlaceholder": "Coupon code",
+      "apply": "Apply",
+      "cancel": "Cancel coupon",
+      "open": "Coupon",
+      "notFound": "Coupon not found — sync or check the code",
+      "maybeExhausted": "This coupon may be used up; the server will check it",
+      "issue": {
+        "inactive": "Coupon {{code}} is no longer active.",
+        "notStarted": "Coupon {{code}} is valid from {{date}}.",
+        "expired": "Coupon {{code}} has expired.",
+        "noProducts": "Coupon {{code}} does not apply to any product on the ticket.",
+        "allPromoted": "Coupon {{code}} does not apply: its products already have a promotion.",
+        "belowMinimum": "Coupon {{code}} requires a minimum purchase of ${{amount}}.",
+        "noEffect": "Coupon {{code}} has no effect on this ticket."
+      }
+    },
+    "stepHint": "Take {{extra}} more: {{qty}} for ${{total}} (save ${{savings}})",
+    "subtotal": "Subtotal",
+    "discounts": "Discounts",
+    "pending": {
+      "title": "Sales pending sync",
+      "intro": "These sales were charged offline and will be sent automatically when the network returns. You can force sending if there is a connection.",
+      "discardAria": "Discard pending sale of {{amount}}",
+      "empty": "No pending sales.",
+      "sendNow": "Send now",
+      "discardTitle": "Discard pending sale ({{folio}})",
+      "discardDescription": "It is removed from this device and will never upload as a sale; stock is restored. A record of who, when and why is kept.",
+      "waitShift": "Waiting for the shift to upload",
+      "waitProduct": "Waiting for a new product to upload"
+    },
+    "msg": {
+      "boxes": "{{count}} boxes",
+      "noFullBoxes": "Not enough full boxes: {{stock}} available.",
+      "qtyOverStock": "Quantity exceeds available stock.",
+      "couponApplied": "Coupon {{code}} applied: −${{amount}}.",
+      "couponDropped": "{{reason}} It was removed from the ticket. New total ${{total}}.",
+      "couponDroppedTitle": "Coupon removed",
+      "couponGone": "Coupon {{code}} is no longer on this register.",
+      "couponGoneRestore": "Coupon {{code}} is no longer on this register; the ticket continues without it.",
+      "couponIssueRestore": "{{message}} The ticket continues without it.",
+      "promotionClosed": "Promotion {{name}} has ended. New total ${{total}}. Charge again.",
+      "promotionClosedTitle": "Promotion ended",
+      "confirmClear": "Clear the current ticket?",
+      "codeNotFound": "Code not found",
+      "productNotFound": "Product not found.",
+      "manyResults": "There are several results: pick one from the list.",
+      "noStock": "Product out of stock.",
+      "notSoldByBox": "{{name}} is not sold by the box.",
+      "noFullBox": "There is no full box of {{name}}: {{stock}} available.",
+      "discountCapped": "The manual discount was capped at ${{amount}} (20% of the line): more requires administrator approval.",
+      "discountNeedsAdmin": "A discount over 20% requires administrator approval.",
+      "confirmRemove": "Remove {{qty}} × {{name}}?",
+      "heldLabel": "Held sale {{time}}",
+      "finishBeforeResume": "Save or finish the current sale before resuming another.",
+      "stale": {
+        "noStock": "{{name}}: out of stock, removed from the ticket",
+        "noBox": "{{name}}: no longer sold by the box, removed from the ticket",
+        "noFullBox": "{{name}}: no full box available, removed from the ticket",
+        "onlyStock": "{{name}}: only {{stock}} available",
+        "boxPrice": "{{name}}: the box now costs ${{amount}}",
+        "boxQuantity": "{{name}}: the box now has {{count}} pieces",
+        "onlyPieces": "{{name}}: only {{stock}} in stock",
+        "price": "{{name}}: the price is now ${{amount}}",
+        "prescription": "{{name}}: its prescription control changed",
+        "summary": "The ticket was updated from the catalog: {{changes}}."
+      },
+      "saleRecorded": "Sale {{folio}} recorded.",
+      "pendingDiscarded": "Pending sale discarded.",
+      "discardFailed": "The sale could not be discarded.",
+      "sendingPending": "Sending pending sales.",
+      "saleVoided": "Sale voided.",
+      "stockExpired": "The available stock is expired.",
+      "noStockAnotherBox": "Not enough stock for another full box: {{stock}} available.",
+      "noStockAnotherUnit": "Not enough stock to add another unit.",
+      "rxRetained": " The prescription is kept and recorded in the control ledger.",
+      "rxLedger": " It is recorded in the control ledger.",
+      "rxRequired": "{{name}}: {{rule}} — requires a prescription.{{extra}}",
+      "expirySoon": "Expiring soon: lot {{lot}} expires on {{date}} ({{days}} days).",
+      "alreadyRecorded": "The sale for this ticket was already recorded (folio {{folio}})",
+      "cartRestored": "The ticket in progress was restored ({{count}} lines).",
+      "noSalePermission": "Your role is not allowed to record sales.",
+      "openShiftFirst": "Open a cash shift before selling.",
+      "boxesOne": "{{count}} box",
+      "cartRestoredOne": "The ticket in progress was restored ({{count}} line).",
+      "voidReasonRequired": "Write the void reason (at least {{min}} characters).",
+      "saleNotFound": "Sale not found.",
+      "discardReasonRequired": "Write the discard reason (at least {{min}} characters)."
+    },
+    "stock": {
+      "piece": "{{count}} pc",
+      "pieces": "{{count}} pcs",
+      "fullBox": "{{count}} full box",
+      "fullBoxes": "{{count}} full boxes"
     }
   },
   "history": {
@@ -174,6 +411,11 @@
         "wrongProduct": "Wrong product",
         "other": "Other"
       }
+    },
+    "localFolio": "Ticket: {{folio}}",
+    "msg": {
+      "voidFailed": "The sale could not be voided.",
+      "loadError": "The sales history could not be loaded."
     }
   },
   "payment": {
@@ -242,7 +484,9 @@
       "filterRejected": "Rejected",
       "filterAutoClosed": "Auto-closed",
       "openingDifference": "Difference at opening",
-      "followingOpeningDifference": "Next shift found"
+      "followingOpeningDifference": "Next shift found",
+      "loadError": "The cash cut list could not be loaded.",
+      "reviewFailed": "The adjustment could not be reviewed."
     },
     "logoutPromptTitle": "Cash shift open",
     "logoutPromptBody": "You have an open cash shift. If you leave without closing it, you can pick it up again today; when the day changes it closes on its own with the cash on hand at that moment.",
@@ -280,11 +524,126 @@
     "clockBlockedClose": "This register's clock is off by {{minutes}} min. Fix the computer's date and time before closing the shift (server time: {{serverTime}})."
   },
   "checkout": {
-    "activatePdv": "Activate PDV"
+    "activatePdv": "Activate PDV",
+    "title": "Checkout",
+    "itemCount": "{{count}} items",
+    "hotkeyMethod": "method",
+    "hotkeyCharge": "charge",
+    "hotkeyExit": "exit",
+    "totalDue": "Total due",
+    "includesDiscount": "Includes ${{amount}} discount",
+    "coupon": "Coupon {{code}} −${{amount}}",
+    "paymentMethod": "Payment method",
+    "cardAmount": "Card amount",
+    "cardAmountHint": "The terminal charges only this part; the rest is cash.",
+    "cashDue": "Cash due",
+    "cashReceived": "Cash received",
+    "exact": "Exact",
+    "change": "Change",
+    "shortfall": "Short",
+    "terminal": "Mercado Pago terminal",
+    "searchingDevices": "Searching…",
+    "refreshDevices": "Refresh",
+    "selectTerminal": "Select terminal",
+    "sendToTerminal": "Send ${{amount}} to the terminal",
+    "status": {
+      "created": "Waiting for terminal…",
+      "atTerminal": "Insert or swipe the card at the terminal…",
+      "actionRequired": "Confirm the operation at the terminal…",
+      "processed": "Payment approved",
+      "canceled": "Payment canceled at terminal",
+      "expired": "The charge expired without completing",
+      "failed": "Charge error",
+      "refunded": "Payment refunded"
+    },
+    "expiresIn": "Expires in {{time}}",
+    "cardPaid": "Card ${{amount}}",
+    "cashPaid": "Cash ${{amount}}",
+    "cancelTerminal": "Cancel terminal charge",
+    "retryTerminal": "Retry ${{amount}} at the terminal",
+    "cardManualTitle": "Card charge recorded",
+    "cardManualFull": "Charge ${{amount}} on the card and confirm here.",
+    "cardManualMixed": "Charge ${{amount}} on the card and enter the cash for the rest above.",
+    "cardManualNote": "The sale is recorded with the split; the POS is not connected to any terminal.",
+    "controlledTitle": "Controlled medication (COFEPRIS)",
+    "retentionNote": "The prescription is kept at the pharmacy and recorded in the control ledger.",
+    "prescriptionRequired": "Prescription",
+    "prescriptionOptional": "Record prescription",
+    "optionalParen": "(optional)",
+    "doctor": "Doctor",
+    "doctorPlaceholder": "Doctor's name",
+    "doctorLicense": "Professional license",
+    "doctorLicensePlaceholder": "7 or 8 digits",
+    "prescriptionFolio": "Prescription number",
+    "required": "Required",
+    "optional": "Optional",
+    "retentionConfirm": "I confirm the prescription was kept at the pharmacy (groups I to III).",
+    "customerTitle": "Customer and invoicing",
+    "generalPublic": "General public",
+    "toInvoice": "to invoice",
+    "removeCustomer": "Remove",
+    "customerSearchPlaceholder": "Search customer by name or RFC",
+    "customerSearch": "Search customer",
+    "newCustomerName": "Customer name",
+    "newCustomerNameAria": "New customer name",
+    "newCustomerRfc": "RFC (optional)",
+    "newCustomerRfcAria": "New customer RFC",
+    "newCustomer": "New customer",
+    "requiresInvoice": "Invoice (stamped later)",
+    "billingRfc": "Recipient RFC",
+    "billingName": "Legal name",
+    "cfdiUse": "CFDI use",
+    "billingEmail": "Email (optional)",
+    "billingEmailAria": "Recipient email",
+    "taxBreakdown": "Tax breakdown (prices include taxes)",
+    "taxBase": "Taxable base",
+    "taxTotal": "Total",
+    "confirm": "Confirm ${{amount}}",
+    "itemCountOne": "{{count}} item",
+    "cfdi": {
+      "G03": "G03 — General expenses",
+      "D01": "D01 — Medical fees",
+      "S01": "S01 — No tax effects"
+    },
+    "msg": {
+      "needsCardApproval": "The terminal still has to approve the card charge.",
+      "needsCash": "Cash short: ${{amount}}.",
+      "needsBilling": "Invoicing requires a valid RFC, legal name and, if entered, a valid email.",
+      "cardAlreadyApproved": "The terminal already approved the charge. Finish the sale or cancel the charge before changing the method.",
+      "customerNameRequired": "Customer name is required.",
+      "customerCreated": "Customer created.",
+      "noTerminals": "No terminals are linked to the Mercado Pago account. Check that the Point is on, linked to the same account as the Access Token, and in PDV mode.",
+      "terminalActivated": "Terminal activated in PDV mode.",
+      "selectTerminal": "Select a Mercado Pago terminal.",
+      "terminalError": "The terminal reported a charge error.",
+      "cardChargedConfirm": "The card was already charged: confirm the sale so the charge is not left unrecorded.",
+      "cancelOrderFailed": "The order could not be canceled at the terminal: cancel it on the device."
+    },
+    "tender": {
+      "mixedNeedsCard": "Split payment requires the card amount.",
+      "cardAmountPositive": "The card amount must be greater than zero.",
+      "cardCoversTotal": "The card covers the total: record the sale as a card payment.",
+      "amountReceivedRequired": "The amount received is required for this payment method."
+    },
+    "rx": {
+      "needsDataGroups": "This sale includes {{labels}} and requires prescription details.",
+      "needsData": "This sale requires prescription details.",
+      "licenseDigits": "The professional license must have 7 or 8 digits.",
+      "folioRequired": "Group I to III medications require the prescription number.",
+      "retentionRequired": "Groups I to III require keeping the prescription: confirm it was kept."
+    }
   },
   "common": {
     "loading": "Loading…",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "close": "Close",
+    "save": "Save",
+    "ok": "OK",
+    "error": "Error",
+    "attention": "Attention",
+    "sessionExpired": "Session expired",
+    "sessionExpiredDetail": "The session ended at 24:00 (Central time). Sign in again; the ticket in progress is saved.",
+    "reasonHint": "At least {{min}} characters."
   },
   "directCharge": {
     "title": "Direct charge",
@@ -333,7 +692,19 @@
       "failed": "Failed",
       "canceled": "Canceled"
     },
-    "qrAlt": "Payment link QR code"
+    "qrAlt": "Payment link QR code",
+    "msg": {
+      "amountRequired": "Enter the amount to charge.",
+      "conceptRequired": "Write the charge concept (at least 3 characters).",
+      "chargeInProgress": "A charge is in progress. Wait for it to resolve or cancel it before changing the method.",
+      "mpError": "Mercado Pago reported a charge error.",
+      "linkCopied": "Payment link copied.",
+      "copyFailed": "The link could not be copied. Copy it manually.",
+      "linkCanceled": "Payment link canceled.",
+      "terminalCanceled": "Charge canceled at the terminal.",
+      "approved": "Charge {{folio}} approved.",
+      "mpRejected": "Mercado Pago rejected the charge: {{detail}}"
+    }
   },
   "stockEntry": {
     "title": "Stock entry",
@@ -383,7 +754,23 @@
     "submit": "Save entry",
     "saved": "Entry recorded",
     "savedStock": "Current stock:",
-    "notice": "This screen only receives goods. Registering invoices, counts and write-offs stays in the admin panel."
+    "notice": "This screen only receives goods. Registering invoices, counts and write-offs stays in the admin panel.",
+    "msg": {
+      "invoiceRequired": "Choose the invoice for the goods.",
+      "productRequired": "Search for the product or create a new one.",
+      "lotRequired": "Enter the lot number.",
+      "expiryRequired": "Enter the expiry date.",
+      "expiryPast": "The expiry date cannot be in the past.",
+      "qtyRequired": "Enter how many pieces come in.",
+      "noInvoices": "There are no registered invoices. They are created from the admin panel before receiving the goods.",
+      "sameSku": "\"{{name}}\" is already in the catalog with SKU {{sku}}: search for it and select it instead of creating it.",
+      "sameName": "\"{{name}}\" already exists with another SKU ({{sku}}). Use another name, for example \"{{suggestion}}\".",
+      "noSupplier": "No supplier",
+      "lotExpiryMismatch": "Lot {{lot}} of {{name}} already existed with another expiry date. Check the invoice.",
+      "entryWarning": "Entry of {{name}} (lot {{lot}}): {{code}}.",
+      "productFallback": "product",
+      "reviewEntry": "Review the entry"
+    }
   },
   "sync": {
     "now": "Sync",
@@ -392,7 +779,97 @@
     "modalBody": "Fetching the latest catalog before you start selling…",
     "cooldown": "You synced recently. You can sync again at {{time}}.",
     "exitTitle": "Syncing before exit",
-    "exitBody": "Sending pending sales, expenses, new products and movements…"
+    "exitBody": "Sending pending sales, expenses, new products and movements…",
+    "blocked": {
+      "shiftNotUploaded": {
+        "title": "The shift is not uploaded yet",
+        "explanation": "The sale is fine, but its shift{{dep}} has not reached the server yet, usually for lack of internet. With a connection, press Retry: it uploads the shift and then the sale."
+      },
+      "shiftRejected": {
+        "title": "The server rejected this sale's shift",
+        "explanation": "First resolve the shift opening{{dep}}, which also appears in this list. Once it uploads, retry the sale. Do not discard it: it is money collected."
+      },
+      "productNotUploaded": {
+        "title": "A new product is not uploaded yet",
+        "explanation": "The product \"{{name}}\" was created on this register and has not reached the server yet. With a connection, press Retry: it uploads the catalog and then the sale.",
+        "explanationNoName": "The new product was created on this register and has not reached the server yet. With a connection, press Retry: it uploads the catalog and then the sale."
+      },
+      "productRejected": {
+        "title": "The server rejected a product in this sale",
+        "explanation": "Creating \"{{name}}\" was rejected. Fix it in Products or tell the administrator; then retry the sale.",
+        "explanationNoName": "Creating a product was rejected. Fix it in Products or tell the administrator; then retry the sale."
+      },
+      "productNotFoundEntry": {
+        "title": "The server does not know this entry's product",
+        "explanation": "Usually the product had not uploaded yet when the entry was sent. With a connection, press Retry: the register uploads the product first and then the entry."
+      },
+      "productNotFound": {
+        "title": "A product in this sale no longer exists",
+        "explanation": "It was probably deleted from the catalog. Tell the administrator before discarding the sale: the charge was already made."
+      },
+      "entryInProgress": {
+        "title": "The server is still recording this entry",
+        "explanation": "An earlier attempt to upload this entry is still running on the server. It is not a rejection: wait a few minutes and press Retry. Do not enter it again or stock would be duplicated."
+      },
+      "entryHalfDone": {
+        "title": "The server left this entry half done",
+        "explanation": "An earlier attempt did not finish recording the entry and the server will not accept it again until someone reviews it. Do not retry it: tell the administrator to check the lot in inventory. If it is already recorded there, this copy can be discarded."
+      },
+      "entryPossibleDuplicate": {
+        "title": "Invoice entered twice?",
+        "explanation": "This invoice already has an entry on the server with the same product, lot and quantity. If they really are two identical lines, press \"Yes, it's another line\". If it is the same goods entered again (another photo, the PDF or on another register), press \"Discard\": those pieces are removed from this register's stock."
+      },
+      "readyToRetry": {
+        "title": "Ready to send",
+        "explanation": "What was missing has reached the server. Press Retry."
+      },
+      "shiftDuplicate": {
+        "title": "Conflict with the previous shift",
+        "explanation": "The server still has an earlier shift open for this device. Retry: the register uploads that close first. If it happens again, tell the administrator."
+      },
+      "shiftAlreadyOpen": {
+        "title": "A shift is already open on the server",
+        "explanation": "This cashier has another shift open on the server (maybe on another device). The administrator must close it; then retry."
+      },
+      "shiftForeign": {
+        "title": "The shift belongs to another cashier",
+        "explanation": "Only whoever opened the shift or an administrator can upload this. Have that person sign in on this register, or tell the administrator."
+      },
+      "shiftClosed": {
+        "title": "The shift is already closed on the server",
+        "explanationMovement": "This expense arrived after the shift closed. Correct it to record it in the current shift, or tell the administrator.",
+        "explanation": "This record arrived after the shift closed. Tell the administrator: it must be recorded separately. Do not discard it without asking."
+      },
+      "shiftNotFound": {
+        "title": "The server does not know the shift",
+        "explanation": "Retry: the register uploads the shift first and then the rest. If it happens again, tell the administrator."
+      },
+      "noStock": {
+        "title": "No stock on the server",
+        "explanation": "The server does not have enough stock for this sale (a goods entry may be missing). Record the entry or tell the administrator; then retry."
+      },
+      "promotionClosed": {
+        "title": "The promotion has ended",
+        "explanation": "The sale was charged with a promotion that is no longer active on the server. Tell the administrator: they decide whether the charged price stands."
+      },
+      "voidRejected": {
+        "title": "The server rejected the void",
+        "explanation": "The sale is voided on this register, but it is still active on the server. Ask an administrator to sign in on this register and press Retry: with their session the void is sent again. Do not charge it again."
+      },
+      "catalogConflict": {
+        "title": "The product changed in the panel",
+        "explanation": "While this register was saving its change, the price or status of the product changed in the panel. Choose \"Use the panel's\" to keep the panel values, or \"Force mine\" if this register's value is right. The rest of your corrections upload anyway."
+      },
+      "productDuplicate": {
+        "title": "Another product with that SKU or name already exists",
+        "explanation": "Another register or the panel created a different product with the same SKU or name, and neither the barcode nor the name with its strength match, so the register does not adopt it. Fix the SKU or name in Products and retry, or tell the administrator."
+      },
+      "unknown": {
+        "title": "Unrecognized reason",
+        "explanationGoods": "Read the detail below and tell the administrator before discarding: the goods are already on this register and the server does not know them.",
+        "explanation": "Read the detail below and tell the administrator before discarding: it may be money already collected."
+      }
+    }
   },
   "categories": {
     "title": "Categories",
@@ -414,7 +891,15 @@
     "deactivateConfirm": "Deactivate category",
     "cancel": "Cancel",
     "save": "Save",
-    "empty": "No categories registered."
+    "empty": "No categories registered.",
+    "msg": {
+      "loadError": "Categories could not be loaded.",
+      "deactivated": "Category deactivated.",
+      "deactivateFailed": "The category could not be deactivated.",
+      "loadOneError": "The category could not be loaded.",
+      "updated": "Category updated.",
+      "created": "Category created."
+    }
   },
   "suppliers": {
     "title": "Suppliers",
@@ -442,7 +927,15 @@
     "deactivateConfirm": "Deactivate supplier",
     "cancel": "Cancel",
     "save": "Save",
-    "empty": "No suppliers registered."
+    "empty": "No suppliers registered.",
+    "msg": {
+      "loadError": "Suppliers could not be loaded.",
+      "deactivated": "Supplier deactivated.",
+      "deactivateFailed": "The supplier could not be deactivated.",
+      "loadOneError": "The supplier could not be loaded.",
+      "updated": "Supplier updated.",
+      "created": "Supplier created."
+    }
   },
   "invoices": {
     "title": "Invoices",
@@ -473,7 +966,16 @@
     "cancel": "Cancel",
     "save": "Save",
     "empty": "No invoices registered.",
-    "windowHint": "Last two months only. The full history is in the admin panel."
+    "windowHint": "Last two months only. The full history is in the admin panel.",
+    "msg": {
+      "loadError": "Invoices could not be loaded.",
+      "created": "Invoice recorded.",
+      "loadOneError": "The invoice could not be loaded."
+    },
+    "upload": {
+      "badType": "File type not allowed. Use PDF or an image (JPEG, PNG, WebP).",
+      "tooBig": "The file cannot exceed 10 MB."
+    }
   },
   "invoiceRag": {
     "title": "Invoices-RAG",
@@ -550,7 +1052,10 @@
       "blockerNoRows": "Check at least one line.",
       "blockerIncomplete": "Some checked lines are missing product, pieces, lot or a valid expiry.",
       "apply": "Apply to inventory",
-      "appliedAt": "Applied to inventory on {{date}}"
+      "appliedAt": "Applied to inventory on {{date}}",
+      "legend": "{{boxes}} boxes × {{perBox}} = {{pieces}} pcs",
+      "legendOne": "{{boxes}} box × {{perBox}} = {{pieces}} pcs",
+      "legendCost": "${{cost}} per pc"
     },
     "taxes": "Taxes",
     "addTax": "Add tax",
@@ -588,6 +1093,17 @@
       "extracted": "To review",
       "indexed": "Indexed",
       "failed": "Failed"
+    },
+    "msg": {
+      "extracted": "Data extracted. Review it before saving.",
+      "saved": "Document saved and indexed.",
+      "uploaded": "File uploaded to the cloud.",
+      "deleted": "Document deleted.",
+      "notFound": "Document not found.",
+      "uploadFailed": "The file could not be uploaded to the cloud: {{message}}",
+      "duplicateFile": "This file was already loaded; opening the existing one.",
+      "invoiceRecorded": "Invoice {{number}} recorded.",
+      "inventoryUpdated": "Inventory updated: {{products}} products, +{{pieces}} pieces."
     }
   },
   "products": {
@@ -626,7 +1142,19 @@
     "cancel": "Cancel",
     "save": "Save",
     "created": "Product created.",
-    "updated": "Product updated."
+    "updated": "Product updated.",
+    "validation": {
+      "nameRequired": "Product name is required.",
+      "skuRequired": "SKU is required.",
+      "categoryRequired": "Choose the product category.",
+      "unitRequired": "Enter the unit (piece, box…).",
+      "priceRequired": "Enter the sale price.",
+      "ivaConflict": "A product cannot have VAT and zero VAT at the same time.",
+      "iepsRequired": "Enter the IEPS rate.",
+      "barcodeLength": "The barcode must have 8 to 14 digits.",
+      "noControlledGroup": "No group (over the counter)",
+      "notFoundLocal": "The product was not found in the local catalog."
+    }
   },
   "expenses": {
     "newTitle": "New expense",
@@ -660,7 +1188,8 @@
       "createdBy": "Recorded by",
       "empty": "No expenses recorded.",
       "loading": "Loading expenses…",
-      "filterAll": "All"
+      "filterAll": "All",
+      "loadError": "The expense list could not be loaded."
     },
     "sessionTitle": "This shift’s expenses",
     "sessionTotal": "Total",
@@ -672,7 +1201,8 @@
     "cancelEdit": "Cancel fix",
     "saveEdit": "Save fix",
     "updated": "Expense fixed.",
-    "updateError": "Could not fix the expense."
+    "updateError": "Could not fix the expense.",
+    "notCurrentShift": "That expense is not from the open shift: it cannot be corrected here."
   },
   "cashBox": {
     "title": "Pharmacy cash",
@@ -714,6 +1244,133 @@
   },
   "pendingUpload": {
     "count": "{{count}} not uploaded",
-    "upload": "Upload now"
+    "upload": "Upload now",
+    "msg": {
+      "offline": "No connection. It will upload by itself as soon as the network returns.",
+      "done": "Products and stock entries uploaded.",
+      "unknownError": "unknown error",
+      "pendingAndRejected": "{{pending}} are not uploaded and {{rejected}} were rejected. Open them from the red notice to see what to do.",
+      "pending": "{{pending}} are not uploaded. Check your connection and try again.",
+      "uploadedWithRejected": "Pending items uploaded. There are still {{rejected}} rejected record(s) in the red notice.",
+      "failed": "Could not upload: {{message}}"
+    }
+  },
+  "ledger": {
+    "title": "Control ledger",
+    "from": "From",
+    "to": "To",
+    "group": "Group",
+    "rangeAria": "Range",
+    "range": {
+      "fromTo": "{{from}} to {{to}}"
+    },
+    "reloadAria": "Refresh the ledger",
+    "reload": "Refresh",
+    "csv": "Period CSV",
+    "csvHint": "Downloads the whole period, untruncated",
+    "print": "Print",
+    "dirty": "Filters changed: the sheet still shows {{from}} to {{to}} until you refresh.",
+    "rfc": "RFC {{rfc}}",
+    "sheetTitle": "Controlled medication ledger (art. 226 LGS)",
+    "onlyGroup": "only {{group}}",
+    "printedAt": "printed {{date}}",
+    "noPermission": "Your role lacks inventory read permission, which guards the control ledger. Ask an administrator for access.",
+    "loadError": "The control ledger could not be loaded.",
+    "truncatedTitle": "This sheet is incomplete.",
+    "truncatedBody": "The period has {{total}} movements and {{shown}} are shown here. For an inspection deliverable, download the",
+    "truncatedBodyEnd": ", which is not truncated.",
+    "ungrouped": "{{count}} movement(s) arrived without a registered COFEPRIS group and are listed as \"No group\". They are not added to the group summary: check the catalog before handing in this sheet.",
+    "movements": "Movements",
+    "movementsLower": "movements",
+    "ofTotal": "of {{total}}",
+    "netPieces": "Net pieces (out − returns)",
+    "byGroup": "By group",
+    "groupRow": "pcs · {{movements}} mov.",
+    "tableAria": "Controlled medication movements",
+    "col": {
+      "date": "Date",
+      "folio": "Folio",
+      "type": "Movement",
+      "product": "Product",
+      "group": "Group",
+      "qty": "Qty",
+      "lots": "Lots",
+      "prescription": "Prescription",
+      "patient": "Patient"
+    },
+    "ref": "ref. {{folio}}",
+    "folio": "No. {{folio}}",
+    "retained": "Retained",
+    "empty": "No controlled medication movements in the period.",
+    "signResponsible": "Health officer (name and signature)",
+    "signVerifier": "Inspector (name and signature)",
+    "printedFrom": "Printed from FarmaJyV Venta · {{from}} to {{to}}",
+    "rangeError": {
+      "from": "Enter the start date of the period.",
+      "to": "Enter the end date of the period.",
+      "order": "The start date cannot be after the end date."
+    },
+    "noGroup": "No group",
+    "allGroups": "All groups",
+    "today": "Today",
+    "lastDays": "{{days}} days"
+  },
+  "ticket": {
+    "phone": "Tel. {{phone}}",
+    "folio": "Folio",
+    "cashier": "Cashier: {{name}}",
+    "customer": "Customer: {{name}}",
+    "billingRfc": "RFC: {{rfc}}",
+    "toInvoice": "TO BE INVOICED",
+    "prescription": "Prescription: {{doctor}} · Lic. {{license}}",
+    "prescriptionFolio": "Prescription no.: {{folio}}",
+    "prescriptionRetained": "Prescription kept at the pharmacy",
+    "controlled": "Controlled: {{label}}",
+    "voided": "VOIDED",
+    "col": {
+      "qty": "Qty",
+      "product": "Product",
+      "amount": "Amount"
+    },
+    "promo": "Promo {{name}} -{{amount}}",
+    "couponLine": "Coupon {{code}} -{{amount}}",
+    "manualDiscount": "Disc. {{amount}}",
+    "subtotal": "Subtotal",
+    "discounts": "Discounts",
+    "taxBase": "Taxable base",
+    "total": "Total",
+    "payment": "Payment",
+    "card": "Card",
+    "cash": "Cash",
+    "received": "Received",
+    "change": "Change",
+    "taxesIncluded": "Prices include taxes.",
+    "retainedLaw": "Prescription kept under art. 226 LGS.",
+    "thanks": "Thank you for your purchase!",
+    "cut": {
+      "title": "Cash cut",
+      "openedAt": "Opened: {{date}}",
+      "closedAt": "Closed: {{date}}",
+      "sales": "Sales",
+      "voided": "Voided",
+      "salesTotal": "Sales total",
+      "deposits": "Deposits",
+      "withdrawals": "Withdrawals",
+      "expenses": "Expenses",
+      "opening": "Opening float",
+      "expected": "Expected cash",
+      "expectedPharmacy": "Expected cash (pharmacy)",
+      "expectedServices": "Expected cash (services)",
+      "expectedTotal": "Expected cash (total)",
+      "counted": "Counted cash",
+      "difference": "Difference",
+      "servicesTitle": "SERVICES",
+      "services": "Services",
+      "servicesVoided": "Voided",
+      "servicesTotal": "Services total",
+      "commissions": "Commissions earned"
+    },
+    "boxes": "{{boxes}} boxes × {{piecesPerBox}} pcs",
+    "boxOne": "{{boxes}} box × {{piecesPerBox}} pcs"
   }
 }

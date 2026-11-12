@@ -1,3 +1,5 @@
+import { TestBed } from '@angular/core/testing';
+import { TranslateService } from '@ngx-translate/core';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -307,9 +309,11 @@ describe('pieza y caja del mismo producto', () => {
   });
 
   it('las existencias se muestran en piezas y cajas completas', () => {
-    expect(stockLabel(conCaja())).toBe('35 pzas · 3 cajas completas');
-    expect(stockLabel(conCaja({ stock: 12 }))).toBe('12 pzas · 1 caja completa');
-    expect(stockLabel(producto({ stock: 1 }))).toBe('1 pza');
+    const t = (key: string, params?: Record<string, unknown>) =>
+      TestBed.inject(TranslateService).instant(key, params) as string;
+    expect(stockLabel(conCaja(), t)).toBe('35 pzas · 3 cajas completas');
+    expect(stockLabel(conCaja({ stock: 12 }), t)).toBe('12 pzas · 1 caja completa');
+    expect(stockLabel(producto({ stock: 1 }), t)).toBe('1 pza');
   });
 
   it('una caja guardada vuelve como caja', () => {

@@ -53,17 +53,17 @@ function cashDueFor(input: TenderInput): number {
 function validate(input: TenderInput, cashDue: number): string | null {
   if (input.paymentMethod === 'mixed') {
     if (input.cardAmount === null) {
-      return 'El pago mixto requiere el monto cobrado con tarjeta.';
+      return 'checkout.tender.mixedNeedsCard';
     }
     if (toCents(input.cardAmount) <= 0) {
-      return 'El monto cobrado con tarjeta debe ser mayor a cero.';
+      return 'checkout.tender.cardAmountPositive';
     }
     if (compareMoney(input.cardAmount, input.total) >= 0) {
-      return 'La tarjeta cubre el total: registra la venta como pago con tarjeta.';
+      return 'checkout.tender.cardCoversTotal';
     }
   }
   if (cashDue > 0 && input.amountReceived === null) {
-    return 'El monto recibido es requerido para este método de pago.';
+    return 'checkout.tender.amountReceivedRequired';
   }
   return null;
 }

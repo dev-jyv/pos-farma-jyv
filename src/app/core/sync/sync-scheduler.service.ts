@@ -1,4 +1,5 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
+import { TranslateService } from '@ngx-translate/core';
 import { DestroyRef, Injectable, inject, signal } from '@angular/core';
 import { catchError, firstValueFrom, from, map, of } from 'rxjs';
 
@@ -141,6 +142,11 @@ export class SyncScheduler {
   private readonly cashMovementService = inject(CashMovementService);
   private readonly apiHealth = inject(ApiHealthService);
   private readonly auth = inject(AuthService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly diagnostics = inject(PosDiagnosticsService);
   private readonly apiUrl = environment.apiUrl;
 
@@ -629,7 +635,7 @@ export class SyncScheduler {
       return {
         ok: false,
         pulled: 0,
-        errorMessage: `Ya sincronizaste hace poco. Podrás volver a hacerlo a las ${formatTime(availableAt)}.`,
+        errorMessage: this.t('shell.msg.syncCooldown', { time: formatTime(availableAt) }),
         blockedUntil: availableAt,
       };
     }

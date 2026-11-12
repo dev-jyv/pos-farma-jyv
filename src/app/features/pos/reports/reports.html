@@ -240,11 +240,11 @@
           {{ 'reports.byMethod' | translate }}
         </h2>
         <p class="mb-2 text-xs text-slate-600">
-          Efectivo cobrado (entra al cajón):
+          {{ 'reports.cashCollectedDrawer' | translate }}
           <span class="font-semibold tabular-nums text-slate-700">
             ${{ cashCollected() | number: '1.2-2' }}
           </span>
-          · en pago mixto solo cuenta la parte pagada en efectivo.
+          {{ 'reports.cashCollectedHint' | translate }}
         </p>
         <p-table
           [value]="byMethod()"

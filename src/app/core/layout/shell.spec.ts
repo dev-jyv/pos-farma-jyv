@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { WritableSignal, signal } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
-import { provideTranslateService } from '@ngx-translate/core';
+
 import { EMPTY } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -59,7 +59,6 @@ describe('Shell', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
-        provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         // Un `RouterLink` pintado (p. ej. al aparecer el aviso de rechazados) lo pide.
         { provide: ActivatedRoute, useValue: {} },
         {

@@ -26,6 +26,10 @@ export class ExpensesAudit {
   private readonly cashMovementService = inject(CashMovementService);
   private readonly translate = inject(TranslateService);
 
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
+
   /** Gastos por página. La paginación es del servidor (`page` + `meta`). */
   readonly pageSize = 50;
 
@@ -90,7 +94,7 @@ export class ExpensesAudit {
         },
         error: (error: unknown) => {
           this.loaded.set(true);
-          this.loadError.set(getApiErrorMessage(error) || 'No se pudo cargar el listado de gastos.');
+          this.loadError.set(getApiErrorMessage(error) || this.t('expenses.audit.loadError'));
         },
       });
   }

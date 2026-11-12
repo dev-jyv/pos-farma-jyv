@@ -138,7 +138,7 @@
             </div>
           }
           @if (fileError()) {
-            <span class="text-xs text-red-600">{{ fileError() }}</span>
+            <span class="text-xs text-red-600">{{ fileError() | translate }}</span>
           }
         </div>
       </div>

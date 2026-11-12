@@ -3,10 +3,10 @@
     <div
       class="flex shrink-0 flex-wrap items-end gap-3 border-b border-[var(--pos-border)] px-4 py-3 print:hidden"
     >
-      <h1 class="text-lg font-bold text-slate-900">Libro de control</h1>
+      <h1 class="text-lg font-bold text-slate-900">{{ 'ledger.title' | translate }}</h1>
 
       <div>
-        <label for="ledgerFrom" class="mb-1 block text-xs font-medium text-slate-500">Desde</label>
+        <label for="ledgerFrom" class="mb-1 block text-xs font-medium text-slate-500">{{ 'ledger.from' | translate }}</label>
         <input
           id="ledgerFrom"
           name="ledgerFrom"
@@ -18,7 +18,7 @@
         />
       </div>
       <div>
-        <label for="ledgerTo" class="mb-1 block text-xs font-medium text-slate-500">Hasta</label>
+        <label for="ledgerTo" class="mb-1 block text-xs font-medium text-slate-500">{{ 'ledger.to' | translate }}</label>
         <input
           id="ledgerTo"
           name="ledgerTo"
@@ -31,7 +31,7 @@
       </div>
       <div class="min-w-56">
         <span id="ledgerGroupLabel" class="mb-1 block text-xs font-medium text-slate-500">
-          Grupo
+          {{ 'ledger.group' | translate }}
         </span>
         <!-- `p-select` monta un `span[role=combobox]`, y `label[for]` no asocia con
              un span: el nombre accesible se da con `ariaLabelledBy`. -->
@@ -50,7 +50,7 @@
       <div
         class="flex items-center gap-1 rounded-lg bg-slate-100 p-1"
         role="group"
-        aria-label="Rango"
+        [attr.aria-label]="'ledger.rangeAria' | translate"
       >
         @for (range of quickRanges; track range.days) {
           <button
@@ -72,24 +72,24 @@
       <div class="ml-auto flex items-center gap-2">
         <p-button
           icon="pi pi-refresh"
-          ariaLabel="Actualizar el libro"
-          pTooltip="Actualizar"
+          [ariaLabel]="'ledger.reloadAria' | translate"
+          [pTooltip]="'ledger.reload' | translate"
           [text]="true"
           [loading]="loading()"
           (onClick)="reload()"
         />
         <p-button
           icon="pi pi-download"
-          label="CSV del periodo"
+          [label]="'ledger.csv' | translate"
           [outlined]="true"
           [loading]="exporting()"
           [disabled]="!!rangeError()"
-          pTooltip="Descarga el periodo completo, sin truncar"
+          [pTooltip]="'ledger.csvHint' | translate"
           (onClick)="exportCsv()"
         />
         <p-button
           icon="pi pi-print"
-          label="Imprimir"
+          [label]="'ledger.print' | translate"
           [outlined]="true"
           [disabled]="printBlocked()"
           (onClick)="print()"
@@ -101,8 +101,7 @@
       }
       @if (rangeDirty() && !rangeError()) {
         <p class="w-full text-xs font-medium text-slate-600">
-          Los filtros cambiaron: la hoja sigue mostrando
-          {{ appliedFrom() }} a {{ appliedTo() }} hasta que actualices.
+          {{ 'ledger.dirty' | translate: { from: appliedFrom(), to: appliedTo() } }}
         </p>
       }
     </div>
@@ -115,35 +114,34 @@
         <p class="text-sm font-semibold text-slate-800">
           {{ pharmacy.name }}
           @if (pharmacy.rfc) {
-            <span class="font-normal">· RFC {{ pharmacy.rfc }}</span>
+            <span class="font-normal">· {{ 'ledger.rfc' | translate: { rfc: pharmacy.rfc } }}</span>
           }
           @if (pharmacy.address) {
             <span class="font-normal">· {{ pharmacy.address }}</span>
           }
         </p>
         <p>
-          Libro de control de medicamentos controlados (art. 226 LGS) ·
-          {{ appliedFrom() }} a {{ appliedTo() }}
+          {{ 'ledger.sheetTitle' | translate }} ·
+          {{ 'ledger.range.fromTo' | translate: { from: appliedFrom(), to: appliedTo() } }}
           @if (appliedGroup(); as onlyGroup) {
-            · solo {{ groupLabel(onlyGroup) }}
+            · {{ 'ledger.onlyGroup' | translate: { group: groupLabel(onlyGroup) } }}
           }
-          · impreso {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
+          · {{ 'ledger.printedAt' | translate: { date: (generatedAt() | date: 'dd/MM/yyyy HH:mm') } }}
         </p>
       </header>
 
       @if (!canRead()) {
         <p class="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Tu rol no tiene permiso de lectura de inventario, que es lo que resguarda el libro de
-          control. Pide acceso a un administrador.
+          {{ 'ledger.noPermission' | translate }}
         </p>
       } @else if (loadError(); as failure) {
         <!-- El error se imprime con la hoja: una hoja en blanco por un fallo de red
              no puede confundirse con un periodo sin movimientos. -->
         <div class="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm" role="alert">
-          <p class="font-semibold text-red-900">No se pudo cargar el libro de control.</p>
+          <p class="font-semibold text-red-900">{{ 'ledger.loadError' | translate }}</p>
           <p class="mt-1 text-red-800">{{ failure }}</p>
           <p-button
-            label="Reintentar"
+            [label]="'shell.blocked.retry' | translate"
             icon="pi pi-refresh"
             size="small"
             styleClass="mt-2 print:hidden"
@@ -156,11 +154,10 @@
             class="rounded-xl border border-amber-400 bg-amber-50 px-4 py-3 text-sm text-amber-900"
             role="alert"
           >
-            <p class="font-semibold">Esta hoja está incompleta.</p>
+            <p class="font-semibold">{{ 'ledger.truncatedTitle' | translate }}</p>
             <p class="mt-1">
-              El periodo tiene {{ totalInPeriod() }} movimientos y aquí se muestran
-              {{ entries().length }}. Para el entregable de una visita, descarga el
-              <strong>CSV del periodo</strong>, que no se trunca.
+              {{ 'ledger.truncatedBody' | translate: { total: totalInPeriod(), shown: entries().length } }}
+              <strong>{{ 'ledger.csv' | translate }}</strong>{{ 'ledger.truncatedBodyEnd' | translate }}
             </p>
           </div>
         }
@@ -170,29 +167,27 @@
             class="rounded-xl border border-amber-400 bg-amber-50 px-4 py-3 text-sm text-amber-900"
             role="alert"
           >
-            {{ ungrouped().length }} movimiento(s) llegaron sin grupo COFEPRIS registrado y se
-            listan como «Sin grupo». No se suman al resumen por grupo: revisa el catálogo antes de
-            entregar esta hoja.
+            {{ 'ledger.ungrouped' | translate: { count: ungrouped().length } }}
           </div>
         }
 
         <div class="flex flex-wrap items-start gap-6 text-sm">
           <div>
-            <div class="text-xs font-medium text-slate-500">Movimientos</div>
+            <div class="text-xs font-medium text-slate-500">{{ 'ledger.movements' | translate }}</div>
             <div class="text-xl font-bold tabular-nums text-slate-900">
               {{ entries().length }}
               @if (truncated()) {
-                <span class="text-sm font-medium text-amber-800">de {{ totalInPeriod() }}</span>
+                <span class="text-sm font-medium text-amber-800">{{ 'ledger.ofTotal' | translate: { total: totalInPeriod() } }}</span>
               }
             </div>
           </div>
           <div>
-            <div class="text-xs font-medium text-slate-500">Piezas netas (salidas − reingresos)</div>
+            <div class="text-xs font-medium text-slate-500">{{ 'ledger.netPieces' | translate }}</div>
             <div class="text-xl font-bold tabular-nums text-slate-900">{{ netQuantity() }}</div>
           </div>
           @if (byGroup().length > 0) {
             <div>
-              <div class="mb-1 text-xs font-medium text-slate-500">Por grupo</div>
+              <div class="mb-1 text-xs font-medium text-slate-500">{{ 'ledger.byGroup' | translate }}</div>
               <div class="flex flex-wrap gap-2">
                 @for (row of byGroup(); track row.group) {
                   <span
@@ -200,7 +195,7 @@
                   >
                     {{ row.label }}:
                     <span class="font-bold tabular-nums">{{ row.quantity }}</span>
-                    pzas · {{ row.movements }} mov.
+                    {{ 'ledger.groupRow' | translate: { movements: row.movements } }}
                   </span>
                 }
               </div>
@@ -213,19 +208,19 @@
             [value]="entries()"
             [loading]="loading()"
             styleClass="pos-product-table"
-            [attr.aria-label]="'Movimientos de medicamentos controlados'"
+            [attr.aria-label]="'ledger.tableAria' | translate"
           >
             <ng-template #header>
               <tr>
-                <th scope="col">Fecha</th>
-                <th scope="col">Folio</th>
-                <th scope="col">Movimiento</th>
-                <th scope="col">Producto</th>
-                <th scope="col">Grupo</th>
-                <th scope="col" class="text-right">Cant.</th>
-                <th scope="col">Lotes</th>
-                <th scope="col">Receta</th>
-                <th scope="col">Paciente</th>
+                <th scope="col">{{ 'ledger.col.date' | translate }}</th>
+                <th scope="col">{{ 'ledger.col.folio' | translate }}</th>
+                <th scope="col">{{ 'ledger.col.type' | translate }}</th>
+                <th scope="col">{{ 'ledger.col.product' | translate }}</th>
+                <th scope="col">{{ 'ledger.col.group' | translate }}</th>
+                <th scope="col" class="text-right">{{ 'ledger.col.qty' | translate }}</th>
+                <th scope="col">{{ 'ledger.col.lots' | translate }}</th>
+                <th scope="col">{{ 'ledger.col.prescription' | translate }}</th>
+                <th scope="col">{{ 'ledger.col.patient' | translate }}</th>
               </tr>
             </ng-template>
             <ng-template #body let-entry>
@@ -234,7 +229,7 @@
                 <td class="whitespace-nowrap font-medium">
                   {{ entry.saleFolio }}
                   @if (entry.referenceFolio) {
-                    <span class="block text-xs text-slate-500">ref. {{ entry.referenceFolio }}</span>
+                    <span class="block text-xs text-slate-500">{{ 'ledger.ref' | translate: { folio: entry.referenceFolio } }}</span>
                   }
                 </td>
                 <td>{{ typeLabel(entry.type) }}</td>
@@ -255,25 +250,25 @@
                   @if (entry.prescription) {
                     {{ entry.prescription.doctorName }}
                     <span class="block text-slate-500">
-                      Céd. {{ entry.prescription.doctorLicense }}
+                      {{ 'sale.services.license' | translate: { license: entry.prescription.doctorLicense } }}
                       @if (entry.prescription.folio) {
-                        · Folio {{ entry.prescription.folio }}
+                        · {{ 'ledger.folio' | translate: { folio: entry.prescription.folio } }}
                       }
                     </span>
                     @if (entry.prescriptionRetained) {
-                      <span class="block font-medium text-slate-700">Retenida</span>
+                      <span class="block font-medium text-slate-700">{{ 'ledger.retained' | translate }}</span>
                     }
                   } @else {
                     —
                   }
                 </td>
-                <td class="text-xs">{{ entry.customerName || 'Público general' }}</td>
+                <td class="text-xs">{{ entry.customerName || ('checkout.generalPublic' | translate) }}</td>
               </tr>
             </ng-template>
             <ng-template #emptymessage>
               <tr>
                 <td colspan="9" class="py-6 text-center text-sm text-slate-500">
-                  Sin movimientos de medicamentos controlados en el periodo.
+                  {{ 'ledger.empty' | translate }}
                 </td>
               </tr>
             </ng-template>
@@ -284,19 +279,19 @@
         <footer class="mt-8 hidden text-xs text-slate-600 print:block">
           <div class="flex justify-between gap-12">
             <div class="flex-1 border-t border-slate-400 pt-1 text-center">
-              Responsable sanitario (nombre y firma)
+              {{ 'ledger.signResponsible' | translate }}
             </div>
             <div class="flex-1 border-t border-slate-400 pt-1 text-center">
-              Verificador (nombre y firma)
+              {{ 'ledger.signVerifier' | translate }}
             </div>
           </div>
           <p class="mt-3 text-center text-[10px] text-slate-500">
-            Impreso desde FarmaJyV Venta · {{ appliedFrom() }} a {{ appliedTo() }} ·
+            {{ 'ledger.printedFrom' | translate: { from: appliedFrom(), to: appliedTo() } }} ·
             {{ entries().length }}
             @if (truncated()) {
-              de {{ totalInPeriod() }}
+              {{ 'ledger.ofTotal' | translate: { total: totalInPeriod() } }}
             }
-            movimientos · {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
+            {{ 'ledger.movementsLower' | translate }} · {{ generatedAt() | date: 'dd/MM/yyyy HH:mm' }}
           </p>
         </footer>
       }

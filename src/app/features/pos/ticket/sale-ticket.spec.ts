@@ -58,7 +58,8 @@ describe('SaleTicket', () => {
 
   it('traduce el método de pago al texto del ticket', async () => {
     await build(sale({ paymentMethod: 'mixed' }));
-    expect(component.methodLabel()).toBe('Mixto');
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Mixto');
   });
 
   it('en pago mixto imprime el reparto efectivo/tarjeta', async () => {

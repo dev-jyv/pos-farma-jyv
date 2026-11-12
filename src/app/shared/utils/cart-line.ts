@@ -67,13 +67,16 @@ export function fullBoxes(product: Pick<Product, 'stock' | 'boxQuantity'>): numb
 }
 
 /** Existencias en piezas y, si se vende por caja, en cajas completas. */
-export function stockLabel(product: Product): string {
-  const piezas = `${product.stock} ${product.stock === 1 ? 'pza' : 'pzas'}`;
+export function stockLabel(
+  product: Product,
+  t: (key: string, params?: Record<string, unknown>) => string,
+): string {
+  const piezas = t(product.stock === 1 ? 'sale.stock.piece' : 'sale.stock.pieces', { count: product.stock });
   if (!hasBoxSale(product)) {
     return piezas;
   }
   const cajas = fullBoxes(product);
-  return `${piezas} · ${cajas} ${cajas === 1 ? 'caja completa' : 'cajas completas'}`;
+  return `${piezas} · ${t(cajas === 1 ? 'sale.stock.fullBox' : 'sale.stock.fullBoxes', { count: cajas })}`;
 }
 
 export function lineName(line: CartLine): string {

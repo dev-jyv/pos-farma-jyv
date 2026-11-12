@@ -13,7 +13,6 @@ import { Observable, catchError, finalize, map, of, shareReplay, switchMap, tap 
 
 import { FIREBASE_AUTH } from '../firebase/firebase.providers';
 import { unwrapEntity } from '../api/api.utils';
-import { CashSessionService } from '../../features/pos/services/cash-session.service';
 import { NotificationService } from '../notifications/notification.service';
 import { getSessionExpiryMs, isSessionExpired } from '../../shared/utils/session-expiry';
 import { ClockSkewService } from '../time/clock-skew.service';
@@ -44,12 +43,6 @@ export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
   private readonly notifications = inject(NotificationService);
-  /**
-   * A propósito, `CashSessionService` NO inyecta `AuthService` de vuelta (lo
-   * necesita `endExpiredSession()` para el auto-cierre a las 24h) — Angular no
-   * resuelve un ciclo entre dos `providedIn: 'root'` que se inyectan mutuamente.
-   */
-  private readonly cashSessionService = inject(CashSessionService);
   /** La sesión la vence el servidor: se mide con su hora, no con la de la caja (SPEC 65). */
   private readonly clock = inject(ClockSkewService);
   private readonly apiUrl = environment.apiUrl;

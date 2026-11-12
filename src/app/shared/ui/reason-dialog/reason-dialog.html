@@ -44,7 +44,7 @@
     (input)="onInput($event)"
   ></textarea>
   <p class="mt-1 text-xs" [class.text-slate-500]="valid()" [class.text-red-700]="!valid()">
-    {{ hint() }}
+    {{ hint() ?? ('common.reasonHint' | translate: { min: minLength }) }}
   </p>
 
   <ng-template #footer>

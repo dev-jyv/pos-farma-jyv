@@ -124,7 +124,6 @@
   /* ── Roles: es lo que usan las pantallas, nunca los tonos crudos ───────── */
   --pos-bg: var(--neutral-50);
   --pos-surface: #ffffff;
-  --pos-surface-alt: var(--neutral-25);
   --pos-ink: var(--neutral-900);
   --pos-ink-soft: var(--neutral-700);
   --pos-muted: var(--neutral-500);
@@ -138,30 +137,14 @@
    */
   --pos-primary: var(--brand-green-700);
   --pos-primary-dark: var(--brand-green-800);
-  --pos-primary-strong: var(--brand-green-900);
   --pos-primary-soft: var(--brand-green-50);
-  --pos-primary-soft-border: var(--brand-green-200);
   --pos-primary-ink: var(--brand-green-800);
-  --pos-focus: var(--brand-green-600);
 
   /* Acento azul: información, datos y todo lo que no es "confirmar". */
   --pos-accent: var(--brand-blue-600);
-  --pos-accent-strong: var(--brand-blue-800);
   --pos-accent-soft: var(--brand-blue-50);
   --pos-accent-soft-border: var(--brand-blue-200);
   --pos-accent-ink: var(--brand-blue-700);
-
-  /* Semánticos. Éxito comparte el verde de marca: en caja, "cobrado" es la marca. */
-  --pos-success: var(--brand-green-700);
-  --pos-success-soft: var(--brand-green-50);
-  --pos-info: var(--brand-blue-600);
-  --pos-info-soft: var(--brand-blue-50);
-  --pos-danger: #c62828;
-  --pos-danger-soft: #fdecec;
-  --pos-warn: #b45309;
-  --pos-warn-soft: #fef3c7;
-
-  --pos-ticket: var(--brand-blue-800);
 
   /* Degradado de marca: verde → azul, el mismo recorrido que las manos del logo. */
   --pos-brand-gradient: linear-gradient(

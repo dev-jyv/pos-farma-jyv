@@ -11,7 +11,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { DialogModule } from 'primeng/dialog';
 import { InputTextModule } from 'primeng/inputtext';
@@ -202,6 +202,11 @@ export class Sale {
   private readonly authService = inject(AuthService);
   private readonly syncScheduler = inject(SyncScheduler);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly ticketPrint = inject(TicketPrintService);
   private readonly sounds = inject(ScanSoundService);
   private readonly promoService = inject(PromoService);
@@ -474,12 +479,12 @@ export class Sale {
   /** Da el ancho de la columna de acciones en la búsqueda. */
   readonly resultsHaveBox = computed(() => this.results().some((product) => hasBoxSale(product)));
   readonly isBox = isBoxLine;
-  readonly stockLabelOf = stockLabel;
+  readonly stockLabelOf = (product: Product): string => stockLabel(product, (key, params) => this.t(key, params));
 
   /** Debajo del stock en la búsqueda: las piezas ya están arriba, solo las cajas. */
   boxStockOf(product: Product): string {
     const cajas = fullBoxes(product);
-    return `${cajas} ${cajas === 1 ? 'caja' : 'cajas'}`;
+    return this.t(cajas === 1 ? 'sale.msg.boxesOne' : 'sale.msg.boxes', { count: cajas });
   }
   readonly piecesPerUnitOf = linePiecesPerUnit;
 
@@ -541,8 +546,8 @@ export class Sale {
       this.sounds.error();
       this.notifications.error(
         toBox
-          ? `No hay cajas completas suficientes: hay ${stockLabel(line.product)}.`
-          : 'Cantidad supera el stock disponible.',
+          ? this.t('sale.msg.noFullBoxes', { stock: this.stockLabelOf(line.product) })
+          : this.t('sale.msg.qtyOverStock'),
       );
       return;
     }
@@ -610,7 +615,7 @@ export class Sale {
       const coupon = await this.couponService.findByCode(raw);
       if (!coupon) {
         this.sounds.error();
-        this.notifications.error(COUPON_NOT_FOUND_MESSAGE);
+        this.notifications.error(this.t(COUPON_NOT_FOUND_MESSAGE));
         return;
       }
       const prueba = this.couponService.apply(
@@ -628,9 +633,9 @@ export class Sale {
       this.couponCode.set('');
       this.sounds.ok();
       if (this.couponService.maybeExhausted(coupon)) {
-        this.notifications.warn(COUPON_MAYBE_EXHAUSTED_MESSAGE, `Cupón ${coupon.code}`);
+        this.notifications.warn(this.t(COUPON_MAYBE_EXHAUSTED_MESSAGE), this.t('sale.coupon.label', { code: coupon.code }));
       } else {
-        this.notifications.success(`Cupón ${coupon.code} aplicado: −$${money(this.couponTotal())}.`);
+        this.notifications.success(this.t('sale.msg.couponApplied', { code: coupon.code, amount: money(this.couponTotal()) }));
       }
       queueMicrotask(() => this.searchInput()?.nativeElement.focus());
     } finally {
@@ -655,8 +660,8 @@ export class Sale {
     this.appliedCoupon.set(null);
     this.setCart(this.cart());
     this.notifications.warn(
-      `${reason} Se quitó del ticket. Nuevo total $${money(this.total())}.`,
-      'Cupón retirado',
+      this.t('sale.msg.couponDropped', { reason, total: money(this.total()) }),
+      this.t('sale.msg.couponDroppedTitle'),
     );
   }
 
@@ -689,7 +694,7 @@ export class Sale {
       return;
     }
     if (!fresh) {
-      this.dropCoupon(`El cupón ${applied.code} ya no está en la caja.`);
+      this.dropCoupon(this.t('sale.msg.couponGone', { code: applied.code }));
       return;
     }
     this.appliedCoupon.set(fresh);
@@ -710,12 +715,12 @@ export class Sale {
     }
     const coupon = await this.couponService.findByCode(code);
     if (!coupon) {
-      this.notifications.warn(`El cupón ${code} ya no está en la caja; el ticket sigue sin él.`, 'Cupón');
+      this.notifications.warn(this.t('sale.msg.couponGoneRestore', { code }), this.t('sale.coupon.open'));
       return;
     }
     const issue = this.couponService.windowIssue(coupon);
     if (issue) {
-      this.notifications.warn(`${issue.message} El ticket sigue sin él.`, 'Cupón');
+      this.notifications.warn(this.t('sale.msg.couponIssueRestore', { message: issue.message }), this.t('sale.coupon.open'));
       return;
     }
     this.appliedCoupon.set(coupon);
@@ -799,8 +804,8 @@ export class Sale {
       maximumFractionDigits: 2,
     });
     this.notifications.warn(
-      `La promoción ${promotionName} ya terminó. Nuevo total $${total}. Vuelve a cobrar.`,
-      'Promoción terminada',
+      this.t('sale.msg.promotionClosed', { name: promotionName, total }),
+      this.t('sale.msg.promotionClosedTitle'),
     );
   }
 
@@ -808,7 +813,7 @@ export class Sale {
     if (this.cart().length === 0) {
       return;
     }
-    if (!window.confirm('¿Vaciar el ticket actual?')) {
+    if (!window.confirm(this.t('sale.msg.confirmClear'))) {
       return;
     }
     this.resetTicket();
@@ -1073,7 +1078,7 @@ export class Sale {
     if (!scanned) {
       this.sounds.error();
       if (fromScanner) {
-        this.notifications.error('Código no encontrado');
+        this.notifications.error(this.t('sale.msg.codeNotFound'));
         return;
       }
       // A mano: el término vuelve a la caja para corregirlo, con la lista a la vista.
@@ -1081,8 +1086,8 @@ export class Sale {
       this.results.set(products);
       this.notifications.error(
         products.length === 0
-          ? 'Producto no encontrado.'
-          : 'Hay varios resultados: elige uno de la lista.',
+          ? this.t('sale.msg.productNotFound')
+          : this.t('sale.msg.manyResults'),
       );
       return;
     }
@@ -1138,7 +1143,7 @@ export class Sale {
         refreshed,
         () => {
           this.sounds.error();
-          this.openSubstitutes(product, 'Producto sin stock disponible.');
+          this.openSubstitutes(product, this.t('sale.msg.noStock'));
         },
         (fresh) => this.addToCartChecked(fresh, qty, fromScanner, unit, true),
       );
@@ -1147,7 +1152,7 @@ export class Sale {
     const asBox = unit === 'box' && hasBoxSale(product);
     if (unit === 'box' && !asBox) {
       this.sounds.error();
-      this.notifications.error(`${product.name} no se vende por caja.`);
+      this.notifications.error(this.t('sale.msg.notSoldByBox', { name: product.name }));
       return;
     }
     if (asBox && fullBoxes(product) < 1) {
@@ -1157,7 +1162,7 @@ export class Sale {
         () => {
           this.sounds.error();
           this.notifications.error(
-            `No hay una caja completa de ${product.name}: hay ${stockLabel(product)}.`,
+            this.t('sale.msg.noFullBox', { name: product.name, stock: this.stockLabelOf(product) }),
           );
         },
         (fresh) => this.addToCartChecked(fresh, qty, fromScanner, unit, true),
@@ -1255,8 +1260,8 @@ export class Sale {
           this.sounds.error();
           this.notifications.error(
             isBoxLine(line)
-              ? `No hay cajas completas suficientes: hay ${stockLabel(line.product)}.`
-              : 'Cantidad supera el stock disponible.',
+              ? this.t('sale.msg.noFullBoxes', { stock: this.stockLabelOf(line.product) })
+              : this.t('sale.msg.qtyOverStock'),
           );
           // El campo dispara el cambio con cada tecla: al teclear «20» con 19 en
           // existencia, el «2» entra y el «0» se rechaza. El modelo sigue valiendo 2,
@@ -1466,7 +1471,7 @@ export class Sale {
     this.manualDiscounts.update((map) => ({ ...map, [productId]: tope }));
     this.setCart(this.cart());
     this.notifications.error(
-      `El descuento manual se ajustó a $${tope.toFixed(2)} (20% de la línea): más requiere autorización de un administrador.`,
+      this.t('sale.msg.discountCapped', { amount: tope.toFixed(2) }),
     );
   }
 
@@ -1491,7 +1496,7 @@ export class Sale {
     const base = lineTotal - promo;
     const percentage = base <= 0 ? 0 : (manual / base) * 100;
     if (percentage > MAX_CASHIER_DISCOUNT_RATE * 100 + 1e-9 && !this.isAdmin()) {
-      this.notifications.error('Descuento mayor a 20% requiere autorización de un administrador.');
+      this.notifications.error(this.t('sale.msg.discountNeedsAdmin'));
       if (inputEl) {
         inputEl.value = String(line.discountAmount);
       }
@@ -1506,7 +1511,7 @@ export class Sale {
 
   removeFromCart(productId: string): void {
     const line = this.cart().find((item) => lineKey(item) === productId);
-    if (line && line.quantity > 5 && !window.confirm(`Quitar ${line.quantity} × ${lineName(line)}?`)) {
+    if (line && line.quantity > 5 && !window.confirm(this.t('sale.msg.confirmRemove', { qty: line.quantity, name: lineName(line) }))) {
       return;
     }
     this.manualDiscounts.update((map) => {
@@ -1523,7 +1528,7 @@ export class Sale {
     }
     const held: HeldSale = {
       id: crypto.randomUUID(),
-      label: `Venta en pausa ${new Date().toLocaleTimeString()}`,
+      label: this.t('sale.msg.heldLabel', { time: new Date().toLocaleTimeString() }),
       lines: this.cart(),
       heldAt: new Date(),
       manualDiscounts: { ...this.manualDiscounts() },
@@ -1539,7 +1544,7 @@ export class Sale {
 
   resumeHeldSale(id: string): void {
     if (this.cart().length > 0) {
-      this.notifications.error('Guarda o termina la venta actual antes de retomar otra.');
+      this.notifications.error(this.t('sale.msg.finishBeforeResume'));
       return;
     }
     const held = this.heldSales().find((item) => item.id === id);
@@ -1603,30 +1608,30 @@ export class Sale {
           }
           const name = line.product.name;
           if (current.stock <= 0) {
-            cambios.push(`${name}: sin existencias, se quitó del ticket`);
+            cambios.push(this.t('sale.msg.stale.noStock', { name }));
             continue;
           }
           if (isBoxLine(line)) {
             // Caja (SPEC 46): el producto pudo dejar de venderse por caja, o ya
             // no alcanzar para una completa.
             if (!hasBoxSale(current)) {
-              cambios.push(`${name}: ya no se vende por caja, se quitó del ticket`);
+              cambios.push(this.t('sale.msg.stale.noBox', { name }));
               continue;
             }
             if (fullBoxes(current) < 1) {
-              cambios.push(`${name}: no hay una caja completa, se quitó del ticket`);
+              cambios.push(this.t('sale.msg.stale.noFullBox', { name }));
               continue;
             }
             let boxes = line.quantity;
             if (boxes > fullBoxes(current)) {
               boxes = fullBoxes(current);
-              cambios.push(`${name}: solo hay ${stockLabel(current)}`);
+              cambios.push(this.t('sale.msg.stale.onlyStock', { name, stock: this.stockLabelOf(current) }));
             }
             if (current.boxPrice !== line.product.boxPrice) {
-              cambios.push(`${name}: la caja ahora cuesta $${(current.boxPrice ?? 0).toFixed(2)}`);
+              cambios.push(this.t('sale.msg.stale.boxPrice', { name, amount: (current.boxPrice ?? 0).toFixed(2) }));
             }
             if (current.boxQuantity !== line.product.boxQuantity) {
-              cambios.push(`${name}: la caja ahora trae ${current.boxQuantity} piezas`);
+              cambios.push(this.t('sale.msg.stale.boxQuantity', { name, count: current.boxQuantity }));
             }
             lines.push({ ...line, product: current, quantity: boxes });
             continue;
@@ -1634,16 +1639,16 @@ export class Sale {
           let quantity = line.quantity;
           if (quantity > current.stock) {
             quantity = current.stock;
-            cambios.push(`${name}: solo hay ${current.stock} en existencia`);
+            cambios.push(this.t('sale.msg.stale.onlyPieces', { name, stock: current.stock }));
           }
           if (current.salePrice !== line.product.salePrice) {
-            cambios.push(`${name}: el precio ahora es $${current.salePrice.toFixed(2)}`);
+            cambios.push(this.t('sale.msg.stale.price', { name, amount: current.salePrice.toFixed(2) }));
           }
           if (
             current.controlledGroup !== line.product.controlledGroup ||
             current.requiresPrescription !== line.product.requiresPrescription
           ) {
-            cambios.push(`${name}: cambió su control de receta`);
+            cambios.push(this.t('sale.msg.stale.prescription', { name }));
           }
           lines.push({ ...line, product: current, quantity });
         }
@@ -1651,7 +1656,7 @@ export class Sale {
           return;
         }
         this.setCart(lines);
-        this.notifications.error(`El ticket se actualizó con el catálogo: ${cambios.join('; ')}.`);
+        this.notifications.error(this.t('sale.msg.stale.summary', { changes: cambios.join('; ') }));
       },
       // Sin catálogo no hay con qué comparar: se deja el ticket como estaba.
       error: () => undefined,
@@ -1687,7 +1692,7 @@ export class Sale {
     this.checkoutVisible.set(false);
     this.adjustResultsStock(sale.items, -1);
     this.refreshResultsAfterStockChange(sale);
-    this.notifications.success(`Venta ${sale.folio} registrada.`);
+    this.notifications.success(this.t('sale.msg.saleRecorded', { folio: sale.folio }));
     if (environment.printTicketOnSale) {
       // Esperar a que PrimeNG cierre el diálogo de cobro. Imprimir en el mismo tick
       // (sobre todo tras tarjeta, cuando el modal se cierra al confirmar) hace que
@@ -1744,13 +1749,13 @@ export class Sale {
     try {
       await this.saleService.discardSale(item.queueId, reason);
       this.discardPendingTarget.set(null);
-      this.notifications.success('Venta pendiente descartada.');
+      this.notifications.success(this.t('sale.msg.pendingDiscarded'));
       if (this.pendingOfflineSales() === 0) {
         this.pendingDialogVisible.set(false);
       }
     } catch (error: unknown) {
       this.notifications.error(
-        error instanceof Error ? error.message : 'No se pudo descartar la venta.',
+        error instanceof Error ? error.message : this.t('sale.msg.discardFailed'),
       );
     } finally {
       this.discardingPending.set(false);
@@ -1767,7 +1772,7 @@ export class Sale {
 
   flushPendingSales(): void {
     this.saleService.flushQueue();
-    this.notifications.success('Enviando las ventas pendientes.');
+    this.notifications.success(this.t('sale.msg.sendingPending'));
   }
 
   /** Anula la última venta; el motivo es obligatorio (SPEC 62). */
@@ -1781,7 +1786,7 @@ export class Sale {
         this.lastSale.set(voided);
         this.adjustResultsStock(voided.items, 1);
         this.refreshResultsAfterStockChange(voided);
-        this.notifications.success('Venta anulada.');
+        this.notifications.success(this.t('sale.msg.saleVoided'));
       },
       // Sin handler, un rechazo del servidor dejaba al cajero creyendo que anuló.
       error: (error: unknown) => this.notifications.error(getApiErrorMessage(error)),
@@ -1853,7 +1858,7 @@ export class Sale {
           refreshed,
           () => {
             this.sounds.error();
-            this.openSubstitutes(source, 'El stock disponible está vencido.');
+            this.openSubstitutes(source, this.t('sale.msg.stockExpired'));
           },
           retryFresh,
         );
@@ -1885,8 +1890,8 @@ export class Sale {
           this.sounds.error();
           this.notifications.error(
             asBox
-              ? `Sin stock suficiente para otra caja completa: hay ${stockLabel(source)}.`
-              : 'Sin stock suficiente para agregar otra unidad.',
+              ? this.t('sale.msg.noStockAnotherBox', { stock: this.stockLabelOf(source) })
+              : this.t('sale.msg.noStockAnotherUnit'),
           );
         },
         retryFresh,
@@ -1933,11 +1938,11 @@ export class Sale {
     }
     this.sounds.warn();
     const extra = rule.retainsPrescription
-      ? ' Se retiene la receta y se registra en el libro de control.'
+      ? this.t('sale.msg.rxRetained')
       : rule.requiresLedger
-        ? ' Queda registrada en el libro de control.'
+        ? this.t('sale.msg.rxLedger')
         : '';
-    this.notifications.error(`${product.name}: ${rule.label} — requiere receta médica.${extra}`);
+    this.notifications.error(this.t('sale.msg.rxRequired', { name: product.name, rule: rule.label, extra }));
   }
 
   /**
@@ -1993,7 +1998,7 @@ export class Sale {
     }
     this.sounds.warn();
     this.notifications.error(
-      `Caducidad próxima: lote ${nearest.lotNumber} vence el ${formatExpiry(nearest.expiryDate)} (${days} días).`,
+      this.t('sale.msg.expirySoon', { lot: nearest.lotNumber, date: formatExpiry(nearest.expiryDate), days }),
     );
   }
 
@@ -2014,7 +2019,7 @@ export class Sale {
       if (registrada) {
         this.cartStorage.clear(uid);
         this.notifications.warn(
-          `La venta de este ticket ya se registró (folio ${registrada.folio})`,
+          this.t('sale.msg.alreadyRecorded', { folio: registrada.folio }),
         );
         return;
       }
@@ -2028,7 +2033,7 @@ export class Sale {
     this.refreshStaleProducts();
     void this.restoreCoupon(stored.couponCode);
     this.notifications.success(
-      `Se recuperó el ticket en curso (${stored.lines.length} ${stored.lines.length === 1 ? 'partida' : 'partidas'}).`,
+      this.t(stored.lines.length === 1 ? 'sale.msg.cartRestoredOne' : 'sale.msg.cartRestored', { count: stored.lines.length }),
     );
   }
 
@@ -2046,13 +2051,13 @@ export class Sale {
     // Permiso `sales:write` del backend: un rol de solo lectura (p. ej. doctor)
     // podría entrar al POS, y debe enterarse aquí y no con un 403 al cobrar.
     if (!this.canSell()) {
-      this.notifications.error('Tu rol no tiene permiso para registrar ventas.');
+      this.notifications.error(this.t('sale.msg.noSalePermission'));
       return false;
     }
     if (this.cashSessionOpen()) {
       return true;
     }
-    this.notifications.error('Abre un turno de caja antes de vender.');
+    this.notifications.error(this.t('sale.msg.openShiftFirst'));
     this.cashSessionDialogVisible.set(true);
     return false;
   }

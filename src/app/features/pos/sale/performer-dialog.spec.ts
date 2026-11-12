@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
-import { TranslateService, provideTranslateService } from '@ngx-translate/core';
+import { TranslateService } from '@ngx-translate/core';
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
 import { Mock, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -45,7 +45,6 @@ describe('PerformerDialog', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
-        provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         providePrimeNG({}),
         MessageService,
         {

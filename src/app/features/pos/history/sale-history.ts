@@ -55,6 +55,10 @@ export class SaleHistory {
   private readonly ticketPrint = inject(TicketPrintService);
   private readonly translate = inject(TranslateService);
 
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
+
   readonly sales = signal<Sale[]>([]);
   readonly loading = signal(false);
   readonly search = signal('');
@@ -237,11 +241,11 @@ export class SaleHistory {
             // sin obligar a cerrar y volver a abrir.
             this.loadMovements(sale.id);
           }
-          this.notifications.success('Venta anulada.');
+          this.notifications.success(this.t('sale.msg.saleVoided'));
         },
         // El mensaje del backend distingue 403 de rol, "ya está anulada" y turno cerrado.
         error: (error: unknown) =>
-          this.notifications.error(getApiErrorMessage(error) || 'No se pudo anular la venta.'),
+          this.notifications.error(getApiErrorMessage(error) || this.t('history.msg.voidFailed')),
       });
   }
 
@@ -293,8 +297,8 @@ export class SaleHistory {
       tap(() => this.loading.set(false)),
       catchError((error: unknown) => {
         this.loading.set(false);
-        this.loadError.set(getApiErrorMessage(error) || 'No se pudo cargar el historial de ventas.');
-        this.notifications.error('No se pudo cargar el historial de ventas.');
+        this.loadError.set(getApiErrorMessage(error) || this.t('history.msg.loadError'));
+        this.notifications.error(this.t('history.msg.loadError'));
         return of(null);
       }),
     );

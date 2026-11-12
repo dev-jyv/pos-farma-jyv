@@ -13,7 +13,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { DialogModule } from 'primeng/dialog';
@@ -131,6 +131,11 @@ export class Checkout {
   private readonly customerService = inject(CustomerService);
   private readonly mercadoPago = inject(MercadoPagoService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
   private readonly cashDrawer = inject(CashDrawerService);
   private readonly promoService = inject(PromoService);
   private readonly couponService = inject(CouponService);
@@ -262,9 +267,9 @@ export class Checkout {
 
   readonly quickAmounts = CASH_QUICK_AMOUNTS;
   readonly usoCfdiOptions = [
-    { label: 'G03 — Gastos en general', value: 'G03' },
-    { label: 'D01 — Honorarios médicos', value: 'D01' },
-    { label: 'S01 — Sin efectos fiscales', value: 'S01' },
+    { label: this.t('checkout.cfdi.G03'), value: 'G03' },
+    { label: this.t('checkout.cfdi.D01'), value: 'D01' },
+    { label: this.t('checkout.cfdi.S01'), value: 'S01' },
   ];
 
   /**
@@ -292,14 +297,15 @@ export class Checkout {
       }))
       .filter((line): line is { name: string; rule: ControlledGroupRule } => line.rule !== null),
   );
-  readonly prescriptionError = computed(() =>
-    validatePrescription(this.controlled(), {
+  readonly prescriptionError = computed(() => {
+    const key = validatePrescription(this.controlled(), {
       doctorName: this.doctorName(),
       doctorLicense: this.doctorLicense(),
       folio: this.prescriptionFolio(),
       retained: this.prescriptionRetained(),
-    }),
-  );
+    });
+    return key ? this.t(key, { labels: this.controlledGroupLabels().join(', ') }) : null;
+  });
 
   /**
    * Desglose fiscal del ticket antes de cobrar (base, IVA 16%/0%, IEPS). El precio de
@@ -371,7 +377,10 @@ export class Checkout {
   readonly change = computed(() => this.tender().change);
   readonly shortfall = computed(() => this.tender().shortfall);
   readonly cashSatisfied = computed(() => this.tender().cashSatisfied);
-  readonly tenderError = computed(() => this.tender().error);
+  readonly tenderError = computed(() => {
+    const key = this.tender().error;
+    return key ? this.t(key) : null;
+  });
   /** Lo que se manda a la terminal: el total, o solo la parte con tarjeta en mixto. */
   readonly cardChargeAmount = computed(() =>
     this.paymentMethod() === 'mixed' ? roundMoney(this.cardAmountInput()) : this.total(),
@@ -443,15 +452,15 @@ export class Checkout {
       (this.paymentMethod() === 'card' || this.paymentMethod() === 'mixed') &&
       !this.cardOrderApproved()
     ) {
-      reasons.push({ id: 'card', texto: 'Falta que la terminal apruebe el cobro con tarjeta.' });
+      reasons.push({ id: 'card', texto: this.t('checkout.msg.needsCardApproval') });
     }
     if (this.cashDue() > 0 && !this.cashSatisfied()) {
-      reasons.push({ id: 'cash', texto: `Falta efectivo: $${this.shortfall().toFixed(2)}.` });
+      reasons.push({ id: 'cash', texto: this.t('checkout.msg.needsCash', { amount: this.shortfall().toFixed(2) }) });
     }
     if (this.requiresInvoice() && !this.billingOk()) {
       reasons.push({
         id: 'billing',
-        texto: 'Para facturar se requiere un RFC válido, razón social y, si se captura, un correo válido.',
+        texto: this.t('checkout.msg.needsBilling'),
       });
     }
     return reasons;
@@ -561,7 +570,7 @@ export class Checkout {
       // Cambiar de método con un cobro ya aprobado dejaría dinero cobrado fuera de
       // la venta: el reembolso es una decisión explícita, no un efecto secundario.
       this.notifications.error(
-        'La terminal ya aprobó el cobro. Termina la venta o cancela el cobro antes de cambiar el método.',
+        this.t('checkout.msg.cardAlreadyApproved'),
       );
       return;
     }
@@ -638,7 +647,7 @@ export class Checkout {
   createCustomer(): void {
     const name = this.newCustomerName().trim();
     if (!name) {
-      this.notifications.error('El nombre del cliente es requerido.');
+      this.notifications.error(this.t('checkout.msg.customerNameRequired'));
       return;
     }
     this.customerService
@@ -652,7 +661,7 @@ export class Checkout {
           this.newCustomerName.set('');
           this.newCustomerRfc.set('');
           this.pickCustomer(customer);
-          this.notifications.success('Cliente creado.');
+          this.notifications.success(this.t('checkout.msg.customerCreated'));
         },
         error: (error) => this.notifications.error(getApiErrorMessage(error)),
       });
@@ -685,7 +694,7 @@ export class Checkout {
         this.devicesLoading.set(false);
         if (devices.length === 0) {
           this.devicesError.set(
-            'No hay terminales vinculadas a la cuenta de Mercado Pago. Verifica que la Point esté encendida, asociada a la misma cuenta del Access Token y en modo PDV.',
+            this.t('checkout.msg.noTerminals'),
           );
         }
       },
@@ -711,7 +720,7 @@ export class Checkout {
           list.map((item) => (item.id === updated.id ? updated : item)),
         );
         this.activatingPdv.set(false);
-        this.notifications.success('Terminal activada en modo PDV.');
+        this.notifications.success(this.t('checkout.msg.terminalActivated'));
       },
       error: (error) => {
         this.activatingPdv.set(false);
@@ -723,7 +732,7 @@ export class Checkout {
   startCardPayment(): void {
     const deviceId = this.selectedDeviceId();
     if (!deviceId) {
-      this.notifications.error('Selecciona una terminal Mercado Pago.');
+      this.notifications.error(this.t('checkout.msg.selectTerminal'));
       return;
     }
     const amount = this.cardChargeAmount();
@@ -815,7 +824,7 @@ export class Checkout {
           queueMicrotask(() => this.tryAutoConfirmAfterCard());
         }
         if (order.status === 'failed' || order.status === 'expired') {
-          this.notifications.error('La terminal reportó un error en el cobro.');
+          this.notifications.error(this.t('checkout.msg.terminalError'));
         }
       });
   }
@@ -935,7 +944,7 @@ export class Checkout {
     if (order && this.cardOrderApproved()) {
       // La terminal ya cobró: cerrar sin registrar la venta deja un cargo sin
       // venta. El diálogo no se deja cerrar hasta confirmar.
-      this.notifications.error('La tarjeta ya se cobró: confirma la venta para no dejar el cargo sin registrar.');
+      this.notifications.error(this.t('checkout.msg.cardChargedConfirm'));
       return;
     }
     // Cerrar con una order viva: se corta el sondeo (si no, seguiría escribiendo en
@@ -945,7 +954,7 @@ export class Checkout {
     if (order && POINT_ORDER_PENDING_STATUSES.includes(order.status)) {
       this.mercadoPago.cancelOrder(order.id).subscribe({
         error: () =>
-          this.notifications.error('No se pudo cancelar la orden en la terminal: cancélala en el equipo.'),
+          this.notifications.error(this.t('checkout.msg.cancelOrderFailed')),
       });
     }
     this.closed.emit();

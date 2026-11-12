@@ -1,21 +1,28 @@
 import { Injectable, inject } from '@angular/core';
+import { TranslateService } from '@ngx-translate/core';
 import { MessageService } from 'primeng/api';
 
 @Injectable({ providedIn: 'root' })
 export class NotificationService {
   private readonly messageService = inject(MessageService);
+  private readonly translate = inject(TranslateService);
 
   success(detail: string): void {
-    this.messageService.add({ severity: 'success', summary: 'OK', detail });
+    this.messageService.add({ severity: 'success', summary: this.translate.instant('common.ok'), detail });
   }
 
   error(detail: string): void {
-    this.messageService.add({ severity: 'error', summary: 'Error', detail });
+    this.messageService.add({ severity: 'error', summary: this.translate.instant('common.error'), detail });
   }
 
   /** Aviso que el cajero tiene que leer antes de seguir: dura más que un éxito. */
-  warn(detail: string, summary = 'Atención'): void {
-    this.messageService.add({ severity: 'warn', summary, detail, life: 10_000 });
+  warn(detail: string, summary?: string): void {
+    this.messageService.add({
+      severity: 'warn',
+      summary: summary ?? this.translate.instant('common.attention'),
+      detail,
+      life: 10_000,
+    });
   }
 
   /**
@@ -25,10 +32,8 @@ export class NotificationService {
   sessionExpired(detail?: string): void {
     this.messageService.add({
       severity: 'warn',
-      summary: 'Sesión expirada',
-      detail:
-        detail ??
-        'La sesión terminó a las 24:00 (hora del centro). Vuelve a iniciar sesión; el ticket en curso queda guardado.',
+      summary: this.translate.instant('common.sessionExpired'),
+      detail: detail ?? this.translate.instant('common.sessionExpiredDetail'),
       life: 10_000,
     });
   }

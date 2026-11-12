@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { ButtonModule } from 'primeng/button';
 
 import { ProductCatalogService } from '../../../features/pos/services/product-catalog.service';
@@ -53,6 +53,11 @@ export class PendingUpload {
   private readonly scheduler = inject(SyncScheduler);
   private readonly blockedSync = inject(BlockedSyncService);
   private readonly notifications = inject(NotificationService);
+  private readonly translate = inject(TranslateService);
+
+  private t(key: string, params?: Record<string, unknown>): string {
+    return this.translate.instant(key, params) as string;
+  }
 
   readonly uploading = signal(false);
   readonly count = computed(() => this.catalog.pendingCount() + this.stockEntries.pendingCount());
@@ -69,7 +74,7 @@ export class PendingUpload {
       return;
     }
     if (!navigator.onLine) {
-      this.notifications.error('Sin conexión. Se subirá solo en cuanto vuelva la red.');
+      this.notifications.error(this.t('pendingUpload.msg.offline'));
       return;
     }
     this.uploading.set(true);
@@ -84,18 +89,20 @@ export class PendingUpload {
       if (pending > 0) {
         this.notifications.error(
           rejected > 0
-            ? `Quedan ${pending} sin subir y hay ${rejected} rechazado(s). Ábrelos en el aviso rojo para ver qué hacer.`
-            : `Quedan ${pending} sin subir. Revisa tu conexión y vuelve a intentar.`,
+            ? this.t('pendingUpload.msg.pendingAndRejected', { pending, rejected })
+            : this.t('pendingUpload.msg.pending', { pending }),
         );
       } else if (rejected > 0) {
         this.notifications.warn(
-          `Pendientes subidos. Aún hay ${rejected} registro(s) rechazado(s) en el aviso rojo.`,
+          this.t('pendingUpload.msg.uploadedWithRejected', { rejected }),
         );
       } else {
-        this.notifications.success('Productos y entradas de stock subidos.');
+        this.notifications.success(this.t('pendingUpload.msg.done'));
       }
     } catch (error) {
-      this.notifications.error(`No se pudo subir: ${(error as Error)?.message ?? 'error desconocido'}`);
+      this.notifications.error(
+        this.t('pendingUpload.msg.failed', { message: (error as Error)?.message ?? this.t('pendingUpload.msg.unknownError') }),
+      );
     } finally {
       this.uploading.set(false);
     }

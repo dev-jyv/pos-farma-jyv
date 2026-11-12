@@ -89,22 +89,22 @@ describe('validatePrescription', () => {
 
     expect(
       validatePrescription(requirements, { ...rx, doctorName: '  ' }),
-    ).toMatch(/receta médica/);
+    ).toBe('checkout.rx.needsDataGroups');
   });
 
   it('valida la cédula profesional a 7 u 8 dígitos', () => {
     const requirements = resolveControlledRequirements([product({ controlledGroup: 'IV' })]);
 
-    expect(validatePrescription(requirements, { ...rx, doctorLicense: '123456' })).toMatch(/cédula/);
+    expect(validatePrescription(requirements, { ...rx, doctorLicense: '123456' })).toBe('checkout.rx.licenseDigits');
     expect(validatePrescription(requirements, { ...rx, doctorLicense: '12345678' })).toBeNull();
-    expect(validatePrescription(requirements, { ...rx, doctorLicense: '12A45678' })).toMatch(/cédula/);
+    expect(validatePrescription(requirements, { ...rx, doctorLicense: '12A45678' })).toBe('checkout.rx.licenseDigits');
   });
 
   it('exige folio y retención en grupos I a III', () => {
     const requirements = resolveControlledRequirements([product({ controlledGroup: 'I' })]);
 
-    expect(validatePrescription(requirements, { ...rx, folio: '' })).toMatch(/folio/);
-    expect(validatePrescription(requirements, { ...rx, retained: false })).toMatch(/retener/);
+    expect(validatePrescription(requirements, { ...rx, folio: '' })).toBe('checkout.rx.folioRequired');
+    expect(validatePrescription(requirements, { ...rx, retained: false })).toBe('checkout.rx.retentionRequired');
     expect(validatePrescription(requirements, rx)).toBeNull();
   });
 

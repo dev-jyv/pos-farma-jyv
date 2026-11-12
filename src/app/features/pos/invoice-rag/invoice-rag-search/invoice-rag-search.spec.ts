@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
-import { provideTranslateService } from '@ngx-translate/core';
+
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
 import { Mock, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -38,7 +38,6 @@ describe('InvoiceRagSearch', () => {
     notifyError = vi.fn();
     TestBed.configureTestingModule({
       providers: [
-        provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         providePrimeNG({}),
         MessageService,
         { provide: NotificationService, useValue: { error: notifyError, success: vi.fn() } },
