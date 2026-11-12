@@ -95,7 +95,7 @@ export class Login {
       if (isPosBlockedRole(role)) {
         // SPEC 45: el contador tiene cuenta válida, pero su lugar es el panel.
         await this.authService.logout();
-        this.notifications.error(POS_BLOCKED_ROLE_MESSAGE);
+        this.notifications.error(this.translate.instant(POS_BLOCKED_ROLE_MESSAGE));
         return;
       }
       // Sync solo aquí: un inicio de sesión explícito. No en cada apertura de la

@@ -20,8 +20,8 @@ export function parseStaffRole(value: unknown): StaffRole | null {
  */
 export const POS_BLOCKED_ROLES: readonly StaffRole[] = ['accountant'];
 
-export const POS_BLOCKED_ROLE_MESSAGE =
-  'Tu usuario es de consulta de reportes; entra desde el panel.';
+/** Llave de i18n del aviso para un rol que no entra a la caja. */
+export const POS_BLOCKED_ROLE_MESSAGE = 'auth.posBlockedRole';
 
 export function isPosBlockedRole(role: StaffRole | null | undefined): boolean {
   return !!role && POS_BLOCKED_ROLES.includes(role);

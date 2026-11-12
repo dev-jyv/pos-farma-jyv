@@ -1,4 +1,5 @@
 import { inject } from '@angular/core';
+import { TranslateService } from '@ngx-translate/core';
 import { CanActivateFn, Router } from '@angular/router';
 import { signOut } from 'firebase/auth';
 import { catchError, from, map, of, switchMap } from 'rxjs';
@@ -28,6 +29,7 @@ export const guestGuard: CanActivateFn = () => {
   const authService = inject(AuthService);
   const router = inject(Router);
   const notifications = inject(NotificationService);
+  const translate = inject(TranslateService);
 
   return from(auth.authStateReady()).pipe(
     switchMap(() => {
@@ -41,7 +43,7 @@ export const guestGuard: CanActivateFn = () => {
           }
           if (isPosBlockedRole(role)) {
             // SPEC 45: una sesión persistida del contador no abre la caja.
-            notifications.error(POS_BLOCKED_ROLE_MESSAGE);
+            notifications.error(translate.instant(POS_BLOCKED_ROLE_MESSAGE));
             return from(signOut(auth)).pipe(map(() => true as const));
           }
           return of(router.createUrlTree(['/pos']));

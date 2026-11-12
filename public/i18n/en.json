@@ -14,7 +14,8 @@
       "hintEmail": "That email doesn't look valid: check the @ and domain.",
       "subtitle": "Sign in to open the register"
     },
-    "logout": "Sign out"
+    "logout": "Sign out",
+    "posBlockedRole": "Your user is for report viewing; sign in from the panel."
   },
   "nav": {
     "sale": "Sale",
@@ -347,6 +348,12 @@
       "voidReasonRequired": "Write the void reason (at least {{min}} characters).",
       "saleNotFound": "Sale not found.",
       "discardReasonRequired": "Write the discard reason (at least {{min}} characters)."
+    },
+    "stock": {
+      "piece": "{{count}} pc",
+      "pieces": "{{count}} pcs",
+      "fullBox": "{{count}} full box",
+      "fullBoxes": "{{count}} full boxes"
     }
   },
   "history": {
@@ -600,6 +607,19 @@
       "terminalError": "The terminal reported a charge error.",
       "cardChargedConfirm": "The card was already charged: confirm the sale so the charge is not left unrecorded.",
       "cancelOrderFailed": "The order could not be canceled at the terminal: cancel it on the device."
+    },
+    "tender": {
+      "mixedNeedsCard": "Split payment requires the card amount.",
+      "cardAmountPositive": "The card amount must be greater than zero.",
+      "cardCoversTotal": "The card covers the total: record the sale as a card payment.",
+      "amountReceivedRequired": "The amount received is required for this payment method."
+    },
+    "rx": {
+      "needsDataGroups": "This sale includes {{labels}} and requires prescription details.",
+      "needsData": "This sale requires prescription details.",
+      "licenseDigits": "The professional license must have 7 or 8 digits.",
+      "folioRequired": "Group I to III medications require the prescription number.",
+      "retentionRequired": "Groups I to III require keeping the prescription: confirm it was kept."
     }
   },
   "common": {
@@ -1234,7 +1254,13 @@
     "empty": "No controlled medication movements in the period.",
     "signResponsible": "Health officer (name and signature)",
     "signVerifier": "Inspector (name and signature)",
-    "printedFrom": "Printed from FarmaJyV Venta · {{from}} to {{to}}"
+    "printedFrom": "Printed from FarmaJyV Venta · {{from}} to {{to}}",
+    "rangeError": {
+      "from": "Enter the start date of the period.",
+      "to": "Enter the end date of the period.",
+      "order": "The start date cannot be after the end date."
+    },
+    "noGroup": "No group"
   },
   "ticket": {
     "phone": "Tel. {{phone}}",

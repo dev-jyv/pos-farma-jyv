@@ -479,7 +479,7 @@ export class Sale {
   /** Da el ancho de la columna de acciones en la búsqueda. */
   readonly resultsHaveBox = computed(() => this.results().some((product) => hasBoxSale(product)));
   readonly isBox = isBoxLine;
-  readonly stockLabelOf = stockLabel;
+  readonly stockLabelOf = (product: Product): string => stockLabel(product, (key, params) => this.t(key, params));
 
   /** Debajo del stock en la búsqueda: las piezas ya están arriba, solo las cajas. */
   boxStockOf(product: Product): string {
@@ -546,7 +546,7 @@ export class Sale {
       this.sounds.error();
       this.notifications.error(
         toBox
-          ? this.t('sale.msg.noFullBoxes', { stock: stockLabel(line.product) })
+          ? this.t('sale.msg.noFullBoxes', { stock: this.stockLabelOf(line.product) })
           : this.t('sale.msg.qtyOverStock'),
       );
       return;
@@ -1162,7 +1162,7 @@ export class Sale {
         () => {
           this.sounds.error();
           this.notifications.error(
-            this.t('sale.msg.noFullBox', { name: product.name, stock: stockLabel(product) }),
+            this.t('sale.msg.noFullBox', { name: product.name, stock: this.stockLabelOf(product) }),
           );
         },
         (fresh) => this.addToCartChecked(fresh, qty, fromScanner, unit, true),
@@ -1260,7 +1260,7 @@ export class Sale {
           this.sounds.error();
           this.notifications.error(
             isBoxLine(line)
-              ? this.t('sale.msg.noFullBoxes', { stock: stockLabel(line.product) })
+              ? this.t('sale.msg.noFullBoxes', { stock: this.stockLabelOf(line.product) })
               : this.t('sale.msg.qtyOverStock'),
           );
           // El campo dispara el cambio con cada tecla: al teclear «20» con 19 en
@@ -1625,7 +1625,7 @@ export class Sale {
             let boxes = line.quantity;
             if (boxes > fullBoxes(current)) {
               boxes = fullBoxes(current);
-              cambios.push(this.t('sale.msg.stale.onlyStock', { name, stock: stockLabel(current) }));
+              cambios.push(this.t('sale.msg.stale.onlyStock', { name, stock: this.stockLabelOf(current) }));
             }
             if (current.boxPrice !== line.product.boxPrice) {
               cambios.push(this.t('sale.msg.stale.boxPrice', { name, amount: (current.boxPrice ?? 0).toFixed(2) }));
@@ -1890,7 +1890,7 @@ export class Sale {
           this.sounds.error();
           this.notifications.error(
             asBox
-              ? this.t('sale.msg.noStockAnotherBox', { stock: stockLabel(source) })
+              ? this.t('sale.msg.noStockAnotherBox', { stock: this.stockLabelOf(source) })
               : this.t('sale.msg.noStockAnotherUnit'),
           );
         },

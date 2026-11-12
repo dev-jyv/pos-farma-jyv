@@ -80,11 +80,11 @@ describe('resolveTender', () => {
     expect(
       resolveTender({ paymentMethod: 'mixed', total: 100, amountReceived: 100, cardAmount: 0 })
         .error,
-    ).toMatch(/mayor a cero/);
+    ).toBe('checkout.tender.cardAmountPositive');
     expect(
       resolveTender({ paymentMethod: 'mixed', total: 100, amountReceived: 0, cardAmount: 100 })
         .error,
-    ).toMatch(/pago con tarjeta/);
+    ).toBe('checkout.tender.cardCoversTotal');
   });
 
   it('mixto: pide el monto con tarjeta antes de poder cobrar', () => {
@@ -95,7 +95,7 @@ describe('resolveTender', () => {
       cardAmount: null,
     });
 
-    expect(tender.error).toMatch(/monto cobrado con tarjeta/);
+    expect(tender.error).toBe('checkout.tender.mixedNeedsCard');
   });
 
   it('opera en centavos: sin residuos de punto flotante', () => {

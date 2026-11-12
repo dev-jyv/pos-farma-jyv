@@ -297,14 +297,15 @@ export class Checkout {
       }))
       .filter((line): line is { name: string; rule: ControlledGroupRule } => line.rule !== null),
   );
-  readonly prescriptionError = computed(() =>
-    validatePrescription(this.controlled(), {
+  readonly prescriptionError = computed(() => {
+    const key = validatePrescription(this.controlled(), {
       doctorName: this.doctorName(),
       doctorLicense: this.doctorLicense(),
       folio: this.prescriptionFolio(),
       retained: this.prescriptionRetained(),
-    }),
-  );
+    });
+    return key ? this.t(key, { labels: this.controlledGroupLabels().join(', ') }) : null;
+  });
 
   /**
    * Desglose fiscal del ticket antes de cobrar (base, IVA 16%/0%, IEPS). El precio de
@@ -376,7 +377,10 @@ export class Checkout {
   readonly change = computed(() => this.tender().change);
   readonly shortfall = computed(() => this.tender().shortfall);
   readonly cashSatisfied = computed(() => this.tender().cashSatisfied);
-  readonly tenderError = computed(() => this.tender().error);
+  readonly tenderError = computed(() => {
+    const key = this.tender().error;
+    return key ? this.t(key) : null;
+  });
   /** Lo que se manda a la terminal: el total, o solo la parte con tarjeta en mixto. */
   readonly cardChargeAmount = computed(() =>
     this.paymentMethod() === 'mixed' ? roundMoney(this.cardAmountInput()) : this.total(),

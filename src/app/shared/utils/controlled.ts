@@ -171,21 +171,19 @@ export function validatePrescription(
     return null;
   }
   if (!input.doctorName.trim()) {
-    const labels = requirements.groups
-      .map((group) => CONTROLLED_GROUP_RULES[group].label)
-      .join(', ');
-    return labels
-      ? `Esta venta incluye ${labels} y requiere datos de receta médica.`
-      : 'Esta venta requiere datos de receta médica.';
+    // Llave de i18n; quien la muestra pasa `{ labels }` con los grupos.
+    return requirements.groups.length
+      ? 'checkout.rx.needsDataGroups'
+      : 'checkout.rx.needsData';
   }
   if (!isValidDoctorLicense(input.doctorLicense)) {
-    return 'La cédula profesional debe tener 7 u 8 dígitos.';
+    return 'checkout.rx.licenseDigits';
   }
   if (requirements.requiresFolio && !input.folio.trim()) {
-    return 'Los medicamentos de los grupos I a III requieren el folio de la receta.';
+    return 'checkout.rx.folioRequired';
   }
   if (requirements.requiresRetention && !input.retained) {
-    return 'Los grupos I a III exigen retener la receta: confirma la retención.';
+    return 'checkout.rx.retentionRequired';
   }
   return null;
 }

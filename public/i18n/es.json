@@ -14,7 +14,8 @@
       "hintEmail": "El correo no parece válido: revisa que lleve @ y dominio.",
       "subtitle": "Inicia sesión para abrir la caja"
     },
-    "logout": "Cerrar sesión"
+    "logout": "Cerrar sesión",
+    "posBlockedRole": "Tu usuario es de consulta de reportes; entra desde el panel."
   },
   "sync": {
     "now": "Sincronizar",
@@ -650,6 +651,12 @@
       "voidReasonRequired": "Escribe el motivo de la anulación (mínimo {{min}} caracteres).",
       "saleNotFound": "Venta no encontrada.",
       "discardReasonRequired": "Escribe el motivo del descarte (mínimo {{min}} caracteres)."
+    },
+    "stock": {
+      "piece": "{{count}} pza",
+      "pieces": "{{count}} pzas",
+      "fullBox": "{{count}} caja completa",
+      "fullBoxes": "{{count}} cajas completas"
     }
   },
   "history": {
@@ -903,6 +910,19 @@
       "terminalError": "La terminal reportó un error en el cobro.",
       "cardChargedConfirm": "La tarjeta ya se cobró: confirma la venta para no dejar el cargo sin registrar.",
       "cancelOrderFailed": "No se pudo cancelar la orden en la terminal: cancélala en el equipo."
+    },
+    "tender": {
+      "mixedNeedsCard": "El pago mixto requiere el monto cobrado con tarjeta.",
+      "cardAmountPositive": "El monto cobrado con tarjeta debe ser mayor a cero.",
+      "cardCoversTotal": "La tarjeta cubre el total: registra la venta como pago con tarjeta.",
+      "amountReceivedRequired": "El monto recibido es requerido para este método de pago."
+    },
+    "rx": {
+      "needsDataGroups": "Esta venta incluye {{labels}} y requiere datos de receta médica.",
+      "needsData": "Esta venta requiere datos de receta médica.",
+      "licenseDigits": "La cédula profesional debe tener 7 u 8 dígitos.",
+      "folioRequired": "Los medicamentos de los grupos I a III requieren el folio de la receta.",
+      "retentionRequired": "Los grupos I a III exigen retener la receta: confirma la retención."
     }
   },
   "common": {
@@ -1234,7 +1254,13 @@
     "empty": "Sin movimientos de medicamentos controlados en el periodo.",
     "signResponsible": "Responsable sanitario (nombre y firma)",
     "signVerifier": "Verificador (nombre y firma)",
-    "printedFrom": "Impreso desde FarmaJyV Venta · {{from}} a {{to}}"
+    "printedFrom": "Impreso desde FarmaJyV Venta · {{from}} a {{to}}",
+    "rangeError": {
+      "from": "Captura la fecha inicial del periodo.",
+      "to": "Captura la fecha final del periodo.",
+      "order": "La fecha inicial no puede ser posterior a la final."
+    },
+    "noGroup": "Sin grupo"
   },
   "ticket": {
     "phone": "Tel. {{phone}}",
