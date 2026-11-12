@@ -396,7 +396,9 @@ describe('Sale', () => {
     });
 
     it('con todo el stock vencido no vende', () => {
-      batches = [batch({ expiryDate: new Date(Date.now() - 86_400_000) })];
+      // Fecha fija y lejana: la caducidad se compara por día de México (SPEC 57) y
+      // «ayer» a las 18:00+ cae en el día UTC de hoy, que todavía se vende.
+      batches = [batch({ expiryDate: new Date('2020-01-01T00:00:00.000Z') })];
       component.addToCart(product());
 
       expect(component.cart()).toHaveLength(0);
