@@ -1,6 +1,6 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { provideTranslateService } from '@ngx-translate/core';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProductCatalogService } from '../../../features/pos/services/product-catalog.service';
@@ -25,7 +25,6 @@ describe('PendingUpload', () => {
     TestBed.configureTestingModule({
       imports: [PendingUpload],
       providers: [
-        provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         { provide: ProductCatalogService, useValue: { pendingCount: catalogCount } },
         {
           provide: StockEntryService,

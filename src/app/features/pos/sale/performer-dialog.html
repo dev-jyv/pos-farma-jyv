@@ -28,7 +28,7 @@
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm font-medium text-slate-900">{{ provider.name }}</span>
               @if (provider.license) {
-                <span class="block truncate text-xs text-slate-500">Céd. {{ provider.license }}</span>
+                <span class="block truncate text-xs text-slate-500">{{ 'sale.services.license' | translate: { license: provider.license } }}</span>
               }
             </span>
             @if (i === 0) {

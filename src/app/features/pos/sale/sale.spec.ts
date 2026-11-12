@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { signal, WritableSignal } from '@angular/core';
-import { provideTranslateService } from '@ngx-translate/core';
+
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
 import { Observable, of, Subject, throwError } from 'rxjs';
@@ -160,7 +160,6 @@ describe('Sale', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
-        provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         providePrimeNG({}),
         MessageService,
         {
@@ -1101,11 +1100,9 @@ describe('Sale', () => {
         expect(tarjeta.textContent).toContain('Consulta general');
         expect(tarjeta.textContent).toContain('200.00');
         expect(tarjeta.textContent).toContain('CONS-01');
-        // El loader de i18n de pruebas es vacío, así que el rótulo llega como
-        // llave; lo que se comprueba es que la tarjeta declare comisión y que
-        // exija doctor, no la traducción.
-        expect(tarjeta.textContent).toContain('sale.services.commission');
-        expect(tarjeta.textContent).toContain('sale.services.performer');
+        // Lo que se comprueba es que la tarjeta declare comisión y que exija doctor.
+        expect(tarjeta.textContent).toContain('Comisión');
+        expect(tarjeta.textContent).toContain('Realizó');
         expect(tarjeta.getAttribute('aria-label')).toBe('Consulta general');
       });
 
@@ -1115,7 +1112,7 @@ describe('Sale', () => {
         fixture.detectChanges();
         await abrirPestaña();
 
-        expect(tarjetas()[0].textContent).not.toContain('sale.services.commission');
+        expect(tarjetas()[0].textContent).not.toContain('Comisión');
       });
 
       it('la tarjeta tiene su propio buscador, con etiqueta accesible', async () => {
@@ -1153,8 +1150,8 @@ describe('Sale', () => {
 
         const vacio = host().querySelector('[data-testid="services-empty"]');
         expect(tarjetas()).toHaveLength(0);
-        expect(vacio!.textContent).toContain('sale.services.noResults');
-        expect(vacio!.textContent).not.toContain('sale.services.empty');
+        expect(vacio!.textContent).toContain('Ningún servicio coincide');
+        expect(vacio!.textContent).not.toContain('No hay servicios en el catálogo.');
       });
 
       it('sin turno abierto la tarjeta está deshabilitada y no agrega nada', async () => {

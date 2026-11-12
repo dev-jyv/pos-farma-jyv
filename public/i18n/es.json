@@ -11,7 +11,8 @@
       "submit": "Entrar",
       "error": "Correo o contraseña incorrectos",
       "hintEmpty": "Captura tu correo y contraseña para entrar.",
-      "hintEmail": "El correo no parece válido: revisa que lleve @ y dominio."
+      "hintEmail": "El correo no parece válido: revisa que lleve @ y dominio.",
+      "subtitle": "Inicia sesión para abrir la caja"
     },
     "logout": "Cerrar sesión"
   },
@@ -248,6 +249,38 @@
       "apiDown": "El servidor no responde — operando en modo degradado",
       "clockSkew": "El reloj de esta caja está desfasado {{minutes}} min",
       "clockUnverified": "Reloj sin verificar"
+    },
+    "register": "Caja",
+    "blocked": {
+      "countAria": "{{count}} registros rechazados al sincronizar",
+      "badge": "Rechazados",
+      "title": "Rechazados al sincronizar",
+      "intro": "Estos registros no llegaron al servidor y no se reintentan solos. Cada uno dice qué pasó y qué hacer; si no sabes qué hacer con alguno, avisa al administrador antes de descartarlo: puede ser dinero ya cobrado.",
+      "tellAdmin": "Avisa al administrador",
+      "tellAdminDot": "Avisa al administrador.",
+      "detail": "Detalle: {{reason}}",
+      "aiTitle": "Sugerencia de la IA",
+      "aiDisclaimer": "Es una sugerencia automática: revísala antes de actuar.",
+      "askAi": "Pedir ayuda a la IA",
+      "missingLocally": "no existe en esta caja",
+      "notUploaded": "aún no sube al servidor",
+      "repair": "Arreglar",
+      "askAdmin": "Pedir a un admin",
+      "usePanel": "Usar el del panel",
+      "forceMine": "Forzar el mío",
+      "confirmDuplicate": "Sí, es otra partida",
+      "retry": "Reintentar",
+      "sendUnreconciled": "Mandar a conciliación",
+      "fix": "Corregir",
+      "discard": "Descartar",
+      "empty": "No hay registros rechazados."
+    },
+    "discard": {
+      "title": "Descartar {{label}}",
+      "description": "Se retira de esta caja y nunca subirá como venta; el stock se repone. Queda el rastro de quién, cuándo y por qué, y se avisa al servidor como venta no conciliada.",
+      "reasonLabel": "Motivo del descarte",
+      "placeholder": "Por ejemplo: venta de prueba, ticket capturado dos veces…",
+      "hint": "Obligatorio, mínimo 5 caracteres."
     }
   },
   "reports": {
@@ -304,7 +337,9 @@
     "refresh": "Actualizar reporte",
     "loading": "Cargando reporte…",
     "sessionError": "No se pudo leer el turno.",
-    "sessionErrorHint": "Los totales pueden estar incompletos; vuelve a intentar."
+    "sessionErrorHint": "Los totales pueden estar incompletos; vuelve a intentar.",
+    "cashCollectedDrawer": "Efectivo cobrado (entra al cajón):",
+    "cashCollectedHint": "· en pago mixto solo cuenta la parte pagada en efectivo."
   },
   "label": {
     "print": "Imprimir etiqueta"
@@ -326,7 +361,15 @@
       "commission": "Comisión {{percent}}%",
       "choosePerformer": "¿Quién lo realizó?",
       "noPerformers": "No hay doctores registrados. Dalos de alta en el panel de administración.",
-      "changePerformer": "Cambiar doctor"
+      "changePerformer": "Cambiar doctor",
+      "license": "Céd. {{license}}"
+    },
+    "substitutes": {
+      "title": "Sustitutos disponibles",
+      "noStockFor": "Sin stock usable para",
+      "ingredient": "Principio activo:",
+      "empty": "No hay alternativas con stock.",
+      "stock": "Stock {{stock}}"
     }
   },
   "history": {
@@ -379,7 +422,8 @@
         "wrongProduct": "Producto equivocado",
         "other": "Otro"
       }
-    }
+    },
+    "localFolio": "Ticket: {{folio}}"
   },
   "payment": {
     "cash": "Efectivo",
@@ -485,11 +529,87 @@
     "clockBlockedClose": "El reloj de esta caja está desfasado {{minutes}} min. Corrige la fecha y hora del equipo antes de cerrar el turno (hora del servidor: {{serverTime}})."
   },
   "checkout": {
-    "activatePdv": "Activar PDV"
+    "activatePdv": "Activar PDV",
+    "title": "Cobrar",
+    "itemCount": "{{count}} artículo(s)",
+    "hotkeyMethod": "método",
+    "hotkeyCharge": "cobrar",
+    "hotkeyExit": "salir",
+    "totalDue": "Total a cobrar",
+    "includesDiscount": "Incluye ${{amount}} de descuento",
+    "coupon": "Cupón {{code}} −${{amount}}",
+    "paymentMethod": "Método de pago",
+    "cardAmount": "Monto con tarjeta",
+    "cardAmountHint": "La terminal cobra solo esta parte; el resto va en efectivo.",
+    "cashDue": "A cobrar en efectivo",
+    "cashReceived": "Efectivo recibido",
+    "exact": "Exacto",
+    "change": "Cambio",
+    "shortfall": "Faltan",
+    "terminal": "Terminal Mercado Pago",
+    "searchingDevices": "Buscando…",
+    "refreshDevices": "Actualizar",
+    "selectTerminal": "Selecciona terminal",
+    "sendToTerminal": "Enviar ${{amount}} a la terminal",
+    "status": {
+      "created": "Esperando terminal…",
+      "atTerminal": "Inserte o pase la tarjeta en la terminal…",
+      "actionRequired": "Confirma la operación en la terminal…",
+      "processed": "Pago aprobado",
+      "canceled": "Pago cancelado en terminal",
+      "expired": "El cobro expiró sin completarse",
+      "failed": "Error en el cobro",
+      "refunded": "Pago reembolsado"
+    },
+    "expiresIn": "Vence en {{time}}",
+    "cardPaid": "Tarjeta ${{amount}}",
+    "cashPaid": "Efectivo ${{amount}}",
+    "cancelTerminal": "Cancelar cobro en terminal",
+    "retryTerminal": "Reintentar ${{amount}} en la terminal",
+    "cardManualTitle": "Cobro con tarjeta registrado",
+    "cardManualFull": "Cobra ${{amount}} con la tarjeta y confirma aquí.",
+    "cardManualMixed": "Cobra ${{amount}} con la tarjeta y captura arriba el efectivo del resto.",
+    "cardManualNote": "La venta queda registrada con el reparto; el POS no está conectado a ninguna terminal.",
+    "controlledTitle": "Medicamento controlado (COFEPRIS)",
+    "retentionNote": "La receta se retiene en la farmacia y queda en el libro de control.",
+    "prescriptionRequired": "Receta médica",
+    "prescriptionOptional": "Registrar receta",
+    "optionalParen": "(opcional)",
+    "doctor": "Médico",
+    "doctorPlaceholder": "Nombre del médico",
+    "doctorLicense": "Cédula profesional",
+    "doctorLicensePlaceholder": "7 u 8 dígitos",
+    "prescriptionFolio": "Folio de receta",
+    "required": "Obligatorio",
+    "optional": "Opcional",
+    "retentionConfirm": "Confirmo que la receta se retuvo en la farmacia (grupos I a III).",
+    "customerTitle": "Cliente y facturación",
+    "generalPublic": "Público general",
+    "toInvoice": "por facturar",
+    "removeCustomer": "Quitar",
+    "customerSearchPlaceholder": "Buscar cliente por nombre o RFC",
+    "customerSearch": "Buscar cliente",
+    "newCustomerName": "Nombre del cliente",
+    "newCustomerNameAria": "Nombre del cliente nuevo",
+    "newCustomerRfc": "RFC (opcional)",
+    "newCustomerRfcAria": "RFC del cliente nuevo",
+    "newCustomer": "Cliente nuevo",
+    "requiresInvoice": "Facturar (timbrado posterior)",
+    "billingRfc": "RFC receptor",
+    "billingName": "Razón social",
+    "cfdiUse": "Uso del CFDI",
+    "billingEmail": "Correo (opcional)",
+    "billingEmailAria": "Correo del receptor",
+    "taxBreakdown": "Desglose fiscal (precios con impuestos incluidos)",
+    "taxBase": "Base gravable",
+    "taxTotal": "Total",
+    "confirm": "Confirmar ${{amount}}"
   },
   "common": {
     "loading": "Cargando…",
-    "cancel": "Cancelar"
+    "cancel": "Cancelar",
+    "close": "Cerrar",
+    "save": "Guardar"
   },
   "directCharge": {
     "title": "Cobro directo",

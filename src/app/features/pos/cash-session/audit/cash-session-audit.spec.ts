@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { TranslateService, provideTranslateService } from '@ngx-translate/core';
+import { TranslateService } from '@ngx-translate/core';
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
 import { Observable, Subject, of, throwError } from 'rxjs';
@@ -69,7 +69,6 @@ describe('CashSessionAudit (solo admin)', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
-        provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         providePrimeNG({}),
         MessageService,
         { provide: NotificationService, useValue: { error: notifyError, success: notifySuccess } },

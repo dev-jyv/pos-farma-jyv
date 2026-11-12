@@ -1,6 +1,6 @@
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { provideTranslateService } from '@ngx-translate/core';
+
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
 import { Observable, of, throwError } from 'rxjs';
@@ -74,7 +74,6 @@ describe('StockEntryScreen', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
-        provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         providePrimeNG({}),
         MessageService,
         { provide: NotificationService, useValue: { error: notifyError, success: notifySuccess } },

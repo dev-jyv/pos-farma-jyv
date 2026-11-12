@@ -11,7 +11,8 @@
       "submit": "Sign in",
       "error": "Incorrect email or password",
       "hintEmpty": "Enter your email and password to sign in.",
-      "hintEmail": "That email doesn't look valid: check the @ and domain."
+      "hintEmail": "That email doesn't look valid: check the @ and domain.",
+      "subtitle": "Sign in to open the register"
     },
     "logout": "Sign out"
   },
@@ -43,6 +44,38 @@
       "apiDown": "The server is not responding — running in degraded mode",
       "clockSkew": "This register's clock is off by {{minutes}} min",
       "clockUnverified": "Clock not verified"
+    },
+    "register": "Register",
+    "blocked": {
+      "countAria": "{{count}} records rejected on sync",
+      "badge": "Rejected",
+      "title": "Rejected on sync",
+      "intro": "These records did not reach the server and are not retried automatically. Each one says what happened and what to do; if you are unsure about one, tell the administrator before discarding it: it may be money already collected.",
+      "tellAdmin": "Tell the administrator",
+      "tellAdminDot": "Tell the administrator.",
+      "detail": "Detail: {{reason}}",
+      "aiTitle": "AI suggestion",
+      "aiDisclaimer": "This is an automatic suggestion: review it before acting.",
+      "askAi": "Ask the AI for help",
+      "missingLocally": "does not exist on this register",
+      "notUploaded": "not uploaded to the server yet",
+      "repair": "Fix",
+      "askAdmin": "Ask an admin",
+      "usePanel": "Use the panel's",
+      "forceMine": "Force mine",
+      "confirmDuplicate": "Yes, it's another line",
+      "retry": "Retry",
+      "sendUnreconciled": "Send to reconciliation",
+      "fix": "Correct",
+      "discard": "Discard",
+      "empty": "No rejected records."
+    },
+    "discard": {
+      "title": "Discard {{label}}",
+      "description": "It is removed from this register and will never upload as a sale; stock is restored. A record of who, when and why is kept, and the server is notified as an unreconciled sale.",
+      "reasonLabel": "Discard reason",
+      "placeholder": "For example: test sale, ticket entered twice…",
+      "hint": "Required, at least 5 characters."
     }
   },
   "reports": {
@@ -99,7 +132,9 @@
     "refresh": "Refresh report",
     "loading": "Loading report…",
     "sessionError": "Could not read the shift.",
-    "sessionErrorHint": "Totals may be incomplete; try again."
+    "sessionErrorHint": "Totals may be incomplete; try again.",
+    "cashCollectedDrawer": "Cash collected (goes into the drawer):",
+    "cashCollectedHint": "· with split payments only the cash part counts."
   },
   "label": {
     "print": "Print label"
@@ -121,7 +156,15 @@
       "commission": "Commission {{percent}}%",
       "choosePerformer": "Who performed it?",
       "noPerformers": "No doctors registered. Add them from the admin panel.",
-      "changePerformer": "Change doctor"
+      "changePerformer": "Change doctor",
+      "license": "Lic. {{license}}"
+    },
+    "substitutes": {
+      "title": "Available substitutes",
+      "noStockFor": "No usable stock for",
+      "ingredient": "Active ingredient:",
+      "empty": "No alternatives in stock.",
+      "stock": "Stock {{stock}}"
     }
   },
   "history": {
@@ -174,7 +217,8 @@
         "wrongProduct": "Wrong product",
         "other": "Other"
       }
-    }
+    },
+    "localFolio": "Ticket: {{folio}}"
   },
   "payment": {
     "cash": "Cash",
@@ -280,11 +324,87 @@
     "clockBlockedClose": "This register's clock is off by {{minutes}} min. Fix the computer's date and time before closing the shift (server time: {{serverTime}})."
   },
   "checkout": {
-    "activatePdv": "Activate PDV"
+    "activatePdv": "Activate PDV",
+    "title": "Checkout",
+    "itemCount": "{{count}} item(s)",
+    "hotkeyMethod": "method",
+    "hotkeyCharge": "charge",
+    "hotkeyExit": "exit",
+    "totalDue": "Total due",
+    "includesDiscount": "Includes ${{amount}} discount",
+    "coupon": "Coupon {{code}} −${{amount}}",
+    "paymentMethod": "Payment method",
+    "cardAmount": "Card amount",
+    "cardAmountHint": "The terminal charges only this part; the rest is cash.",
+    "cashDue": "Cash due",
+    "cashReceived": "Cash received",
+    "exact": "Exact",
+    "change": "Change",
+    "shortfall": "Short",
+    "terminal": "Mercado Pago terminal",
+    "searchingDevices": "Searching…",
+    "refreshDevices": "Refresh",
+    "selectTerminal": "Select terminal",
+    "sendToTerminal": "Send ${{amount}} to the terminal",
+    "status": {
+      "created": "Waiting for terminal…",
+      "atTerminal": "Insert or swipe the card at the terminal…",
+      "actionRequired": "Confirm the operation at the terminal…",
+      "processed": "Payment approved",
+      "canceled": "Payment canceled at terminal",
+      "expired": "The charge expired without completing",
+      "failed": "Charge error",
+      "refunded": "Payment refunded"
+    },
+    "expiresIn": "Expires in {{time}}",
+    "cardPaid": "Card ${{amount}}",
+    "cashPaid": "Cash ${{amount}}",
+    "cancelTerminal": "Cancel terminal charge",
+    "retryTerminal": "Retry ${{amount}} at the terminal",
+    "cardManualTitle": "Card charge recorded",
+    "cardManualFull": "Charge ${{amount}} on the card and confirm here.",
+    "cardManualMixed": "Charge ${{amount}} on the card and enter the cash for the rest above.",
+    "cardManualNote": "The sale is recorded with the split; the POS is not connected to any terminal.",
+    "controlledTitle": "Controlled medication (COFEPRIS)",
+    "retentionNote": "The prescription is kept at the pharmacy and recorded in the control ledger.",
+    "prescriptionRequired": "Prescription",
+    "prescriptionOptional": "Record prescription",
+    "optionalParen": "(optional)",
+    "doctor": "Doctor",
+    "doctorPlaceholder": "Doctor's name",
+    "doctorLicense": "Professional license",
+    "doctorLicensePlaceholder": "7 or 8 digits",
+    "prescriptionFolio": "Prescription number",
+    "required": "Required",
+    "optional": "Optional",
+    "retentionConfirm": "I confirm the prescription was kept at the pharmacy (groups I to III).",
+    "customerTitle": "Customer and invoicing",
+    "generalPublic": "General public",
+    "toInvoice": "to invoice",
+    "removeCustomer": "Remove",
+    "customerSearchPlaceholder": "Search customer by name or RFC",
+    "customerSearch": "Search customer",
+    "newCustomerName": "Customer name",
+    "newCustomerNameAria": "New customer name",
+    "newCustomerRfc": "RFC (optional)",
+    "newCustomerRfcAria": "New customer RFC",
+    "newCustomer": "New customer",
+    "requiresInvoice": "Invoice (stamped later)",
+    "billingRfc": "Recipient RFC",
+    "billingName": "Legal name",
+    "cfdiUse": "CFDI use",
+    "billingEmail": "Email (optional)",
+    "billingEmailAria": "Recipient email",
+    "taxBreakdown": "Tax breakdown (prices include taxes)",
+    "taxBase": "Taxable base",
+    "taxTotal": "Total",
+    "confirm": "Confirm ${{amount}}"
   },
   "common": {
     "loading": "Loading…",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "close": "Close",
+    "save": "Save"
   },
   "directCharge": {
     "title": "Direct charge",

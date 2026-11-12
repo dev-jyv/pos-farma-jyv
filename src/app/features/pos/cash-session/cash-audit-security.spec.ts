@@ -1,7 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { provideTranslateService } from '@ngx-translate/core';
+
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
 import { of } from 'rxjs';
@@ -209,7 +209,6 @@ describe('seguridad — auditoría de caja y gastos', () => {
       TestBed.resetTestingModule();
       TestBed.configureTestingModule({
         providers: [
-          provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
           providePrimeNG({}),
           MessageService,
           { provide: NotificationService, useValue: { error: vi.fn(), success: vi.fn() } },

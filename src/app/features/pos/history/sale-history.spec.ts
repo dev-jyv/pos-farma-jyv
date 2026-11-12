@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
-import { provideTranslateService } from '@ngx-translate/core';
+
 import { MessageService } from 'primeng/api';
 import { providePrimeNG } from 'primeng/config';
 import { Observable, of, throwError } from 'rxjs';
@@ -77,7 +77,6 @@ describe('SaleHistory', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
-        provideTranslateService({ fallbackLang: 'es', lang: 'es' }),
         providePrimeNG({}),
         MessageService,
         { provide: NotificationService, useValue: { error: notifyError, success: notifySuccess } },
@@ -342,22 +341,22 @@ describe('SaleHistory', () => {
           late: false,
         },
       });
-      expect(texto).toContain('history.review.stock');
-      expect(texto).not.toContain('history.review.late');
+      expect(texto).toContain('Revisión: faltante de stock');
+      expect(texto).not.toContain('Revisión: cobrada con turno cerrado');
       // Registrada: no es rechazo ni conciliación.
-      expect(texto).toContain('history.completed');
-      expect(texto).not.toContain('history.unreconciled');
+      expect(texto).toContain('Completada');
+      expect(texto).not.toContain('No conciliada');
     });
 
     it('una venta cobrada con el turno ya cerrado muestra su chip', async () => {
       const texto = await renderWith({ syncReview: { stock: null, catalog: null, late: true } });
-      expect(texto).toContain('history.review.late');
-      expect(texto).not.toContain('history.review.stock');
+      expect(texto).toContain('Revisión: cobrada con turno cerrado');
+      expect(texto).not.toContain('Revisión: faltante de stock');
     });
 
     it('una venta sin marcas no muestra chips de revisión', async () => {
       const texto = await renderWith({});
-      expect(texto).not.toContain('history.review');
+      expect(texto).not.toContain('Revisión:');
     });
   });
 

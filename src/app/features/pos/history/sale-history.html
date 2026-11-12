@@ -90,7 +90,7 @@
           <td class="font-mono text-sm font-semibold">
             {{ sale.folio }}
             @if (sale.localFolio && sale.localFolio !== sale.folio) {
-              <span class="block text-xs font-normal text-slate-500">Ticket: {{ sale.localFolio }}</span>
+              <span class="block text-xs font-normal text-slate-500">{{ 'history.localFolio' | translate: { folio: sale.localFolio } }}</span>
             }
           </td>
           <td class="tabular-nums text-sm text-slate-600">{{ sale.createdAt | date: 'HH:mm' }}</td>
