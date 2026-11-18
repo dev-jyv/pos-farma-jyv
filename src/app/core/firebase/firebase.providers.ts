@@ -18,7 +18,7 @@ export function provideFirebase(): Provider[] {
       useFactory: (app: FirebaseApp) => {
         const auth = getAuth(app);
         // Solo en el entorno `development` (proyecto `demo-farmajyv`): Auth va al
-        // emulador local del backend. En dev-cloud y producción es `false`.
+        // emulador local del backend. En producción es `false`.
         if (environment.useEmulators) {
           connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
         }

@@ -207,7 +207,7 @@ function lastRoutineBackupAt(dir, { base = DEFAULT_BASE } = {}) {
 
 /**
  * Carpeta de las copias de rutina: `Documentos/FarmaJyV/respaldos`. Fuera de
- * producción se separa por entorno (`respaldos (dev)`), igual que `userData`
+ * producción se separa por entorno (`respaldos (emulator)`), igual que `userData`
  * (ver `app-environment.js`): sin eso, abrir la app de pruebas en una caja
  * rotaría y borraría las copias de la base real.
  */

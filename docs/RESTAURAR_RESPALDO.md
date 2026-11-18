@@ -19,8 +19,10 @@ Rutas concretas de `Documentos/FarmaJyV/respaldos`:
   Documentos que tenga redirigida el equipo, p. ej. a OneDrive)
 - macOS: `~/Documents/FarmaJyV/respaldos`
 
-Una app de pruebas (`dev`, `emulator`) guarda las suyas aparte, en
-`respaldos (dev)` / `respaldos (emulator)`, para no rotar las de la base real.
+Una app de pruebas (`emulator`) guarda las suyas aparte, en
+`respaldos (emulator)`, para no rotar las de la base real. Una carpeta
+`respaldos (dev)` es de la app "FarmaJyV Venta DEV", que hablaba con el ambiente
+`farma-jyv-dev` (borrado el 2026-11-18): no es de la farmacia.
 
 Los nombres llevan el motivo y la hora **UTC** (6 h más que la hora de la
 farmacia): `farmajyv-pos-corte-z-2026-11-02T03-15-00-123Z.sqlite` es el corte

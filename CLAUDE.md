@@ -8,11 +8,11 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 
 ## Comandos
 
-- `npm start` / `ng serve` — servidor dev en `localhost:4400` contra los **emuladores** (`development`); `npm run start:dev-cloud` contra `farma-jyv-dev`
+- `npm start` / `ng serve` — servidor dev en `localhost:4400` con la configuración `development` (ver § Entornos: hoy apunta TEMPORALMENTE a producción)
 - `npm run build` — build de producción (`dist/farma-jyv-pos/browser`)
 - `npm run electron:build` — build con configuración `electron` (`fileReplacements` a `environment.electron.ts`, `baseHref: './'`)
-- `npm run electron:dev` / `electron:dev:cloud` — lanza Electron contra el dev server (`ELECTRON_DEV_SERVER_URL`, default `http://localhost:4400`) con `FARMAJYV_ENV=emulator` / `dev`; requieren `npm start` / `npm run start:dev-cloud` en paralelo
-- `npm run release:mac|win` (feed de producción, `--project prod`) / `release:dev:mac|win` (build `electron-dev-cloud`, feed `farma-jyv-dev-updates`, `--project dev`) — ver `docs/SETUP.md` § Entornos
+- `npm run electron:dev` — lanza Electron contra el dev server (`ELECTRON_DEV_SERVER_URL`, default `http://localhost:4400`) con `FARMAJYV_ENV=emulator`; requiere `npm start` en paralelo
+- `npm run release:mac|win` — feed de producción (`farma-jyv-updates`, `--project prod`), el único que hay — ver `docs/SETUP.md` § Entornos
 - `npm run electron:start` — build + Electron contra el bundle compilado
 - `npm run electron:dist[:mac|:win]` — empaqueta con electron-builder (salida en `/release`)
 - `npm test` / `ng test` — Vitest sobre `src/` (Angular)
@@ -127,7 +127,8 @@ FarmaJyV Venta: punto de venta (POS) de escritorio para FarmaJyV, construido con
 ### Entornos
 
 - `environment.ts` / `.prod.ts` / `.electron.ts` — producción (`farma-jyv`). `.electron.ts` añade `isElectron: true` y se activa solo en la configuración `electron` de `angular.json` (`baseHref: './'`, necesario porque Electron carga `index.html` con `file://`).
-- `.development.ts` — **emuladores** (`demo-farmajyv`, `useEmulators: true` → `connectAuthEmulator`). `.dev-cloud.ts` / `.electron-dev-cloud.ts` — nube de pruebas `farma-jyv-dev`. Fuera de producción Mercado Pago va con `terminalEnabled: false` e ids vacíos.
+- `.development.ts` — pensado para los **emuladores** (`demo-farmajyv`, `useEmulators: true` → `connectAuthEmulator`), pero hoy apunta TEMPORALMENTE a producción (ver su cabecera). Fuera de producción Mercado Pago va con `terminalEnabled: false`.
+- No hay nube de pruebas: el proyecto `farma-jyv-dev` (y su feed `farma-jyv-dev-updates`, el binario "FarmaJyV Venta DEV") se borró el 2026-11-18. Solo existen los emuladores locales y producción; `FARMAJYV_ENV=dev` ya no es válido (`RETIRED_ENVIRONMENTS` en `electron/app-environment.js`).
 - `electron/app-environment.js` separa `userData` (base SQLite, `invoice-rag/`) por entorno: fuera de `prod` usa `FarmaJyV Venta (<env>)`. Se resuelve en `main.js` antes de cargar `db/client.js`; no mover ese bloque.
 
 ### Electron

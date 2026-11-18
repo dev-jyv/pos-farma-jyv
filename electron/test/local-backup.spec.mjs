@@ -291,7 +291,7 @@ describe('routineBackupsDir / parseBackupName', () => {
   it('producción: Documentos/FarmaJyV/respaldos; otros entornos, aparte', () => {
     expect(routineBackupsDir('/home/caja/Documents')).toBe(path.join('/home/caja/Documents', 'FarmaJyV', 'respaldos'));
     expect(routineBackupsDir('/d', 'prod')).toBe(path.join('/d', 'FarmaJyV', 'respaldos'));
-    expect(routineBackupsDir('/d', 'dev')).toBe(path.join('/d', 'FarmaJyV', 'respaldos (dev)'));
+    expect(routineBackupsDir('/d', 'emulator')).toBe(path.join('/d', 'FarmaJyV', 'respaldos (emulator)'));
   });
 
   it('distingue motivo y fecha, también con el nombre viejo sin motivo', () => {

@@ -12,12 +12,26 @@ describe('resolveAppEnvironment', () => {
   });
 
   it('FARMAJYV_ENV manda sobre lo horneado y sobre --dev', () => {
-    expect(resolveAppEnvironment({ envVar: 'dev', bakedEnv: 'prod', isDev: true })).toBe('dev');
+    expect(resolveAppEnvironment({ envVar: 'emulator', bakedEnv: 'prod', isDev: false })).toBe('emulator');
     expect(resolveAppEnvironment({ envVar: ' PROD ', isDev: true })).toBe('prod');
   });
 
-  it('un binario de dev-cloud se reconoce por el package.json horneado', () => {
-    expect(resolveAppEnvironment({ bakedEnv: 'dev', isDev: false })).toBe('dev');
+  it('un entorno horneado válido se respeta', () => {
+    expect(resolveAppEnvironment({ bakedEnv: 'emulator', isDev: false })).toBe('emulator');
+  });
+
+  it('`dev` (farma-jyv-dev, borrado) se retiró: avisa por qué y cae al default', () => {
+    const warn = vi.fn();
+    expect(resolveAppEnvironment({ envVar: 'dev', isDev: true, warn })).toBe('emulator');
+    expect(resolveAppEnvironment({ bakedEnv: 'dev', isDev: false, warn })).toBe('prod');
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[0][0]).toContain('farma-jyv-dev se borró');
+  });
+
+  it('`dev` en FARMAJYV_ENV no tapa un entorno horneado válido', () => {
+    const warn = vi.fn();
+    expect(resolveAppEnvironment({ envVar: 'dev', bakedEnv: 'emulator', isDev: false, warn })).toBe('emulator');
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it('un valor desconocido avisa y cae al default, no se adivina', () => {
@@ -29,7 +43,7 @@ describe('resolveAppEnvironment', () => {
 
   it('un FARMAJYV_ENV inválido no tapa el entorno horneado en el binario', () => {
     const warn = vi.fn();
-    expect(resolveAppEnvironment({ envVar: 'Dev1', bakedEnv: 'dev', isDev: false, warn })).toBe('dev');
+    expect(resolveAppEnvironment({ envVar: 'Dev1', bakedEnv: 'emulator', isDev: false, warn })).toBe('emulator');
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });
@@ -41,8 +55,7 @@ describe('userDataDirFor', () => {
     expect(userDataDirFor('prod', appData)).toBeNull();
   });
 
-  it('cada entorno de pruebas tiene su propia carpeta', () => {
+  it('el emulador tiene su propia carpeta', () => {
     expect(userDataDirFor('emulator', appData)).toBe(path.join(appData, 'FarmaJyV Venta (emulator)'));
-    expect(userDataDirFor('dev', appData)).toBe(path.join(appData, 'FarmaJyV Venta (dev)'));
   });
 });

@@ -44,9 +44,10 @@ export const environment = {
     terminalId: 'NEWLAND_N950__N950NCCA05098242',
   },
   /**
-   * TEMPORAL: claves de **producción** (`farma-jyv`) mientras `farma-jyv-dev`
-   * no esté listo. Todo lo que se haga aquí cae en los datos reales de la
-   * farmacia. La terminal Point sigue apagada y sin ids (ver `mercadoPago`).
+   * Claves de **producción** (`farma-jyv`). Ya no hay nube de pruebas: el
+   * proyecto `farma-jyv-dev` se borró el 2026-11-18, así que la alternativa a
+   * esto son los emuladores (`demo-farmajyv`, ver la cabecera del archivo).
+   * Todo lo que se haga aquí cae en los datos reales de la farmacia.
    */
   firebase: {
     apiKey: 'AIzaSyCDkNTzuKSvhXzC716e9fGjGSrk-BctJS0',
