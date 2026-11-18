@@ -3,7 +3,6 @@
 # Compiled output
 /dist
 /release
-/release-dev
 /tmp
 /out-tsc
 /bazel-out
@@ -51,6 +50,9 @@ Thumbs.db
 # Artefactos de auditoría con Playwright MCP
 /.playwright-mcp/
 /dist-updates
+# Restos locales del ambiente farma-jyv-dev (borrado el 2026-11-18): se siguen
+# ignorando para que una carpeta vieja con instaladores no acabe en un commit.
+/release-dev
 /dist-updates-dev
 
 # Caché de despliegue de Firebase Hosting (feed de actualizaciones)

@@ -25,7 +25,7 @@ if (userDataPorEntorno) {
 }
 console.log(`[env] entorno=${APP_ENV} userData=${app.getPath('userData')}`);
 
-/** `farmajyvEnv` del `package.json` empaquetado (lo pone `release:dev:*`). */
+/** `farmajyvEnv` del `package.json` empaquetado, si alguien lo horneó (hoy ningún script). */
 function leerEntornoHorneado() {
   try {
     return require('../package.json').farmajyvEnv;

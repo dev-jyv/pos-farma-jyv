@@ -14,18 +14,30 @@ const path = require('path');
  *
  * Valores:
  * - `emulator` — backend local (`demo-farmajyv`), default con `--dev`.
- * - `dev`      — nube de pruebas `farma-jyv-dev`.
  * - `prod`     — producción; default de la app empaquetada. **No** cambia la
  *                ruta: una caja instalada sigue leyendo su base de siempre.
+ *
+ * Hubo un tercero, `dev` (nube de pruebas `farma-jyv-dev`, binario
+ * "FarmaJyV Venta DEV"). El proyecto se borró el 2026-11-18 y el valor se
+ * retiró: ver `RETIRED_ENVIRONMENTS`.
  */
-const APP_ENVIRONMENTS = ['emulator', 'dev', 'prod'];
+const APP_ENVIRONMENTS = ['emulator', 'prod'];
+
+/**
+ * Entornos que existieron y ya no. Se tratan como cualquier valor inválido
+ * (se avisa, se ignora y se pasa a la siguiente fuente), pero con un aviso que
+ * dice qué pasó en vez de un genérico "no es válido".
+ */
+const RETIRED_ENVIRONMENTS = {
+  dev: 'el proyecto farma-jyv-dev se borró el 2026-11-18; usa `emulator` (emuladores locales) o `prod`',
+};
 
 /**
  * Orden de precedencia:
  * 1. `FARMAJYV_ENV` del proceso (lo ponen los scripts de npm).
  * 2. `farmajyvEnv` horneado en el `package.json` empaquetado
- *    (`-c.extraMetadata.farmajyvEnv=dev` en `release:dev:*`), para que un
- *    binario de dev-cloud nunca arranque sobre la carpeta de producción.
+ *    (`-c.extraMetadata.farmajyvEnv=<entorno>`). Ningún script lo pone hoy:
+ *    lo usaba el binario DEV, que ya no se compila.
  * 3. `emulator` con `--dev`, `prod` en cualquier otro caso.
  *
  * Un valor desconocido no se adivina: se avisa, se ignora y se consulta la
@@ -43,9 +55,11 @@ function resolveAppEnvironment({ envVar, bakedEnv, isDev = false, warn = console
       return limpio;
     }
     // Un valor inválido no corta la cadena: si no, un typo en `FARMAJYV_ENV`
-    // haría que un binario de dev-cloud ignore su `farmajyvEnv` horneado y abra
-    // la base de producción.
-    warn(`[env] ${origen}="${valor}" no es válido (${APP_ENVIRONMENTS.join(' | ')}); se ignora`);
+    // haría que un binario ignore su `farmajyvEnv` horneado.
+    const motivo = Object.hasOwn(RETIRED_ENVIRONMENTS, limpio)
+      ? RETIRED_ENVIRONMENTS[limpio]
+      : `no es válido (${APP_ENVIRONMENTS.join(' | ')})`;
+    warn(`[env] ${origen}="${valor}" ${motivo}; se ignora`);
   }
   return fallback;
 }
@@ -61,4 +75,4 @@ function userDataDirFor(env, appDataDir) {
   return path.join(appDataDir, `FarmaJyV Venta (${env})`);
 }
 
-module.exports = { APP_ENVIRONMENTS, resolveAppEnvironment, userDataDirFor };
+module.exports = { APP_ENVIRONMENTS, RETIRED_ENVIRONMENTS, resolveAppEnvironment, userDataDirFor };

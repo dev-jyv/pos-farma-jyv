@@ -11,17 +11,24 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statS
 import { join } from 'node:path';
 
 /**
- * `--dev` prepara el feed de la nube de pruebas (`farma-jyv-dev-updates`) con
- * carpetas propias: `release:dev:*` compila a `release-dev/` y aquí se publica a
- * `dist-updates-dev/` (target de Hosting `updates-dev`). Nunca se mezclan con
- * los de producción: un `latest*.yml` de dev en `dist-updates/` haría que las
- * cajas reales se "actualizaran" a un build que habla con `farma-jyv-dev`.
+ * Solo hay un feed: el de producción (`farma-jyv-updates`). El de la nube de
+ * pruebas (`farma-jyv-dev-updates`) desapareció con el proyecto `farma-jyv-dev`,
+ * que se borró el 2026-11-18. `--dev` se rechaza en vez de ignorarse: quien lo
+ * pase espera publicar en otro sitio, y copiar a `dist-updates/` sin avisarle
+ * acabaría con un build de pruebas en las cajas reales.
  */
-const ES_DEV = process.argv.includes('--dev');
-const ORIGEN = ES_DEV ? 'release-dev' : 'release';
-const DESTINO = ES_DEV ? 'dist-updates-dev' : 'dist-updates';
-const PRODUCTO = ES_DEV ? 'FarmaJyV Venta DEV' : 'FarmaJyV Venta';
-const COMPILAR = ES_DEV ? 'npm run electron:dist:dev:mac' : 'npm run electron:dist:mac';
+if (process.argv.includes('--dev')) {
+  console.error(
+    'El ambiente farma-jyv-dev se eliminó el 2026-11-18: ya no hay feed de pruebas. ' +
+      'Prueba con los emuladores locales (npm run electron:dev) o publica a producción.',
+  );
+  process.exit(1);
+}
+
+const ORIGEN = 'release';
+const DESTINO = 'dist-updates';
+const PRODUCTO = 'FarmaJyV Venta';
+const COMPILAR = 'npm run electron:dist:mac';
 
 /** Lo que consume `electron-updater`; el resto de `release/` es intermedio. */
 const PUBLICABLE = /\.(yml|zip|dmg|exe|blockmap)$/i;
@@ -155,12 +162,7 @@ function escribirPortada() {
 </head>
 <body>
   <h1>${PRODUCTO}</h1>
-  <p class="version">Versión ${version} · descarga para instalar en una caja</p>${
-    ES_DEV
-      ? `
-  <p class="aviso"><strong>Build de pruebas:</strong> habla con <code>farma-jyv-dev</code>, no con la farmacia. No instalar en una caja real.</p>`
-      : ''
-  }
+  <p class="version">Versión ${version} · descarga para instalar en una caja</p>
   <ul>
 ${instaladores}
   </ul>
